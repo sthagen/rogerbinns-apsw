@@ -2,6 +2,56 @@ Change History
 **************
 .. currentmodule:: apsw
 
+3.35.4-r1
+=========
+
+Updates for SQLite download url (the year is part of the urls).
+
+Added enable flag for built-in SQL math functions, and enable it
+by default with --enable-all-extensions.
+
+Use the newer buffer API for Python 3 (old API removed in Python
+3.10).
+
+3.34.0-r1
+=========
+
+Windows MSI installer files are now provided in addition to the exe
+files (:issue:`294`), as well as wheels for Python 3.6+.  Python 3.9
+binaries are also now available.  The wheels can be installed via pip.
+
+Added :meth:`Connection.txn_state`
+
+Added constants:
+
+* SQLITE_IOERR_CORRUPTFS
+
+3.33.0-r1
+=========
+
+Small performance improvement in string handling
+
+apsw module exposes Cursor, Blob, and Backup types (:issue:`273`)
+
+pkg-config is used to detect `International Components for Unicode (ICU) sdk
+<http://userguide.icu-project.org/howtouseicu>`__ when the `SQLite ICU extension
+<https://www.sqlite.org/src/artifact?ci=trunk&filename=ext/icu/README.txt>`__ is
+enabled.  It falls back to icu-config as before. (:issue:`268`).
+
+Added constants:
+
+* SQLITE_OPEN_SUPER_JOURNAL
+
+3.32.2-r1
+=========
+
+Added constants:
+
+* SQLITE_IOERR_DATA, SQLITE_CORRUPT_INDEX, SQLITE_BUSY_TIMEOUT, SQLITE_FCNTL_CKPT_START,
+  SQLITE_FCNTL_RESERVE_BYTES
+
+Minor documentation updates
+
 3.31.1-r1
 =========
 

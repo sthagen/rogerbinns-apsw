@@ -1,13 +1,14 @@
 
-SQLITEVERSION=3.32.1
+SQLITEVERSION=3.35.4
 APSWSUFFIX=-r1
 
-RELEASEDATE="31 May 2020"
+RELEASEDATE="11 April 2021"
 
 VERSION=$(SQLITEVERSION)$(APSWSUFFIX)
 VERDIR=apsw-$(VERSION)
+VERWIN=apsw-$(SQLITEVERSION)
 
-PYTHON=python
+PYTHON=python3
 
 # Some useful info
 #
@@ -103,10 +104,10 @@ header:
 
 # the funky test stuff is to exit successfully when grep has rc==1 since that means no lines found.
 showsymbols:
-	rm -f apsw.so
+	rm -f apsw`$(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))"`
 	$(PYTHON) setup.py fetch --all --version=$(SQLITEVERSION) build_ext --inplace --force --enable-all-extensions
-	test -f apsw.so
-	set +e; nm --extern-only --defined-only apsw.so | egrep -v ' (__bss_start|_edata|_end|_fini|_init|initapsw)$$' ; test $$? -eq 1 || false
+	test -f apsw`$(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))"`
+	set +e; nm --extern-only --defined-only apsw`$(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))"` | egrep -v ' (__bss_start|_edata|_end|_fini|_init|initapsw)$$' ; test $$? -eq 1 || false
 
 # Getting Visual Studio 2008 Express to work for 64 compilations is a
 # pain, so use this builtin hidden command
@@ -115,6 +116,7 @@ WINBPREFIX=fetch --version=$(SQLITEVERSION) --all build --enable-all-extensions
 WINBSUFFIX=install build_test_extension test
 WINBINST=bdist_wininst
 WINBMSI=bdist_msi
+WINBWHEEL=bdist_wheel
 
 # You need to use the MinGW version of make.  See
 # http://bugs.python.org/issue3308 if 2.6+ or 3.0+ fail to run with
@@ -125,34 +127,64 @@ WINBMSI=bdist_msi
 
 compile-win:
 	-del /q apsw*.pyd
+	-del /q dist\\*.egg
 	-cmd /c del /s /q __pycache__
 	cmd /c del /s /q dist
 	cmd /c del /s /q build
 	cmd /c del /s /q apsw.egg-info
 	-cmd /c md dist
-	set APSW_FORCE_DISTUTILS=t & c:/python38/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST)
-	set APSW_FORCE_DISTUTILS=t & "c:\program files (x86)\microsoft visual studio 14.0\vc\vcvarsall.bat" amd64 & c:/python38-64/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST)
-	set APSW_FORCE_DISTUTILS=t & c:/python37/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST)
-	set APSW_FORCE_DISTUTILS=t & "c:\program files (x86)\microsoft visual studio 14.0\vc\vcvarsall.bat" amd64 & c:/python37-64/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST)
-	set APSW_FORCE_DISTUTILS=t & c:/python36/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST)
-	set APSW_FORCE_DISTUTILS=t & "c:\program files (x86)\microsoft visual studio 14.0\vc\vcvarsall.bat" amd64 & c:/python36-64/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST)
-	set APSW_FORCE_DISTUTILS=t & c:/python35/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST)
-	set APSW_FORCE_DISTUTILS=t & "c:\program files (x86)\microsoft visual studio 14.0\vc\vcvarsall.bat" amd64 & c:/python35-64/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST)
-	set APSW_FORCE_DISTUTILS=t & c:/python34/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST)
-	set APSW_FORCE_DISTUTILS=t & c:/python34-64/python setup.py $(WIN64HACK) $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST)
-	set APSW_FORCE_DISTUTILS=t & c:/python33/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST)
-	set APSW_FORCE_DISTUTILS=t & c:/python33-64/python setup.py $(WIN64HACK) $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST)
-	set APSW_FORCE_DISTUTILS=t & c:/python32/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST)
-	set APSW_FORCE_DISTUTILS=t & c:/python32-64/python setup.py  $(WIN64HACK) $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST)
-	set APSW_FORCE_DISTUTILS=t & c:/python31/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST)
-	set APSW_FORCE_DISTUTILS=t & c:/python31-64/python setup.py  $(WIN64HACK) $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST)
-	set APSW_FORCE_DISTUTILS=t & c:/python27/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST)
-	set APSW_FORCE_DISTUTILS=t & c:/python27-64/python setup.py  $(WIN64HACK) $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST)
-	set APSW_FORCE_DISTUTILS=t & c:/python26/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST)
-	set APSW_FORCE_DISTUTILS=t & c:/python26-64/python setup.py $(WIN64HACK) $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST)
-	set APSW_FORCE_DISTUTILS=t & c:/python25/python setup.py $(WINBPREFIX) --compile=mingw32 $(WINBSUFFIX) $(WINBINST)
+	-cmd /c del /s /q c:\\python39-32\\lib\\site-packages\\*apsw*
+	c:/python39-32/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBMSI) $(WINBWHEEL)
+	-cmd /c del /s /q c:\\python39\\lib\\site-packages\\*apsw*
+	"c:\program files (x86)\microsoft visual studio 14.0\vc\vcvarsall.bat" amd64 & c:/python39/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBMSI) $(WINBWHEEL)
+	-cmd /c del /s /q c:\\python38\\lib\\site-packages\\*apsw*
+	c:/python38/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBMSI) $(WINBWHEEL)
+	-cmd /c del /s /q c:\\python38-64\\lib\\site-packages\\*apsw*
+	"c:\program files (x86)\microsoft visual studio 14.0\vc\vcvarsall.bat" amd64 & c:/python38-64/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBMSI) $(WINBWHEEL)
+	-cmd /c del /s /q c:\\python37\\lib\\site-packages\\*apsw*
+	c:/python37/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBMSI) $(WINBWHEEL)
+	-cmd /c del /s /q c:\\python37-64\\lib\\site-packages\\*apsw*
+	"c:\program files (x86)\microsoft visual studio 14.0\vc\vcvarsall.bat" amd64 & c:/python37-64/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBMSI)  $(WINBWHEEL)
+	-cmd /c del /s /q c:\\python36\\lib\\site-packages\\*apsw*
+	c:/python36/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBMSI) $(WINBWHEEL)
+	-cmd /c del /s /q c:\\python36-64\\lib\\site-packages\\*apsw*
+	"c:\program files (x86)\microsoft visual studio 14.0\vc\vcvarsall.bat" amd64 & c:/python36-64/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBMSI) $(WINBWHEEL)
+	set APSW_FORCE_DISTUTILS=t & "c:\program files (x86)\microsoft visual studio 14.0\vc\vcvarsall.bat" amd64 & c:/python35-64/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBMSI)
+	set APSW_FORCE_DISTUTILS=t & c:/python34/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBMSI)
+	set APSW_FORCE_DISTUTILS=t & c:/python34-64/python setup.py $(WIN64HACK) $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBMSI)
+	set APSW_FORCE_DISTUTILS=t & c:/python33/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBMSI)
+	set APSW_FORCE_DISTUTILS=t & c:/python33-64/python setup.py $(WIN64HACK) $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBMSI)
+	set APSW_FORCE_DISTUTILS=t & c:/python32/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBMSI)
+	set APSW_FORCE_DISTUTILS=t & c:/python32-64/python setup.py  $(WIN64HACK) $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBMSI)
+	set APSW_FORCE_DISTUTILS=t & c:/python31/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBMSI)
+	set APSW_FORCE_DISTUTILS=t & c:/python31-64/python setup.py  $(WIN64HACK) $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBMSI)
+	set APSW_FORCE_DISTUTILS=t & c:/python27/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBMSI)
+	set APSW_FORCE_DISTUTILS=t & c:/python27-64/python setup.py  $(WIN64HACK) $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBMSI)
+	set APSW_FORCE_DISTUTILS=t & c:/python26/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBMSI)
+	set APSW_FORCE_DISTUTILS=t & c:/python26-64/python setup.py $(WIN64HACK) $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBMSI)
+	set APSW_FORCE_DISTUTILS=t & c:/python25/python setup.py $(WINBPREFIX) --compile=mingw32 $(WINBSUFFIX) $(WINBINST) $(WINBMSI)
 	set APSW_FORCE_DISTUTILS=t & c:/python24/python setup.py $(WINBPREFIX) --compile=mingw32 $(WINBSUFFIX) $(WINBINST)
 	set APSW_FORCE_DISTUTILS=t & c:/python23/python setup.py $(WINBPREFIX) --compile=mingw32 $(WINBSUFFIX) $(WINBINST)
+	del dist\\*.egg
+
+setup-wheel:
+	c:/python39/python -m ensurepip
+	c:/python39/python -m pip install --upgrade wheel setuptools
+	c:/python39-32/python -m ensurepip
+	c:/python39-32/python -m pip install --upgrade wheel setuptools
+	c:/python38/python -m ensurepip
+	c:/python38/python -m pip install --upgrade wheel setuptools
+	c:/python38-64/python -m ensurepip
+	c:/python38-64/python -m pip install --upgrade wheel setuptools
+	c:/python37/python -m ensurepip
+	c:/python37/python -m pip install --upgrade wheel setuptools
+	c:/python37-64/python -m ensurepip
+	c:/python37-64/python -m pip install --upgrade wheel setuptools
+	c:/python36/python -m ensurepip
+	c:/python36/python  -m pip install --upgrade wheel setuptools
+	c:/python36-64/python -m ensurepip
+	c:/python36-64/python -m pip install --upgrade wheel setuptools
+
 
 source_nocheck: docs
 	env APSW_FORCE_DISTUTILS=t $(PYTHON) setup.py sdist --formats zip --add-doc
@@ -172,27 +204,58 @@ release:
 	test -f dist/$(VERDIR).zip
 	test -f dist/$(VERDIR).win32-py2.3.exe
 	test -f dist/$(VERDIR).win32-py2.4.exe
-	test -f dist/$(VERDIR).win32-py2.5.exe
-	test -f dist/$(VERDIR).win32-py2.6.exe
-	test -f dist/$(VERDIR).win-amd64-py2.6.exe
-	test -f dist/$(VERDIR).win32-py2.7.exe
-	test -f dist/$(VERDIR).win-amd64-py2.7.exe
-	test -f dist/$(VERDIR).win32-py3.1.exe
-	test -f dist/$(VERDIR).win-amd64-py3.1.exe
-	test -f dist/$(VERDIR).win32-py3.2.exe
-	test -f dist/$(VERDIR).win-amd64-py3.2.exe
-	test -f dist/$(VERDIR).win32-py3.3.exe
-	test -f dist/$(VERDIR).win-amd64-py3.3.exe
-	test -f dist/$(VERDIR).win32-py3.4.exe
-	test -f dist/$(VERDIR).win-amd64-py3.4.exe
-	test -f dist/$(VERDIR).win32-py3.5.exe
-	test -f dist/$(VERDIR).win-amd64-py3.5.exe
-	test -f dist/$(VERDIR).win32-py3.6.exe
-	test -f dist/$(VERDIR).win-amd64-py3.6.exe
-	test -f dist/$(VERDIR).win32-py3.7.exe
-	test -f dist/$(VERDIR).win-amd64-py3.7.exe
-	test -f dist/$(VERDIR).win32-py3.8.exe
-	test -f dist/$(VERDIR).win-amd64-py3.8.exe
+	test -f dist/$(VERWIN).win32-py2.5.exe
+	test -f dist/$(VERWIN).win32-py2.5.msi
+	test -f dist/$(VERWIN).win32-py2.6.exe
+	test -f dist/$(VERWIN).win32-py2.6.msi
+	test -f dist/$(VERWIN).win-amd64-py2.6.exe
+	test -f dist/$(VERWIN).win-amd64-py2.6.msi
+	test -f dist/$(VERWIN).win32-py2.7.exe
+	test -f dist/$(VERWIN).win32-py2.7.msi
+	test -f dist/$(VERWIN).win-amd64-py2.7.exe
+	test -f dist/$(VERWIN).win-amd64-py2.7.msi
+	test -f dist/$(VERWIN).win32-py3.1.exe
+	test -f dist/$(VERWIN).win32-py3.1.msi
+	test -f dist/$(VERWIN).win-amd64-py3.1.exe
+	test -f dist/$(VERWIN).win-amd64-py3.1.msi
+	test -f dist/$(VERWIN).win32-py3.2.exe
+	test -f dist/$(VERWIN).win32-py3.2.msi
+	test -f dist/$(VERWIN).win-amd64-py3.2.exe
+	test -f dist/$(VERWIN).win-amd64-py3.2.msi
+	test -f dist/$(VERWIN).win32-py3.3.exe
+	test -f dist/$(VERWIN).win32-py3.3.msi
+	test -f dist/$(VERWIN).win-amd64-py3.3.exe
+	test -f dist/$(VERWIN).win-amd64-py3.3.msi
+	test -f dist/$(VERWIN).win32-py3.4.exe
+	test -f dist/$(VERWIN).win32-py3.4.msi
+	test -f dist/$(VERWIN).win-amd64-py3.4.exe
+	test -f dist/$(VERWIN).win-amd64-py3.4.msi
+	test -f dist/$(VERWIN).win-amd64-py3.5.exe
+	test -f dist/$(VERWIN).win-amd64-py3.5.msi
+	test -f dist/$(VERWIN).win32-py3.6.exe
+	test -f dist/$(VERWIN).win32-py3.6.msi
+	test -f	dist/$(VERWIN)-cp36-cp36m-win32.whl
+	test -f dist/$(VERWIN).win-amd64-py3.6.exe
+	test -f dist/$(VERWIN).win-amd64-py3.6.msi
+	test -f dist/$(VERWIN)-cp36-cp36m-win_amd64.whl
+	test -f dist/$(VERWIN).win32-py3.7.exe
+	test -f dist/$(VERWIN).win32-py3.7.msi
+	test -f dist/$(VERWIN)-cp37-cp37m-win32.whl
+	test -f dist/$(VERWIN).win-amd64-py3.7.exe
+	test -f dist/$(VERWIN).win-amd64-py3.7.msi
+	test -f dist/$(VERWIN)-cp37-cp37m-win_amd64.whl
+	test -f dist/$(VERWIN).win32-py3.8.exe
+	test -f dist/$(VERWIN).win32-py3.8.msi
+	test -f dist/$(VERWIN)-cp38-cp38-win32.whl
+	test -f dist/$(VERWIN).win-amd64-py3.8.exe
+	test -f dist/$(VERWIN).win-amd64-py3.8.msi
+	test -f dist/$(VERWIN)-cp38-cp38-win_amd64.whl
+	test -f dist/$(VERWIN).win32-py3.9.exe
+	test -f dist/$(VERWIN).win32-py3.9.msi
+	test -f dist/$(VERWIN)-cp39-cp39-win32.whl
+	test -f dist/$(VERWIN).win-amd64-py3.9.exe
+	test -f dist/$(VERWIN).win-amd64-py3.9.msi
+	test -f dist/$(VERWIN)-cp39-cp39-win_amd64.whl
 	-rm -f dist/$(VERDIR)-sigs.zip dist/*.asc
 	for f in dist/* ; do gpg --use-agent --armor --detach-sig "$$f" ; done
 	cd dist ; zip -m $(VERDIR)-sigs.zip *.asc

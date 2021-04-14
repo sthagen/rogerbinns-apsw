@@ -10,6 +10,7 @@ import apsw
 import sys
 import os
 import codecs
+import warnings
 
 write = sys.stdout.write
 
@@ -369,6 +370,7 @@ class APSW(unittest.TestCase):
         gc.collect()
         self.deltempfiles()
         self.db = apsw.Connection(TESTFILEPREFIX + "testdb", flags=openflags)
+        self.warnings_filters = warnings.filters
 
     def tearDown(self):
         if self.db is not None:
@@ -377,6 +379,15 @@ class APSW(unittest.TestCase):
         apsw.connection_hooks = self.saved_connection_hooks.pop()  # back to original value
         gc.collect()
         self.deltempfiles()
+        warnings.filters = self.warnings_filters
+        getattr(warnings, "_filters_mutated", lambda: True)()
+
+    def suppressWarning(self, name):
+        if hasattr(__builtins__, name):
+            warnings.simplefilter("ignore", getattr(__builtins__, name))
+
+    def assertRaisesRegexCompat(self, etype, pattern, func, *args):
+        self.assertRaises(etype, func)
 
     def assertTableExists(self, tablename):
         self.assertEqual(next(self.db.cursor().execute("select count(*) from [" + tablename + "]"))[0], 0)
@@ -460,7 +471,16 @@ class APSW(unittest.TestCase):
         apsw.SQLITE_FCNTL_SIZE_HINT
         apsw.mapping_file_control["SQLITE_FCNTL_SIZE_HINT"] == apsw.SQLITE_FCNTL_SIZE_HINT
         apsw.URIFilename
+        apsw.SQLITE_INDEX_CONSTRAINT_NE  # ticket 289
         self.assertTrue(len(apsw.sqlite3_sourceid()) > 10)
+
+    def testModuleExposed(self):
+        "Check what is exposed and usage"
+        for name in "Connection", "Cursor", "Blob", "Backup", "zeroblob", "VFS", "VFSFile", "URIFilename":
+            self.assertTrue(hasattr(apsw, name), "expected name apsw." + name)
+
+        for name in "Cursor", "Blob", "Backup":
+            self.assertRaisesRegex(TypeError, "cannot create .* instances", getattr(apsw, name))
 
     def testConnection(self):
         "Test connection opening"
@@ -2071,7 +2091,7 @@ class APSW(unittest.TestCase):
         c = self.db.cursor()
         c.execute("create table foo(row,str)")
         vals = ("a simple string", "a simple string\0with a null", "a string\0with two\0nulls",
-                "or even a \0\0\0\0\0\0sequence\0\0\0\0\of them", u(r"a \u1234 unicode \ufe54 string \u0089"),
+                "or even a \0\0\0\0\0\0sequence\0\0\0\0of them", u(r"a \u1234 unicode \ufe54 string \u0089"),
                 u(r"a \u1234 unicode \ufe54 string \u0089\0and some text"),
                 u(r"\N{BLACK STAR} \N{WHITE STAR} \N{LIGHTNING} \N{COMET}\0more\0than you\0can handle"),
                 u(r"\N{BLACK STAR} \N{WHITE STAR} \N{LIGHTNING} \N{COMET}\0\0\0\0\0sequences\0\0\0of them"))
@@ -3818,6 +3838,16 @@ class APSW(unittest.TestCase):
                                   (filename, name, i, func, v['desc'], line.strip()))
 
     def sourceCheckFunction(self, filename, name, lines):
+        # readbuffer stuff
+        rbvars = endrb = 0
+        for line in lines:
+            if "READBUFFERVARS" in line:
+                rbvars += 1
+            if "ENDREADBUFFER" in line:
+                endrb += 1
+        if rbvars and not endrb:
+            self.fail("file %s func %s has missing ENDREADBUFFER" % (filename, name))
+
         # not further checked
         if name.split("_")[0] in ("ZeroBlobBind", "APSWVFS", "APSWVFSFile", "APSWBuffer", "FunctionCBInfo",
                                   "apswurifilename"):
@@ -3936,6 +3966,8 @@ class APSW(unittest.TestCase):
 
         return
 
+    should_use_compat = ("PyObject_CheckReadBuffer", "PyObject_AsReadBuffer")
+
     def testSourceChecks(self):
         "Check various source code issues"
         # We expect a coding style where the functions are named
@@ -3948,6 +3980,11 @@ class APSW(unittest.TestCase):
             code = read_whole_file(filename, "rt").replace("http://", "http:__").replace("https://", "https:__")
             if "//" in code:
                 self.fail("// style comment in " + filename)
+
+            if filename.replace("\\", "/") != "src/pyutil.c":
+                for n in self.should_use_compat:
+                    if n in code:
+                        self.fail("Should be using compat function for %s in file %s" % (n, filename))
 
             # check check funcs
             funcpat1 = re.compile(r"^(\w+_\w+)\s*\(\s*\w+\s*\*\s*self")
@@ -4143,6 +4180,18 @@ class APSW(unittest.TestCase):
             self.assertEqual(len(res), 2)
             self.assertEqual(type(res), tuple)
             self.assertTrue(res[1] == 0 or res[0] <= res[1])
+
+    def testTxnState(self):
+        "Verify db.txn_state"
+        n = u(r"\u1234\u3454324")
+        self.assertRaises(TypeError, self.db.txn_state, 3)
+        self.assertEqual(apsw.mapping_txn_state["SQLITE_TXN_NONE"], self.db.txn_state())
+        self.db.cursor().execute("BEGIN EXCLUSIVE")
+        self.assertEqual(apsw.mapping_txn_state["SQLITE_TXN_WRITE"], self.db.txn_state())
+        self.db.cursor().execute("END")
+        self.assertEqual(apsw.mapping_txn_state["SQLITE_TXN_NONE"], self.db.txn_state())
+        self.assertRaises(ValueError, self.db.txn_state, n)
+        self.assertEqual(apsw.mapping_txn_state["SQLITE_TXN_NONE"], self.db.txn_state("main"))
 
     def testZeroBlob(self):
         "Verify handling of zero blobs"
@@ -6309,7 +6358,7 @@ class APSW(unittest.TestCase):
             # about surrogates not being allowed.  If only it
             # implemented unicode properly.
             cmd(
-                u("create table if not exists nastydata(x,y); insert into nastydata values(null,'xxx\\u1234\\uabcdyyy\r\n\t\"this \\\is nasty\u0001stuff!');"
+                u("create table if not exists nastydata(x,y); insert into nastydata values(null,'xxx\\u1234\\uabcdyyy\r\n\t\"this is nasty\u0001stuff!');"
                   ))
             s.cmdloop()
             isempty(fh[1])
@@ -6884,7 +6933,7 @@ class APSW(unittest.TestCase):
         # some nasty stuff
         reset()
         cmd(
-            u("create table nastydata(x,y); insert into nastydata values(null,'xxx\\u1234\\uabcd\\U00012345yyy\r\n\t\"this \\is nasty\u0001stuff!');"
+            u("create table nastydata(x,y); insert into nastydata values(null,'xxx\\u1234\\uabcd\\U00012345yyy\r\n\t\"this is nasty\u0001stuff!');"
               'create table "table"([except] int); create table [](""); create table [using]("&");'))
         s.cmdloop()
         isempty(fh[1])
@@ -7001,6 +7050,7 @@ insert into xxblah values(3);
         ###
         ### Command - encoding
         ###
+        self.suppressWarning("ResourceWarning")
         for i in ".encoding one two", ".encoding", ".encoding utf8 another":
             reset()
             cmd(i)
@@ -8614,6 +8664,9 @@ def setup(write=write):
     if hasattr(apsw, "fork_checker") and hasattr(os, "fork"):
         try:
             import multiprocessing
+            if hasattr(multiprocessing, "get_start_method"):
+                if multiprocessing.get_start_method() != "fork":
+                    raise ImportError
             # sometimes the import works but doing anything fails
             val = multiprocessing.Value("i", 0)
             forkcheck = True
@@ -8651,6 +8704,10 @@ def setup(write=write):
     if "APSW_PY_COVERAGE" in os.environ:
         APSW._originaltestShell = APSW.testShell
         APSW.testShell = APSW._testShellWithCoverage
+
+    # python version compatibility
+    if not hasattr(APSW, "assertRaisesRegex"):
+        APSW.assertRaisesRegex = APSW.assertRaisesRegexCompat
 
     del memdb
 

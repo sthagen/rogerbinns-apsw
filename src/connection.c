@@ -1681,6 +1681,60 @@ finally:
   Py_RETURN_NONE;
 }
 
+#ifndef SQLITE_OMIT_DESERIALZE
+/** .. method:: serialize(name: str) -> bytes
+
+   Returns a memory copy of the database. *name* is **"main"** for the
+   main database, **"temp"** for the temporary database etc.
+
+   The memory copy is the same as if the database was backed up to
+   disk.
+
+  If the database name doesn't exist or is empty, then None is
+  returned, not an exception (this is SQLite's behaviour).
+
+   .. seealso::
+
+     * :meth:`Connection.deserialize`
+
+   -* sqlite3_serialize
+
+*/
+static PyObject *
+Connection_serialize(Connection *self, PyObject *dbname)
+{
+  PyObject *pyres = NULL, *dbnames = NULL;
+  sqlite3_int64 size = 0;
+  unsigned char *serialization = NULL;
+  int res = SQLITE_OK;
+
+  dbnames = getutf8string(dbname);
+  if (!dbnames)
+    goto end;
+
+  /* sqlite3_serialize does not use the same error pattern as other
+  SQLite APIs.  I originally coded this as though error codes/strings
+  were done behind the scenes.  However that turns out not to be the
+  case so this code can't do anything about errors.  See commit
+  history for prior attempt */
+
+  INUSE_CALL(_PYSQLITE_CALL_V(serialization = sqlite3_serialize(self->db, PyBytes_AS_STRING(dbnames), &size, 0)));
+
+  if (serialization)
+    pyres = converttobytes(serialization, size);
+
+end:
+  Py_XDECREF(dbnames);
+  sqlite3_free(serialization);
+  if (pyres)
+    return pyres;
+  if (PyErr_Occurred())
+    return NULL;
+  Py_RETURN_NONE;
+}
+
+#endif /* SQLITE_OMIT_DESERIALZE */
+
 #if defined(EXPERIMENTAL) && !defined(SQLITE_OMIT_LOAD_EXTENSION) /* extension loading */
 
 /** .. method:: enableloadextension(enable)
@@ -3503,6 +3557,8 @@ static PyMethodDef Connection_methods[] = {
      "Return filename of main or attached database"},
     {"txn_state", (PyCFunction)Connection_txn_state, METH_VARARGS,
      "Return transaction state"},
+    {"serialize", (PyCFunction)Connection_serialize, METH_O,
+     "Return in memory copy of database"},
     {0, 0, 0, 0} /* Sentinel */
 };
 

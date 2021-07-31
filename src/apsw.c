@@ -59,8 +59,8 @@ API Reference
 #include "sqlite3.h"
 #endif
 
-#if SQLITE_VERSION_NUMBER < 3034000
-#error Your SQLite version is too old.  It must be at least 3.34
+#if SQLITE_VERSION_NUMBER < 3036000
+#error Your SQLite version is too old.  It must be at least 3.36
 #endif
 
 /* system headers */
@@ -71,6 +71,7 @@ API Reference
 #include "apswversion.h"
 
 /* Python headers */
+#define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <pythread.h>
 #include "structmember.h"
@@ -1134,7 +1135,8 @@ formatsqlvalue(APSW_ARGUNUSED PyObject *self, PyObject *value)
 #endif
   )
   {
-    const unsigned char *buffer;
+    const void *buffer;
+    const char *bufferc = NULL;
     Py_ssize_t buflen;
     int asrb;
     PyObject *unires;
@@ -1158,14 +1160,15 @@ formatsqlvalue(APSW_ARGUNUSED PyObject *self, PyObject *value)
       ENDREADBUFFER;
       return NULL;
     }
+    bufferc = buffer;
     res = PyUnicode_AS_UNICODE(unires);
     *res++ = 'X';
     *res++ = '\'';
     /* About the billionth time I have written a hex conversion routine */
     for (; buflen; buflen--)
     {
-      *res++ = "0123456789ABCDEF"[(*buffer) >> 4];
-      *res++ = "0123456789ABCDEF"[(*buffer++) & 0x0f];
+      *res++ = "0123456789ABCDEF"[(*bufferc) >> 4];
+      *res++ = "0123456789ABCDEF"[(*bufferc++) & 0x0f];
     }
     *res++ = '\'';
 

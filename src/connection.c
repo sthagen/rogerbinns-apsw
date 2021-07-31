@@ -1704,21 +1704,25 @@ static PyObject *
 Connection_serialize(Connection *self, PyObject *dbname)
 {
   PyObject *pyres = NULL, *dbnames = NULL;
+  const char *dbnames_cp = NULL;
   sqlite3_int64 size = 0;
   unsigned char *serialization = NULL;
   int res = SQLITE_OK;
 
+  CHECK_USE(NULL);
+  CHECK_CLOSED(self, NULL);
+
   dbnames = getutf8string(dbname);
   if (!dbnames)
     goto end;
-
+  dbnames_cp = PyBytes_AS_STRING(dbnames);
   /* sqlite3_serialize does not use the same error pattern as other
   SQLite APIs.  I originally coded this as though error codes/strings
   were done behind the scenes.  However that turns out not to be the
   case so this code can't do anything about errors.  See commit
   history for prior attempt */
 
-  INUSE_CALL(_PYSQLITE_CALL_V(serialization = sqlite3_serialize(self->db, PyBytes_AS_STRING(dbnames), &size, 0)));
+  INUSE_CALL(_PYSQLITE_CALL_V(serialization = sqlite3_serialize(self->db, dbnames_cp, &size, 0)));
 
   if (serialization)
     pyres = converttobytes(serialization, size);
@@ -1733,6 +1737,71 @@ end:
   Py_RETURN_NONE;
 }
 
+/** .. method:: deserialize(name: str, contents: bytes) -> None
+
+   Replaces the named database with an in-memory copy of *contents*.
+   *name* is **"main"** for the main database, **"temp"** for the
+   temporary database etc.
+
+   The resulting database is in-memory, read-write, and the memory is
+   owned, resized, and freed by SQLite.
+
+   .. seealso::
+
+     * :meth:`Connection.serialize`
+
+   -* sqlite3_deserialize
+
+*/
+static PyObject *
+Connection_deserialize(Connection *self, PyObject *args)
+{
+  char *dbname = NULL;
+  PyObject *contents_object = NULL;
+  const void *buffer = NULL;
+  Py_ssize_t buflen;
+  int asrb;
+  char *newcontents = NULL;
+  int res = SQLITE_OK;
+  READBUFFERVARS;
+
+  CHECK_USE(NULL);
+  CHECK_CLOSED(self, NULL);
+
+  if (!PyArg_ParseTuple(args, "esO", STRENCODING, &dbname, &contents_object))
+    return NULL;
+
+  if (PyUnicode_Check(contents_object)
+#if PY_MAJOR_VERSION < 3
+      || PyString_Check(contents_object)
+#endif
+      || !compat_CheckReadBuffer(contents_object))
+    return PyErr_Format(PyExc_TypeError, "Expected bytes for contents");
+
+  compat_PyObjectReadBuffer(contents_object);
+  if (asrb != 0)
+    return NULL;
+
+  newcontents = sqlite3_malloc64(buflen);
+  if (newcontents)
+    memcpy(newcontents, buffer, buflen);
+  else
+  {
+    res = SQLITE_NOMEM;
+    PyErr_NoMemory();
+  }
+
+  if (res == SQLITE_OK)
+    PYSQLITE_CON_CALL(res = sqlite3_deserialize(self->db, dbname, newcontents, buflen, buflen, SQLITE_DESERIALIZE_RESIZEABLE | SQLITE_DESERIALIZE_FREEONCLOSE));
+  SET_EXC(res, self->db);
+
+  ENDREADBUFFER;
+
+  PyMem_Free(dbname);
+  if (res != SQLITE_OK)
+    return NULL;
+  Py_RETURN_NONE;
+}
 #endif /* SQLITE_OMIT_DESERIALZE */
 
 #if defined(EXPERIMENTAL) && !defined(SQLITE_OMIT_LOAD_EXTENSION) /* extension loading */
@@ -3415,7 +3484,7 @@ Connection_txn_state(Connection *self, PyObject *args)
   CHECK_USE(NULL);
   CHECK_CLOSED(self, NULL);
 
-  if (!PyArg_ParseTuple(args, "|es:tx_state(schema=None", STRENCODING, &zschema))
+  if (!PyArg_ParseTuple(args, "|es:tx_state(schema=None)", STRENCODING, &zschema))
     return NULL;
 
   PYSQLITE_CON_CALL(res = sqlite3_txn_state(self->db, zschema));
@@ -3559,6 +3628,8 @@ static PyMethodDef Connection_methods[] = {
      "Return transaction state"},
     {"serialize", (PyCFunction)Connection_serialize, METH_O,
      "Return in memory copy of database"},
+    {"deserialize", (PyCFunction)Connection_deserialize, METH_VARARGS,
+     "Provide new in-memory database contents"},
     {0, 0, 0, 0} /* Sentinel */
 };
 

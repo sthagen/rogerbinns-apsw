@@ -278,6 +278,10 @@ bgdelthread.start()
 
 
 def deletefile(name):
+    try:
+        os.remove(name)
+    except:
+        pass
     l = list("abcdefghijklmn")
     random.shuffle(l)
     newname = name + "-n-" + "".join(l)
@@ -344,6 +348,8 @@ class APSW(unittest.TestCase):
         'readonly': 1,
         'db_filename': 1,
         'set_last_insert_rowid': 1,
+        'serialize': 1,
+        'deserialize': 2,
         }
 
     cursor_nargs = {
@@ -358,7 +364,7 @@ class APSW(unittest.TestCase):
     def deltempfiles(self):
         for name in ("testdb", "testdb2", "testdb3", "testfile", "testfile2", "testdb2x", "test-shell-1",
                      "test-shell-1.py", "test-shell-in", "test-shell-out", "test-shell-err"):
-            for i in "-wal", "-journal", "":
+            for i in "-shm", "-wal", "-journal", "":
                 if os.path.exists(TESTFILEPREFIX + name + i):
                     deletefile(TESTFILEPREFIX + name + i)
 
@@ -2145,15 +2151,36 @@ class APSW(unittest.TestCase):
 
     def testSerialize(self):
         "Verify serialize/deserialze calls"
+        # check param types
         self.assertRaises(TypeError, self.db.serialize)
         self.assertRaises(TypeError, self.db.serialize, "a", "b")
         self.assertRaises(TypeError, self.db.serialize, 3)
-        # SQLite implementatiom detail: empty db gives back None
+        self.assertRaises(TypeError, self.db.deserialize, 3)
+        self.assertRaises(TypeError, self.db.deserialize, "main", "main")
+
+        # SQLite implementation detail: empty db gives back None
         self.assertEqual(None, self.db.serialize("main"))
-        self.db.cursor().execute("create table foo(x)")
-        self.assertNotEqual(None, self.db.serialize("main"))
-        # SQLite implementation detail: unknowndb gives back None instead of error
+        self.assertEqual(None, self.db.serialize("temp"))
+
+        # SQLite implementation detail: unknown name gives back None instead of error
         self.assertEqual(None, self.db.serialize("nosuchdbname"))
+
+        # populate with real content
+        self.db.cursor().execute("create table temp.foo(x); insert into temp.foo values(3), (4), (5)")
+        # must have content now
+        self.assertNotEqual(None, self.db.serialize("temp"))
+        self.assertTableNotExists("main.foo")
+        self.db.deserialize("main", self.db.serialize("temp"))
+        # without this renaming, things get confused between identical tables in main and temp
+        self.db.cursor().execute("alter table main.foo rename to bar")
+        self.assertTablesEqual(self.db, "bar", self.db, "foo")
+        # check we can modify deserialized
+        self.db.cursor().execute("insert into bar values(3)")
+        self.db.deserialize("main", self.db.serialize("temp"))
+        self.db.cursor().execute("alter table temp.foo rename to bar")
+        self.assertTablesEqual(self.db, "foo", self.db, "bar")
+        # add a megabyte to table
+        self.db.cursor().execute("insert into foo values(zeroblob(1024024))")
 
     # A check that various extensions (such as fts3, rtree, icu)
     # actually work.  We don't know if they were supposed to be
@@ -3681,6 +3708,36 @@ class APSW(unittest.TestCase):
         finally:
             b.finish()
 
+    def testIssue311(self):
+        "Indirect descendents of VFS should support WAL (in addition to direct subclasses)"
+
+        class vfswrapped(apsw.VFS):
+            def __init__(self):
+                self.myname = "testIssue311"
+                self.base = ""
+                apsw.VFS.__init__(self, self.myname, self.base)
+
+            def xOpen(self, name, flags):
+                return vfsfilewrap(self.base, name, flags)
+
+        class vfsfilewrap(apsw.VFSFile):
+            def __init__(self, parent, name, flags):
+                apsw.VFSFile.__init__(self, parent, name, flags)
+
+        # we make testdb be wal and then try to work with it
+        self.db.cursor().execute(
+            "pragma journal_mode=wal; create table test(x,y); insert into test values(3,4)").fetchall()
+
+        wrap = vfswrapped()
+
+        con = apsw.Connection(TESTFILEPREFIX + "testdb", vfs=wrap.myname)
+
+        for row in con.cursor().execute("select x+y from test"):
+            self.assertEqual(row[0], 7)
+            break
+        else:
+            self.fail("No rows seen")
+
     def testPysqliteRecursiveIssue(self):
         "Check an issue that affected pysqlite"
         # https://code.google.com/p/pysqlite/source/detail?r=260ee266d6686e0f87b0547c36b68a911e6c6cdb
@@ -3819,7 +3876,7 @@ class APSW(unittest.TestCase):
            # is already held by enclosing sqlite3_step and the
            # methods will only be called from that same thread so it
            # isn't a problem.
-                        'skipcalls': re.compile("^sqlite3_(blob_bytes|column_count|bind_parameter_count|data_count|vfs_.+|changes|total_changes|get_autocommit|last_insert_rowid|complete|interrupt|limit|free|threadsafe|value_.+|libversion|enable_shared_cache|initialize|shutdown|config|memory_.+|soft_heap_limit(64)?|randomness|db_readonly|db_filename|release_memory|status64|result_.+|user_data|mprintf|aggregate_context|declare_vtab|backup_remaining|backup_pagecount|sourceid|uri_.+)$"),
+                        'skipcalls': re.compile("^sqlite3_(blob_bytes|column_count|bind_parameter_count|data_count|vfs_.+|changes|total_changes|get_autocommit|last_insert_rowid|complete|interrupt|limit|malloc64|free|threadsafe|value_.+|libversion|enable_shared_cache|initialize|shutdown|config|memory_.+|soft_heap_limit(64)?|randomness|db_readonly|db_filename|release_memory|status64|result_.+|user_data|mprintf|aggregate_context|declare_vtab|backup_remaining|backup_pagecount|sourceid|uri_.+)$"),
                         # also ignore this file
                         'skipfiles': re.compile(r"[/\\]apsw.c$"),
                         # error message
@@ -4471,11 +4528,14 @@ class APSW(unittest.TestCase):
 
     def testVFSWithWAL(self):
         "Verify VFS using WAL where possible"
-        apsw.connection_hooks.append(lambda c: c.cursor().execute("pragma journal_mode=WAL"))
+        if not iswindows:
+            apsw.connection_hooks.append(
+                lambda c: c.cursor().execute("pragma journal_mode=WAL; PRAGMA wal_autocheckpoint=1").fetchall())
         try:
             self.testVFS()
         finally:
-            apsw.connection_hooks.pop()
+            if not iswindows:
+                apsw.connection_hooks.pop()
 
     def testVFS(self):
         "Verify VFS functionality"
@@ -4518,9 +4578,7 @@ class APSW(unittest.TestCase):
         db2 = apsw.Connection(TESTFILEPREFIX + "testdb2", vfs=vfs.vfsname)
         db2.cursor().execute(query)
         db2.close()
-        waswal = self.db.cursor().execute("pragma journal_mode").fetchall()[0][0] == "wal"
-        if waswal:
-            self.db.cursor().execute("pragma journal_mode=delete").fetchall()
+        self.db.cursor().execute("pragma journal_mode=delete").fetchall()
         self.db.close()  # flush
 
         # check the two databases are the same (modulo the XOR)
@@ -4528,14 +4586,10 @@ class APSW(unittest.TestCase):
         obfu = read_whole_file(TESTFILEPREFIX + "testdb2", "rb")
         self.assertEqual(len(orig), len(obfu))
         self.assertNotEqual(orig, obfu)
-        # wal isn't exactly the same
-        if waswal:
-
-            def compare(one, two):
-                self.assertEqual(one[:27], two[:27])
-                self.assertEqual(one[96:], two[96:])
-        else:
-            compare = self.assertEqual
+        # we ignore wal/non-wal differences
+        def compare(one, two):
+            self.assertEqual(one[0:18], two[:18])
+            self.assertEqual(one[96:], two[96:])
 
         compare(orig, encryptme(obfu))
 

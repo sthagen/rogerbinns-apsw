@@ -40,9 +40,11 @@ API Reference
 
 /* SQLite amalgamation */
 #ifdef APSW_USE_SQLITE_AMALGAMATION
+#ifndef APSW_NO_NDEBUG
 /* See SQLite ticket 2554 */
 #define SQLITE_API static
 #define SQLITE_EXTERN static
+#endif
 #define SQLITE_ENABLE_API_ARMOR 1
 #include APSW_USE_SQLITE_AMALGAMATION
 #undef small
@@ -59,8 +61,8 @@ API Reference
 #include "sqlite3.h"
 #endif
 
-#if SQLITE_VERSION_NUMBER < 3036000
-#error Your SQLite version is too old.  It must be at least 3.36
+#if SQLITE_VERSION_NUMBER < 3037000
+#error Your SQLite version is too old.  It must be at least 3.37
 #endif
 
 /* system headers */
@@ -366,7 +368,7 @@ config(APSW_ARGUNUSED PyObject *self, PyObject *args)
     if (!PyArg_ParseTuple(args, "i", &optdup))
       return NULL;
     assert(opt == optdup);
-    res = sqlite3_config((int)opt, &outval);
+    APSW_FAULT_INJECT(SCPHConfigFails, res = sqlite3_config((int)opt, &outval), res = SQLITE_FULL);
     if (res)
     {
       SET_EXC(res, NULL);
@@ -574,9 +576,10 @@ static PyObject *
 vfsnames(APSW_ARGUNUSED PyObject *self)
 {
   PyObject *result = NULL, *str = NULL;
+  int res;
   sqlite3_vfs *vfs = sqlite3_vfs_find(0);
 
-  result = PyList_New(0);
+  APSW_FAULT_INJECT(vfsnamesallocfail, result = PyList_New(0), result = PyErr_NoMemory());
   if (!result)
     goto error;
 
@@ -587,7 +590,8 @@ vfsnames(APSW_ARGUNUSED PyObject *self)
                       str = PyErr_NoMemory());
     if (!str)
       goto error;
-    if (PyList_Append(result, str))
+    APSW_FAULT_INJECT(vfsnamesappendfails, res = PyList_Append(result, str), (res = -1, PyErr_NoMemory()));
+    if (res)
       goto error;
     Py_DECREF(str);
     vfs = vfs->pNext;
@@ -733,6 +737,13 @@ static apsw_mutex *apsw_mutexes[] =
         NULL, /* not used - fast */
         NULL, /* not used - recursive */
         NULL, /* from this point on corresponds to the various static mutexes */
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
         NULL,
         NULL,
         NULL,
@@ -977,6 +988,8 @@ get_compile_options(void)
   const char *opt;
   PyObject *tmpstring;
   PyObject *res = 0;
+
+  /* this method is only called once at startup */
 
   for (i = 0;; i++)
   {
@@ -1586,6 +1599,7 @@ modules etc. For example::
         ADDINT(SQLITE_CORRUPT_INDEX),
         ADDINT(SQLITE_BUSY_TIMEOUT),
         ADDINT(SQLITE_IOERR_CORRUPTFS),
+        ADDINT(SQLITE_CONSTRAINT_DATATYPE),
         END,
 
         /* error codes */
@@ -1647,6 +1661,7 @@ modules etc. For example::
         ADDINT(SQLITE_OPEN_MEMORY),
         ADDINT(SQLITE_OPEN_NOFOLLOW),
         ADDINT(SQLITE_OPEN_SUPER_JOURNAL),
+        ADDINT(SQLITE_OPEN_EXRESCODE),
         END,
 
         /* limits */
@@ -1970,12 +1985,19 @@ APSW_Should_Fault(const char *name)
 {
   PyGILState_STATE gilstate;
   PyObject *faultdict = NULL, *truthval = NULL, *value = NULL;
+  PyObject *errsave1 = NULL, *errsave2 = NULL, *errsave3 = NULL;
   int res = 0;
 
   gilstate = PyGILState_Ensure();
 
+  PyErr_Fetch(&errsave1, &errsave2, &errsave3);
+
   if (!PyObject_HasAttrString(apswmodule, "faultdict"))
-    PyObject_SetAttrString(apswmodule, "faultdict", PyDict_New());
+  {
+    PyObject *dict = PyDict_New();
+    if (dict)
+      PyModule_AddObject(apswmodule, "faultdict", dict);
+  }
 
   value = MAKESTR(name);
 
@@ -1992,6 +2014,8 @@ APSW_Should_Fault(const char *name)
 finally:
   Py_XDECREF(value);
   Py_XDECREF(faultdict);
+
+  PyErr_Restore(errsave1, errsave2, errsave3);
 
   PyGILState_Release(gilstate);
   return res;

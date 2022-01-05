@@ -131,6 +131,12 @@ typedef unsigned long Py_uhash_t;
 #define PyObject_Unicode PyObject_Str
 #endif
 
+#if PY_MAJOR_VERSION < 3
+#define PyIntLong_FromLongLong(val) (((val) >= LONG_MIN && (val) <= LONG_MAX) ? PyInt_FromLong((long)(val)) : PyLong_FromLongLong(val))
+#else
+#define PyIntLong_FromLongLong(val) PyLong_FromLongLong(val)
+#endif
+
 /* we clear weakref lists when close is called on a blob/cursor as
    well as when it is deallocated */
 #define APSW_CLEAR_WEAKREFS                     \
@@ -390,6 +396,7 @@ getutf8string(PyObject *string)
 #else
 #define READBUFFERVARS Py_buffer py3buffer
 
+/* ::TODO:: take a name for fault injection */
 #define compat_PyObjectReadBuffer(o)                        \
   do                                                        \
   {                                                         \

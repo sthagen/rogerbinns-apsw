@@ -300,27 +300,57 @@ APSWCursor_dealloc(APSWCursor *self)
   Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
-static void
-APSWCursor_init(APSWCursor *self, Connection *connection)
+static PyObject *
+APSWCursor_new(PyTypeObject *type, APSW_ARGUNUSED PyObject *args, APSW_ARGUNUSED PyObject *kwds)
 {
-  self->connection = connection;
-  self->statement = 0;
-  self->status = C_DONE;
-  self->bindings = 0;
-  self->bindingsoffset = 0;
-  self->emiter = 0;
-  self->emoriginalquery = 0;
-  self->exectrace = 0;
-  self->rowtrace = 0;
-  self->inuse = 0;
-  self->weakreflist = NULL;
-  self->description_cache[0] = 0;
-  self->description_cache[1] = 0;
+  APSWCursor *self;
+
+  self = (APSWCursor *)type->tp_alloc(type, 0);
+  if (self != NULL)
+  {
+    self->connection = NULL;
+    self->statement = 0;
+    self->status = C_DONE;
+    self->bindings = 0;
+    self->bindingsoffset = 0;
+    self->emiter = 0;
+    self->emoriginalquery = 0;
+    self->exectrace = 0;
+    self->rowtrace = 0;
+    self->inuse = 0;
+    self->weakreflist = NULL;
+    self->description_cache[0] = 0;
+    self->description_cache[1] = 0;
+  }
+
+  return (PyObject *)self;
 }
 
 static int
-Cursor_tp_traverse(APSWCursor *self, visitproc visit, void *arg)
+APSWCursor_init(APSWCursor *self, PyObject *args, PyObject *kwargs)
 {
+  static char *kwlist[] = {"connection", NULL};
+  PyObject *connection = NULL;
+
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O:Cursor(Connection)", kwlist, &connection))
+    return -1;
+
+  if (!PyObject_TypeCheck(connection, &ConnectionType))
+  {
+    PyErr_Format(PyExc_TypeError, "Cursor parameter must be a Connection instance");
+    return -1;
+  }
+
+  Py_INCREF(connection);
+  self->connection = (Connection *)connection;
+
+  return 0;
+}
+
+static int
+APSWCursor_tp_traverse(APSWCursor *self, visitproc visit, void *arg)
+{
+  Py_VISIT(self->connection);
   Py_VISIT(self->exectrace);
   Py_VISIT(self->rowtrace);
   return 0;
@@ -1531,31 +1561,31 @@ static PyTypeObject APSWCursorType = {
 #if PY_MAJOR_VERSION < 3
         | Py_TPFLAGS_HAVE_ITER
 #endif
-    ,                                  /*tp_flags*/
-    "Cursor object",                   /* tp_doc */
-    Cursor_tp_traverse,                /* tp_traverse */
-    0,                                 /* tp_clear */
-    0,                                 /* tp_richcompare */
-    offsetof(APSWCursor, weakreflist), /* tp_weaklistoffset */
-    (getiterfunc)APSWCursor_iter,      /* tp_iter */
-    (iternextfunc)APSWCursor_next,     /* tp_iternext */
-    APSWCursor_methods,                /* tp_methods */
-    0,                                 /* tp_members */
-    APSWCursor_getset,                 /* tp_getset */
-    0,                                 /* tp_base */
-    0,                                 /* tp_dict */
-    0,                                 /* tp_descr_get */
-    0,                                 /* tp_descr_set */
-    0,                                 /* tp_dictoffset */
-    0,                                 /* tp_init */
-    0,                                 /* tp_alloc */
-    0,                                 /* tp_new */
-    0,                                 /* tp_free */
-    0,                                 /* tp_is_gc */
-    0,                                 /* tp_bases */
-    0,                                 /* tp_mro */
-    0,                                 /* tp_cache */
-    0,                                 /* tp_subclasses */
-    0,                                 /* tp_weaklist */
-    0                                  /* tp_del */
+    ,                                     /*tp_flags*/
+    "Cursor object",                      /* tp_doc */
+    (traverseproc)APSWCursor_tp_traverse, /* tp_traverse */
+    0,                                    /* tp_clear */
+    0,                                    /* tp_richcompare */
+    offsetof(APSWCursor, weakreflist),    /* tp_weaklistoffset */
+    (getiterfunc)APSWCursor_iter,         /* tp_iter */
+    (iternextfunc)APSWCursor_next,        /* tp_iternext */
+    APSWCursor_methods,                   /* tp_methods */
+    0,                                    /* tp_members */
+    APSWCursor_getset,                    /* tp_getset */
+    0,                                    /* tp_base */
+    0,                                    /* tp_dict */
+    0,                                    /* tp_descr_get */
+    0,                                    /* tp_descr_set */
+    0,                                    /* tp_dictoffset */
+    (initproc)APSWCursor_init,            /* tp_init */
+    0,                                    /* tp_alloc */
+    APSWCursor_new,                       /* tp_new */
+    0,                                    /* tp_free */
+    0,                                    /* tp_is_gc */
+    0,                                    /* tp_bases */
+    0,                                    /* tp_mro */
+    0,                                    /* tp_cache */
+    0,                                    /* tp_subclasses */
+    0,                                    /* tp_weaklist */
+    0                                     /* tp_del */
     APSW_PYTYPE_VERSION};

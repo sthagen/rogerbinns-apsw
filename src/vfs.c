@@ -897,11 +897,11 @@ apswvfs_xDlError(sqlite3_vfs *vfs, int nByte, char *zErrMsg)
     utf8 = getutf8string(pyresult);
     if (utf8)
     {
-      /* Get size includes trailing null */
       size_t len = PyBytes_GET_SIZE(utf8);
-      if (len > (size_t)nByte)
-        len = (size_t)nByte;
+      if (len > (size_t)nByte - 1)
+        len = (size_t)nByte - 1;
       memcpy(zErrMsg, PyBytes_AS_STRING(utf8), len);
+      zErrMsg[len] = 0;
     }
   }
 
@@ -2783,7 +2783,7 @@ apswvfsfilepy_xClose(APSWVFSFile *self)
 #define APSWPROXYBASE                                          \
   APSWSQLite3File *apswfile = (APSWSQLite3File *)(void *)file; \
   APSWVFSFile *f = (APSWVFSFile *)(apswfile->file);            \
-  assert(Py_TYPE(f) == &APSWVFSFileType)
+  assert(PyObject_TypeCheck(f, &APSWVFSFileType));
 
 static int
 apswproxyxShmLock(sqlite3_file *file, int offset, int n, int flags)

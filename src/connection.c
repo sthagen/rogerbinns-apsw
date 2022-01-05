@@ -101,8 +101,6 @@ static void APSWBackup_init(struct APSWBackup *self, Connection *dest, Connectio
 static PyTypeObject APSWBackupType;
 #endif
 
-struct APSWCursor;
-static void APSWCursor_init(struct APSWCursor *, Connection *);
 static PyTypeObject APSWCursorType;
 
 struct ZeroBlobBind;
@@ -379,6 +377,8 @@ Connection_init(Connection *self, PyObject *args, PyObject *kwds)
   if (!PyArg_ParseTupleAndKeywords(args, kwds, "es|izi:Connection(filename, flags=SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE, vfs=None, statementcachesize=100)", kwlist, STRENCODING, &filename, &flags, &vfs, &statementcachesize))
     return -1;
 
+  flags |= SQLITE_OPEN_EXRESCODE;
+
   if (statementcachesize < 0)
     statementcachesize = 0;
 
@@ -448,9 +448,7 @@ pyexception:
   /* clean up db since it is useless - no need for user to call close */
   assert(PyErr_Occurred());
   res = -1;
-  sqlite3_close(self->db); /* PYSQLITE_CALL not needed since no-one else can have a reference to this connection */
-  self->db = 0;
-  Connection_internal_cleanup(self);
+  Connection_close_internal(self, 2);
   assert(PyErr_Occurred());
 
 finally:
@@ -567,7 +565,7 @@ Connection_backup(Connection *self, PyObject *args)
   {
     PyObject *args = NULL, *etype, *evalue, *etb;
 
-    args = PyTuple_New(2);
+    APSW_FAULT_INJECT(BackupTupleFails, args = PyTuple_New(2), args = PyErr_NoMemory());
     if (!args)
       goto thisfinally;
     PyTuple_SET_ITEM(args, 0, MAKESTR("The destination database has outstanding objects open on it.  They must all be closed for the backup to proceed (otherwise corruption would be possible.)"));
@@ -639,16 +637,18 @@ Connection_backup(Connection *self, PyObject *args)
   backup = NULL;
 
   /* add to dependent lists */
-  weakref = PyWeakref_NewRef((PyObject *)apswbackup, self->dependent_remove);
+  APSW_FAULT_INJECT(BackupDependent1, weakref = PyWeakref_NewRef((PyObject *)apswbackup, self->dependent_remove), weakref = PyErr_NoMemory());
   if (!weakref)
     goto finally;
-  if (PyList_Append(self->dependents, weakref))
+  APSW_FAULT_INJECT(BackupDependent2, res = PyList_Append(self->dependents, weakref), (PyErr_NoMemory(), res = -1));
+  if (res)
     goto finally;
   Py_DECREF(weakref);
-  weakref = PyWeakref_NewRef((PyObject *)apswbackup, ((Connection *)source)->dependent_remove);
+  APSW_FAULT_INJECT(BackupDependent3,  weakref = PyWeakref_NewRef((PyObject *)apswbackup, ((Connection *)source)->dependent_remove), weakref = PyErr_NoMemory());
   if (!weakref)
     goto finally;
-  if (PyList_Append(((Connection *)source)->dependents, weakref))
+  APSW_FAULT_INJECT(BackupDependent4, res = PyList_Append(((Connection *)source)->dependents, weakref), (PyErr_NoMemory(), res = -1));
+  if (res)
     goto finally;
   Py_DECREF(weakref);
   weakref = 0;
@@ -693,13 +693,10 @@ Connection_cursor(Connection *self)
   CHECK_USE(NULL);
   CHECK_CLOSED(self, NULL);
 
-  APSW_FAULT_INJECT(CursorAllocFails, cursor = PyObject_New(struct APSWCursor, &APSWCursorType), (PyErr_NoMemory(), cursor = NULL));
+  APSW_FAULT_INJECT(CursorAllocFails, cursor = (struct APSWCursor *)PyObject_CallFunction((PyObject *)&APSWCursorType, "O", self), cursor = PyErr_NoMemory());
   if (!cursor)
     return NULL;
 
-  /* incref me since cursor holds a pointer */
-  Py_INCREF((PyObject *)self);
-  APSWCursor_init(cursor, self);
   weakref = PyWeakref_NewRef((PyObject *)cursor, self->dependent_remove);
   PyList_Append(self->dependents, weakref);
   Py_DECREF(weakref);
@@ -756,14 +753,22 @@ Connection_setbusytimeout(Connection *self, PyObject *args)
   or deleted) by the most recently completed INSERT, UPDATE, or DELETE
   statement.
 
-  -* sqlite3_changes
+  -* sqlite3_changes64
 */
 static PyObject *
 Connection_changes(Connection *self)
 {
+  sqlite3_int64 changes;
+
   CHECK_USE(NULL);
   CHECK_CLOSED(self, NULL);
-  return PyLong_FromLong(sqlite3_changes(self->db));
+
+  changes = sqlite3_changes64(self->db);
+
+  /* verify 64 bit values convert fully */
+  APSW_FAULT_INJECT(ConnectionChanges64, , changes = ((sqlite3_int64)1000000000) * 7 * 3);
+
+  return PyIntLong_FromLongLong(changes);
 }
 
 /** .. method:: totalchanges() -> int
@@ -771,14 +776,18 @@ Connection_changes(Connection *self)
   Returns the total number of database rows that have be modified,
   inserted, or deleted since the database connection was opened.
 
-  -* sqlite3_total_changes
+  -* sqlite3_total_changes64
 */
 static PyObject *
 Connection_totalchanges(Connection *self)
 {
+  sqlite3_int64 changes;
+
   CHECK_USE(NULL);
   CHECK_CLOSED(self, NULL);
-  return PyLong_FromLong(sqlite3_total_changes(self->db));
+
+  changes = sqlite3_total_changes64(self->db);
+  return PyIntLong_FromLongLong(changes);
 }
 
 /** .. method:: getautocommit() -> bool
@@ -1491,6 +1500,103 @@ finally:
 }
 
 static void
+autovacuum_pages_cleanup(void *callable)
+{
+  PyGILState_STATE gilstate;
+
+  gilstate = PyGILState_Ensure();
+  Py_DECREF((PyObject *)callable);
+  PyGILState_Release(gilstate);
+}
+
+/* Python 2.4 introduced unsigned int I */
+#if PY_VERSION_HEX < 0x02040000
+#define AVPCB_CALL "(O&iii)"
+#define AVPCB_TB "{s: O, s: s:, s: i, s: i, s: i, s: O}"
+#else
+#define AVPCB_CALL "(O&III)"
+#define AVPCB_TB "{s: O, s: s:, s: I, s: I, s: I, s: O}"
+#endif
+
+static int
+autovacuum_pages_cb(void *callable, const char *schema, unsigned int nPages, unsigned int nFreePages, unsigned int nBytesPerPage)
+{
+  PyGILState_STATE gilstate;
+  PyObject *retval = NULL;
+  long res = 0;
+  gilstate = PyGILState_Ensure();
+
+  retval = PyObject_CallFunction((PyObject *)callable, AVPCB_CALL, convertutf8string, schema, nPages, nFreePages, nBytesPerPage);
+
+  if (retval && PyIntLong_Check(retval))
+  {
+    res = PyIntLong_AsLong(retval);
+    goto finally;
+  }
+
+  if (retval)
+    PyErr_Format(PyExc_TypeError, "autovacuum_pages callback must return a number not %R", retval ? retval : Py_None);
+  AddTraceBackHere(__FILE__, __LINE__, "autovacuum_pages_callback", AVPCB_TB,
+                   "callback", (PyObject *)callable, "schema", schema, "nPages", nPages, "nFreePages", nFreePages, "nBytesPerPage", nBytesPerPage,
+                   "result", retval);
+
+finally:
+  Py_XDECREF(retval);
+  PyGILState_Release(gilstate);
+  return (int)res;
+}
+
+#undef AVPCB_CAL
+#undef AVPCB_TB
+
+/** .. method:: autovacuum_pages(callable | None) -> None
+
+  Calls `callable` to find out how many pages to autovacuum.  The callback has 4 parameters:
+
+  * Database name: str (eg "main")
+  * Database pages: int (how many pages make up the database now)
+  * Free pages: int (how many pages could be freed)
+  * Page size: int (page size in bytes)
+
+  Return how many pages should be freed.  Values less than zero or more than the free pages are
+  treated as zero or free page count.  On error zero is returned.
+
+  READ THE NOTE IN THE SQLITE DOCUMENTATION.  Calling into SQLite can result in crashes, corrupt
+  databases or worse.
+
+  -* sqlite3_autovacuum_pages
+*/
+static PyObject *
+Connection_autovacuum_pages(Connection *self, PyObject *callable)
+{
+  int res;
+  CHECK_USE(NULL);
+  CHECK_CLOSED(self, NULL);
+
+  if (callable == Py_None)
+  {
+    PYSQLITE_CON_CALL(res = sqlite3_autovacuum_pages(self->db, NULL, NULL, NULL));
+  }
+  else
+  {
+    if (!PyCallable_Check(callable))
+      return PyErr_Format(PyExc_TypeError, "autovacuum_pages must be callable");
+    APSW_FAULT_INJECT(AutovacuumPagesFails,
+                      PYSQLITE_CON_CALL(res = sqlite3_autovacuum_pages(self->db, autovacuum_pages_cb, callable, autovacuum_pages_cleanup)),
+                      res = SQLITE_NOMEM);
+    if (res == SQLITE_OK)
+      Py_INCREF(callable);
+  }
+
+  if (res != SQLITE_OK)
+  {
+    SET_EXC(res, self->db);
+    return NULL;
+  }
+  Py_RETURN_NONE;
+}
+
+static void
 collationneeded_cb(void *pAux, APSW_ARGUNUSED sqlite3 *db, int eTextRep, const char *name)
 {
   PyObject *res = NULL, *pyname = NULL;
@@ -1776,13 +1882,21 @@ Connection_deserialize(Connection *self, PyObject *args)
       || PyString_Check(contents_object)
 #endif
       || !compat_CheckReadBuffer(contents_object))
-    return PyErr_Format(PyExc_TypeError, "Expected bytes for contents");
+  {
+    PyErr_Format(PyExc_TypeError, "Expected bytes for contents");
+    res = SQLITE_ERROR;
+    goto finally;
+  }
 
   compat_PyObjectReadBuffer(contents_object);
+  APSW_FAULT_INJECT(DeserializeReadBufferFail, , ENDREADBUFFER; (PyErr_NoMemory(), asrb = -1));
   if (asrb != 0)
-    return NULL;
+  {
+    res = SQLITE_ERROR;
+    goto finally;
+  }
 
-  newcontents = sqlite3_malloc64(buflen);
+  APSW_FAULT_INJECT(DeserializeMallocFail, newcontents = sqlite3_malloc64(buflen), newcontents = NULL);
   if (newcontents)
     memcpy(newcontents, buffer, buflen);
   else
@@ -1797,6 +1911,7 @@ Connection_deserialize(Connection *self, PyObject *args)
 
   ENDREADBUFFER;
 
+finally:
   PyMem_Free(dbname);
   if (res != SQLITE_OK)
     return NULL;
@@ -3468,7 +3583,7 @@ Connection_db_filename(Connection *self, PyObject *name)
 }
 
 /** .. method:: txn_state(schema=None) -> Int
- 
+
   Returns the current transaction state of the database, or a specific schema
   if provided.  ValueError is raised if schema is not None or a valid schema name.
   :attr:`apsw.mapping_txn_state` contains the names and values returned.
@@ -3648,6 +3763,8 @@ static PyMethodDef Connection_methods[] = {
      "Return in memory copy of database"},
     {"deserialize", (PyCFunction)Connection_deserialize, METH_VARARGS,
      "Provide new in-memory database contents"},
+    {"autovacuum_pages", (PyCFunction)Connection_autovacuum_pages, METH_O,
+     "Autovacuum Compaction Amount Callback"},
     {0, 0, 0, 0} /* Sentinel */
 };
 
@@ -3674,7 +3791,7 @@ static PyTypeObject ConnectionType =
         0,                                                                                           /*tp_as_buffer*/
         Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HAVE_VERSION_TAG | Py_TPFLAGS_HAVE_GC, /*tp_flags*/
         "Connection object",                                                                         /* tp_doc */
-        Connection_tp_traverse,                                                                      /* tp_traverse */
+        (traverseproc)Connection_tp_traverse,                                                        /* tp_traverse */
         0,                                                                                           /* tp_clear */
         0,                                                                                           /* tp_richcompare */
         offsetof(Connection, weakreflist),                                                           /* tp_weaklistoffset */

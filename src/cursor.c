@@ -26,7 +26,7 @@ You can also read data back.  The row is returned as a tuple of the
 column values::
 
   for row in cursor.execute("select * from example"):
-     print row
+     print(row)
 
 There are two ways of supplying data to a query.  The **really bad** way is to compose a string::
 
@@ -161,19 +161,19 @@ static PyTypeObject APSWCursorType;
 
 /* CURSOR CODE */
 
-/* Macro for getting a tracer.  If our tracer is NULL or None then return 0 else return connection tracer */
+/* Macro for getting a tracer.  If our tracer is NULL then return connection tracer */
 
-#define ROWTRACE ((self->rowtrace && self->rowtrace != Py_None) ? self->rowtrace : ((self->rowtrace == Py_None) ? 0 : self->connection->rowtrace))
+#define ROWTRACE (self->rowtrace ? self->rowtrace : self->connection->rowtrace)
 
-#define EXECTRACE ((self->exectrace && self->exectrace != Py_None) ? self->exectrace : ((self->exectrace == Py_None) ? 0 : self->connection->exectrace))
+#define EXECTRACE (self->exectrace ? self->exectrace : self->connection->exectrace)
 
 /* Do finalization and free resources.  Returns the SQLITE error code.  If force is 2 then don't raise any exceptions */
 static int
 resetcursor(APSWCursor *self, int force)
 {
   int res = SQLITE_OK;
-  PyObject *nextquery = self->statement ? self->statement->next : NULL;
   PyObject *etype, *eval, *etb;
+  int hasmore = statementcache_hasmore(self->statement);
 
   Py_CLEAR(self->description_cache[0]);
   Py_CLEAR(self->description_cache[1]);
@@ -181,27 +181,18 @@ resetcursor(APSWCursor *self, int force)
   if (force)
     PyErr_Fetch(&etype, &eval, &etb);
 
-  Py_XINCREF(nextquery);
-
   if (self->statement)
   {
-    INUSE_CALL(res = statementcache_finalize(self->connection->stmtcache, self->statement, !force));
+    INUSE_CALL(res = statementcache_finalize(self->connection->stmtcache, self->statement));
     if (!force) /* we don't care about errors when forcing */
-    {
-      if (res == SQLITE_SCHEMA)
-      {
-        Py_XDECREF(nextquery);
-        return res;
-      }
       SET_EXC(res, self->connection->db);
-    }
     self->statement = 0;
   }
 
   Py_CLEAR(self->bindings);
   self->bindingsoffset = -1;
 
-  if (!force && self->status != C_DONE && nextquery)
+  if (!force && self->status != C_DONE && hasmore)
   {
     if (res == SQLITE_OK)
     {
@@ -210,12 +201,9 @@ resetcursor(APSWCursor *self, int force)
       if (!PyErr_Occurred())
       {
         PyErr_Format(ExcIncomplete, "Error: there are still remaining sql statements to execute");
-        AddTraceBackHere(__FILE__, __LINE__, "resetcursor", "{s: N}", "remaining", convertutf8buffertounicode(nextquery));
       }
     }
   }
-
-  Py_XDECREF(nextquery);
 
   if (!force && self->status != C_DONE && self->emiter)
   {
@@ -301,7 +289,7 @@ APSWCursor_dealloc(APSWCursor *self)
 }
 
 static PyObject *
-APSWCursor_new(PyTypeObject *type, APSW_ARGUNUSED PyObject *args, APSW_ARGUNUSED PyObject *kwds)
+APSWCursor_new(PyTypeObject *type, PyObject *Py_UNUSED(args), PyObject *Py_UNUSED(kwds))
 {
   APSWCursor *self;
 
@@ -485,6 +473,7 @@ static PyObject *APSWCursor_getdescription(APSWCursor *self)
 }
 
 /** .. attribute:: description
+    :type: tuple
 
     Based on the `DB-API cursor property
     <http://www.python.org/dev/peps/pep-0249/>`__, this returns the
@@ -512,15 +501,6 @@ APSWCursor_dobinding(APSWCursor *self, int arg, PyObject *obj)
 
   if (obj == Py_None)
     PYSQLITE_CUR_CALL(res = sqlite3_bind_null(self->statement->vdbestatement, arg));
-    /* Python uses a 'long' for storage of PyInt.  This could
-     be a 32bit or 64bit quantity depending on the platform. */
-#if PY_MAJOR_VERSION < 3
-  else if (PyInt_Check(obj))
-  {
-    long v = PyInt_AS_LONG(obj);
-    PYSQLITE_CUR_CALL(res = sqlite3_bind_int64(self->statement->vdbestatement, arg, v));
-  }
-#endif
   else if (PyLong_Check(obj))
   {
     /* nb: PyLong_AsLongLong can cause Python level error */
@@ -534,13 +514,9 @@ APSWCursor_dobinding(APSWCursor *self, int arg, PyObject *obj)
   }
   else if (PyUnicode_Check(obj))
   {
-    const void *badptr = NULL;
-    UNIDATABEGIN(obj)
-    APSW_FAULT_INJECT(DoBindingUnicodeConversionFails, , strdata = (char *)PyErr_NoMemory());
-    badptr = strdata;
-#ifdef APSW_TEST_LARGE_OBJECTS
-    APSW_FAULT_INJECT(DoBindingLargeUnicode, , strbytes = 0x001234567890L);
-#endif
+    const char *strdata = NULL;
+    Py_ssize_t strbytes = 0;
+    APSW_FAULT_INJECT(DoBindingUnicodeConversionFails, strdata = PyUnicode_AsUTF8AndSize(obj, &strbytes), strdata = (const char *)PyErr_NoMemory());
     if (strdata)
     {
       if (strbytes > APSW_INT32_MAX)
@@ -548,83 +524,31 @@ APSWCursor_dobinding(APSWCursor *self, int arg, PyObject *obj)
         SET_EXC(SQLITE_TOOBIG, NULL);
       }
       else
-        PYSQLITE_CUR_CALL(res = USE16(sqlite3_bind_text)(self->statement->vdbestatement, arg, strdata, strbytes, SQLITE_TRANSIENT));
+        PYSQLITE_CUR_CALL(res = sqlite3_bind_text(self->statement->vdbestatement, arg, strdata, strbytes, SQLITE_TRANSIENT));
     }
-    UNIDATAEND(obj);
-    if (!badptr)
+    else
     {
       assert(PyErr_Occurred());
       return -1;
     }
   }
-#if PY_MAJOR_VERSION < 3
-  else if (PyString_Check(obj))
+  else if (PyObject_CheckBuffer(obj))
   {
-    const char *val = PyString_AS_STRING(obj);
-    const size_t lenval = PyString_GET_SIZE(obj);
-    const char *chk = val;
-
-    if (lenval < 10000)
-      for (; chk < val + lenval && !((*chk) & 0x80); chk++)
-        ;
-    if (chk < val + lenval)
-    {
-      const void *badptr = NULL;
-      PyObject *str2 = PyUnicode_FromObject(obj);
-      if (!str2)
-        return -1;
-      UNIDATABEGIN(str2)
-      APSW_FAULT_INJECT(DoBindingStringConversionFails, , strdata = (char *)PyErr_NoMemory());
-#ifdef APSW_TEST_LARGE_OBJECTS
-      APSW_FAULT_INJECT(DoBindingLargeString, , strbytes = 0x001234567890L);
-#endif
-      badptr = strdata;
-      if (strdata)
-      {
-        if (strbytes > APSW_INT32_MAX)
-        {
-          SET_EXC(SQLITE_TOOBIG, NULL);
-          res = SQLITE_TOOBIG;
-        }
-        else
-          PYSQLITE_CUR_CALL(res = USE16(sqlite3_bind_text)(self->statement->vdbestatement, arg, strdata, strbytes, SQLITE_TRANSIENT));
-      }
-      UNIDATAEND(str2);
-      Py_DECREF(str2);
-      if (!badptr)
-      {
-        assert(PyErr_Occurred());
-        return -1;
-      }
-    }
-    else
-    {
-      assert(lenval < APSW_INT32_MAX);
-      PYSQLITE_CUR_CALL(res = sqlite3_bind_text(self->statement->vdbestatement, arg, val, lenval, SQLITE_TRANSIENT));
-    }
-  }
-#endif
-  else if (compat_CheckReadBuffer(obj))
-  {
-    const void *buffer;
-    Py_ssize_t buflen;
     int asrb;
-    READBUFFERVARS;
+    Py_buffer py3buffer;
 
-    compat_PyObjectReadBuffer(obj);
-
-    APSW_FAULT_INJECT(DoBindingAsReadBufferFails, , ENDREADBUFFER; (PyErr_NoMemory(), asrb = -1));
+    APSW_FAULT_INJECT(DoBindingAsReadBufferFails, asrb = PyObject_GetBuffer(obj, &py3buffer, PyBUF_SIMPLE), (PyErr_NoMemory(), asrb = -1));
     if (asrb != 0)
       return -1;
 
-    if (buflen > APSW_INT32_MAX)
+    if (py3buffer.len > APSW_INT32_MAX)
     {
       SET_EXC(SQLITE_TOOBIG, NULL);
-      ENDREADBUFFER;
+      PyBuffer_Release(&py3buffer);
       return -1;
     }
-    PYSQLITE_CUR_CALL(res = sqlite3_bind_blob(self->statement->vdbestatement, arg, buffer, buflen, SQLITE_TRANSIENT));
-    ENDREADBUFFER;
+    PYSQLITE_CUR_CALL(res = sqlite3_bind_blob(self->statement->vdbestatement, arg, py3buffer.buf, py3buffer.len, SQLITE_TRANSIENT));
+    PyBuffer_Release(&py3buffer);
   }
   else if (PyObject_TypeCheck(obj, &ZeroBlobBindType) == 1)
   {
@@ -709,14 +633,14 @@ APSWCursor_dobindings(APSWCursor *self)
   if (self->bindings)
     sz = PySequence_Fast_GET_SIZE(self->bindings);
   /* there is another statement after this one ... */
-  if (self->statement->next && sz - self->bindingsoffset < nargs)
+  if (statementcache_hasmore(self->statement) && sz - self->bindingsoffset < nargs)
   {
     PyErr_Format(ExcBindings, "Incorrect number of bindings supplied.  The current statement uses %d and there are only %d left.  Current offset is %d",
                  nargs, (self->bindings) ? sz : 0, (int)(self->bindingsoffset));
     return -1;
   }
   /* no more statements */
-  if (!self->statement->next && sz - self->bindingsoffset != nargs)
+  if (!statementcache_hasmore(self->statement) && sz - self->bindingsoffset != nargs)
   {
     PyErr_Format(ExcBindings, "Incorrect number of bindings supplied.  The current statement uses %d and there are %d supplied.  Current offset is %d",
                  nargs, (self->bindings) ? sz : 0, (int)(self->bindingsoffset));
@@ -755,7 +679,7 @@ APSWCursor_doexectrace(APSWCursor *self, Py_ssize_t savedbindingsoffset)
   assert(self->statement);
 
   /* make a string of the command */
-  sqlcmd = convertutf8buffersizetounicode(self->statement->utf8, self->statement->querylen);
+  sqlcmd = PyUnicode_FromStringAndSize(self->statement->utf8, self->statement->query_size);
 
   if (!sqlcmd)
     return -1;
@@ -859,18 +783,13 @@ APSWCursor_step(APSWCursor *self)
         res = resetcursor(self, 0); /* this will get the error code for us */
         assert(res != SQLITE_OK);
       }
-      if (res == SQLITE_SCHEMA && !PyErr_Occurred())
-      {
-        self->status = C_BEGIN;
-        continue;
-      }
       return NULL;
     }
     assert(res == SQLITE_DONE);
 
     /* done with that statement, are there any more? */
     self->status = C_DONE;
-    if (!self->statement->next)
+    if (!statementcache_hasmore(self->statement))
     {
       PyObject *next;
 
@@ -899,7 +818,7 @@ APSWCursor_step(APSWCursor *self)
       }
 
       /* we need to clear just completed and restart original executemany statement */
-      INUSE_CALL(statementcache_finalize(self->connection->stmtcache, self->statement, 0));
+      INUSE_CALL(statementcache_finalize(self->connection->stmtcache, self->statement));
       self->statement = NULL;
       /* don't need bindings from last round if emiter.next() */
       Py_CLEAR(self->bindings);
@@ -923,13 +842,13 @@ APSWCursor_step(APSWCursor *self)
     {
       /* we are going again in executemany mode */
       assert(self->emiter);
-      INUSE_CALL(self->statement = statementcache_prepare(self->connection->stmtcache, self->emoriginalquery, 1));
+      INUSE_CALL(self->statement = statementcache_prepare(self->connection->stmtcache, self->emoriginalquery));
       res = (self->statement) ? SQLITE_OK : SQLITE_ERROR;
     }
     else
     {
       /* next sql statement */
-      INUSE_CALL(res = statementcache_next(self->connection->stmtcache, &self->statement, !!self->bindings));
+      INUSE_CALL(res = statementcache_next(self->connection->stmtcache, &self->statement));
       SET_EXC(res, self->connection->db);
     }
 
@@ -972,7 +891,7 @@ APSWCursor_step(APSWCursor *self)
   return NULL;
 }
 
-/** .. method:: execute(statements[, bindings]) -> iterator
+/** .. method:: execute(statements: str, bindings: Optional[Union[Sequence,Dict]] = None) -> Iterator
 
     Executes the statements using the supplied bindings.  Execution
     returns when the first row is available or all statements have
@@ -1012,7 +931,7 @@ APSWCursor_step(APSWCursor *self)
     The return is the cursor object itself which is also an iterator.  This allows you to write::
 
        for row in cursor.execute("select * from books"):
-          print row
+          print(row)
 
     :raises TypeError: The bindings supplied were neither a dict nor a sequence
     :raises BindingsError: You supplied too many or too few bindings for the statements
@@ -1027,12 +946,12 @@ APSWCursor_step(APSWCursor *self)
 
 */
 static PyObject *
-APSWCursor_execute(APSWCursor *self, PyObject *args)
+APSWCursor_execute(APSWCursor *self, PyObject *args, PyObject *kwds)
 {
   int res;
   int savedbindingsoffset = -1;
   PyObject *retval = NULL;
-  PyObject *query;
+  PyObject *statements, *bindings=NULL;
 
   CHECK_USE(NULL);
   CHECK_CURSOR_CLOSED(NULL);
@@ -1045,15 +964,13 @@ APSWCursor_execute(APSWCursor *self, PyObject *args)
   }
 
   assert(!self->bindings);
-  assert(PyTuple_Check(args));
-
-  if (PyTuple_GET_SIZE(args) < 1 || PyTuple_GET_SIZE(args) > 2)
-    return PyErr_Format(PyExc_TypeError, "Incorrect number of arguments.  execute(statements [,bindings])");
-
-  query = PyTuple_GET_ITEM(args, 0);
-  if (PyTuple_GET_SIZE(args) == 2)
-    if (PyTuple_GET_ITEM(args, 1) != Py_None)
-      self->bindings = PyTuple_GET_ITEM(args, 1);
+  {
+    static char *kwlist[] = {"statements", "bindings", NULL};
+    Cursor_execute_CHECK;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!|O&:" Cursor_execute_USAGE, kwlist, &PyUnicode_Type, &statements, argcheck_Optional_Union_Sequence_Dict, &bindings))
+      return NULL;
+  }
+  self->bindings = bindings;
 
   if (self->bindings)
   {
@@ -1069,12 +986,12 @@ APSWCursor_execute(APSWCursor *self, PyObject *args)
 
   assert(!self->statement);
   assert(!PyErr_Occurred());
-  INUSE_CALL(self->statement = statementcache_prepare(self->connection->stmtcache, query, !!self->bindings));
+  INUSE_CALL(self->statement = statementcache_prepare(self->connection->stmtcache, statements));
   if (!self->statement)
   {
     AddTraceBackHere(__FILE__, __LINE__, "APSWCursor_execute.sqlite3_prepare", "{s: O, s: O}",
                      "Connection", self->connection,
-                     "statement", query);
+                     "statement", statements);
     return NULL;
   }
   assert(!PyErr_Occurred());
@@ -1109,7 +1026,7 @@ APSWCursor_execute(APSWCursor *self, PyObject *args)
   return retval;
 }
 
-/** .. method:: executemany(statements, sequenceofbindings)  -> iterator
+/** .. method:: executemany(statements: str, sequenceofbindings: Sequence[Union[Sequence,Dict]]) -> Iterator
 
   This method is for when you want to execute the same statements over
   a sequence of bindings.  Conceptually it does this::
@@ -1132,13 +1049,13 @@ APSWCursor_execute(APSWCursor *self, PyObject *args)
 */
 
 static PyObject *
-APSWCursor_executemany(APSWCursor *self, PyObject *args)
+APSWCursor_executemany(APSWCursor *self, PyObject *args, PyObject *kwds)
 {
   int res;
   PyObject *retval = NULL;
-  PyObject *theiterable = NULL;
+  PyObject *sequenceofbindings = NULL;
   PyObject *next = NULL;
-  PyObject *query = NULL;
+  PyObject *statements = NULL;
   int savedbindingsoffset = -1;
 
   CHECK_USE(NULL);
@@ -1155,11 +1072,13 @@ APSWCursor_executemany(APSWCursor *self, PyObject *args)
   assert(!self->emiter);
   assert(!self->emoriginalquery);
   assert(self->status == C_DONE);
-
-  if (!PyArg_ParseTuple(args, "OO:executemany(statements, sequenceofbindings)", &query, &theiterable))
-    return NULL;
-
-  self->emiter = PyObject_GetIter(theiterable);
+  {
+    static char *kwlist[] = {"statements", "sequenceofbindings", NULL};
+    Cursor_executemany_CHECK;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O:" Cursor_executemany_USAGE, kwlist, &PyUnicode_Type, &statements, &sequenceofbindings))
+      return NULL;
+  }
+  self->emiter = PyObject_GetIter(sequenceofbindings);
   if (!self->emiter)
     return PyErr_Format(PyExc_TypeError, "2nd parameter must be iterable");
 
@@ -1186,17 +1105,17 @@ APSWCursor_executemany(APSWCursor *self, PyObject *args)
   assert(!self->statement);
   assert(!PyErr_Occurred());
   assert(!self->statement);
-  INUSE_CALL(self->statement = statementcache_prepare(self->connection->stmtcache, query, 1));
+  INUSE_CALL(self->statement = statementcache_prepare(self->connection->stmtcache, statements));
   if (!self->statement)
   {
     AddTraceBackHere(__FILE__, __LINE__, "APSWCursor_executemany.sqlite3_prepare", "{s: O, s: O}",
                      "Connection", self->connection,
-                     "statement", query);
+                     "statements", statements);
     return NULL;
   }
   assert(!PyErr_Occurred());
 
-  self->emoriginalquery = self->statement->utf8;
+  self->emoriginalquery = statements;
   Py_INCREF(self->emoriginalquery);
 
   self->bindingsoffset = 0;
@@ -1229,7 +1148,7 @@ APSWCursor_executemany(APSWCursor *self, PyObject *args)
   return retval;
 }
 
-/** .. method:: close(force=False)
+/** .. method:: close(force: bool = False) -> None
 
   It is very unlikely you will need to call this method.  It exists
   because older versions of SQLite required all Connection/Cursor
@@ -1252,7 +1171,7 @@ APSWCursor_executemany(APSWCursor *self, PyObject *args)
 */
 
 static PyObject *
-APSWCursor_close(APSWCursor *self, PyObject *args)
+APSWCursor_close(APSWCursor *self, PyObject *args, PyObject *kwds)
 {
   int force = 0;
 
@@ -1260,9 +1179,12 @@ APSWCursor_close(APSWCursor *self, PyObject *args)
   if (!self->connection)
     Py_RETURN_NONE;
 
-  if (!PyArg_ParseTuple(args, "|i:close(force=False)", &force))
-    return NULL;
-
+  {
+    static char *kwlist[] = {"force", NULL};
+    Cursor_close_CHECK;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O&:" Cursor_close_USAGE, kwlist, argcheck_bool, &force))
+      return NULL;
+  }
   APSWCursor_close_internal(self, !!force);
 
   if (PyErr_Occurred())
@@ -1338,14 +1260,14 @@ APSWCursor_iter(APSWCursor *self)
   return (PyObject *)self;
 }
 
-/** .. method:: setexectrace(callable)
+/** .. method:: setexectrace(callable: Optional[Callable]) -> None
 
   *callable* is called with the cursor, statement and bindings for
   each :meth:`~Cursor.execute` or :meth:`~Cursor.executemany` on this
   cursor.
 
   If *callable* is :const:`None` then any existing execution tracer is
-  removed.
+  unregistered.
 
   .. seealso::
 
@@ -1355,32 +1277,34 @@ APSWCursor_iter(APSWCursor *self)
 */
 
 static PyObject *
-APSWCursor_setexectrace(APSWCursor *self, PyObject *func)
+APSWCursor_setexectrace(APSWCursor *self, PyObject *args, PyObject *kwds)
 {
+  PyObject *callable = NULL;
   CHECK_USE(NULL);
   CHECK_CURSOR_CLOSED(NULL);
 
-  if (func != Py_None && !PyCallable_Check(func))
   {
-    PyErr_SetString(PyExc_TypeError, "parameter must be callable or None");
-    return NULL;
+    static char *kwlist[] = {"callable", NULL};
+    Cursor_setexectrace_CHECK;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O&:" Cursor_setexectrace_USAGE, kwlist, argcheck_Optional_Callable, &callable))
+      return NULL;
   }
 
-  Py_INCREF(func);
+  Py_XINCREF(callable);
   Py_XDECREF(self->exectrace);
-  self->exectrace = func;
+  self->exectrace = callable;
 
   Py_RETURN_NONE;
 }
 
-/** .. method:: setrowtrace(callable)
+/** .. method:: setrowtrace(callable: Optional[Callable]) -> None
 
   *callable* is called with cursor and row being returned.  You can
   change the data that is returned or cause the row to be skipped
   altogether.
 
   If *callable* is :const:`None` then any existing row tracer is
-  removed.
+  unregistered.
 
   .. seealso::
 
@@ -1390,25 +1314,27 @@ APSWCursor_setexectrace(APSWCursor *self, PyObject *func)
 */
 
 static PyObject *
-APSWCursor_setrowtrace(APSWCursor *self, PyObject *func)
+APSWCursor_setrowtrace(APSWCursor *self, PyObject *args, PyObject *kwds)
 {
+  PyObject *callable = NULL;
   CHECK_USE(NULL);
   CHECK_CURSOR_CLOSED(NULL);
 
-  if (func != Py_None && !PyCallable_Check(func))
   {
-    PyErr_SetString(PyExc_TypeError, "parameter must be callable or None");
-    return NULL;
+    static char *kwlist[] = {"callable", NULL};
+    Cursor_setrowtrace_CHECK;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O&:" Cursor_setrowtrace_USAGE, kwlist, argcheck_Optional_Callable, &callable))
+      return NULL;
   }
 
-  Py_INCREF(func);
+  Py_XINCREF(callable);
   Py_XDECREF(self->rowtrace);
-  self->rowtrace = func;
+  self->rowtrace = callable;
 
   Py_RETURN_NONE;
 }
 
-/** .. method:: getexectrace() -> callable or None
+/** .. method:: getexectrace() -> Optional[Callable]
 
   Returns the currently installed (via :meth:`~Cursor.setexectrace`)
   execution tracer.
@@ -1430,7 +1356,7 @@ APSWCursor_getexectrace(APSWCursor *self)
   return ret;
 }
 
-/** .. method:: getrowtrace() -> callable or None
+/** .. method:: getrowtrace() -> Optional[Callable]
 
   Returns the currently installed (via :meth:`~Cursor.setrowtrace`)
   row tracer.
@@ -1485,7 +1411,7 @@ APSWCursor_fetchall(APSWCursor *self)
   return PySequence_List((PyObject *)self);
 }
 
-/** .. method:: fetchone() -> row or None
+/** .. method:: fetchone() -> Optional[Any]
 
   Returns the next row of data or None if there are no more rows.
 */
@@ -1507,85 +1433,80 @@ APSWCursor_fetchone(APSWCursor *self)
 }
 
 static PyMethodDef APSWCursor_methods[] = {
-    {"execute", (PyCFunction)APSWCursor_execute, METH_VARARGS,
-     "Executes one or more statements"},
-    {"executemany", (PyCFunction)APSWCursor_executemany, METH_VARARGS,
-     "Repeatedly executes statements on sequence"},
-    {"setexectrace", (PyCFunction)APSWCursor_setexectrace, METH_O,
-     "Installs a function called for every statement executed"},
-    {"setrowtrace", (PyCFunction)APSWCursor_setrowtrace, METH_O,
-     "Installs a function called for every row returned"},
+    {"execute", (PyCFunction)APSWCursor_execute, METH_VARARGS | METH_KEYWORDS,
+     Cursor_execute_DOC},
+    {"executemany", (PyCFunction)APSWCursor_executemany, METH_VARARGS | METH_KEYWORDS,
+     Cursor_executemany_DOC},
+    {"setexectrace", (PyCFunction)APSWCursor_setexectrace, METH_VARARGS | METH_KEYWORDS,
+     Cursor_setexectrace_DOC},
+    {"setrowtrace", (PyCFunction)APSWCursor_setrowtrace, METH_VARARGS | METH_KEYWORDS,
+     Cursor_setrowtrace_DOC},
     {"getexectrace", (PyCFunction)APSWCursor_getexectrace, METH_NOARGS,
-     "Returns the current exec tracer function"},
+     Cursor_getexectrace_DOC},
     {"getrowtrace", (PyCFunction)APSWCursor_getrowtrace, METH_NOARGS,
-     "Returns the current row tracer function"},
+     Cursor_getrowtrace_DOC},
     {"getconnection", (PyCFunction)APSWCursor_getconnection, METH_NOARGS,
-     "Returns the connection object for this cursor"},
+     Cursor_getconnection_DOC},
     {"getdescription", (PyCFunction)APSWCursor_getdescription, METH_NOARGS,
-     "Returns the description for the current row"},
-    {"close", (PyCFunction)APSWCursor_close, METH_VARARGS,
-     "Closes the cursor"},
+     Cursor_getdescription_DOC},
+    {"close", (PyCFunction)APSWCursor_close, METH_VARARGS | METH_KEYWORDS,
+     Cursor_close_DOC},
     {"fetchall", (PyCFunction)APSWCursor_fetchall, METH_NOARGS,
-     "Fetches all result rows"},
+     Cursor_fetchall_DOC},
     {"fetchone", (PyCFunction)APSWCursor_fetchone, METH_NOARGS,
-     "Fetches next result row"},
-
+     Cursor_fetchone_DOC},
     {0, 0, 0, 0} /* Sentinel */
 };
 
 static PyGetSetDef APSWCursor_getset[] = {
-    {"description", (getter)APSWCursor_getdescription_dbapi, NULL, "Subset of DB-API description attribute", NULL},
+    {"description", (getter)APSWCursor_getdescription_dbapi, NULL, Cursor_description_DOC, NULL},
     {NULL, NULL, NULL, NULL, NULL}};
 
 static PyTypeObject APSWCursorType = {
-    APSW_PYTYPE_INIT
-    "apsw.Cursor",                  /*tp_name*/
-    sizeof(APSWCursor),             /*tp_basicsize*/
-    0,                              /*tp_itemsize*/
-    (destructor)APSWCursor_dealloc, /*tp_dealloc*/
-    0,                              /*tp_print*/
-    0,                              /*tp_getattr*/
-    0,                              /*tp_setattr*/
-    0,                              /*tp_compare*/
-    0,                              /*tp_repr*/
-    0,                              /*tp_as_number*/
-    0,                              /*tp_as_sequence*/
-    0,                              /*tp_as_mapping*/
-    0,                              /*tp_hash */
-    0,                              /*tp_call*/
-    0,                              /*tp_str*/
-    0,                              /*tp_getattro*/
-    0,                              /*tp_setattro*/
-    0,                              /*tp_as_buffer*/
-    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HAVE_VERSION_TAG | Py_TPFLAGS_HAVE_GC
-#if PY_MAJOR_VERSION < 3
-        | Py_TPFLAGS_HAVE_ITER
-#endif
-    ,                                     /*tp_flags*/
-    "Cursor object",                      /* tp_doc */
-    (traverseproc)APSWCursor_tp_traverse, /* tp_traverse */
-    0,                                    /* tp_clear */
-    0,                                    /* tp_richcompare */
-    offsetof(APSWCursor, weakreflist),    /* tp_weaklistoffset */
-    (getiterfunc)APSWCursor_iter,         /* tp_iter */
-    (iternextfunc)APSWCursor_next,        /* tp_iternext */
-    APSWCursor_methods,                   /* tp_methods */
-    0,                                    /* tp_members */
-    APSWCursor_getset,                    /* tp_getset */
-    0,                                    /* tp_base */
-    0,                                    /* tp_dict */
-    0,                                    /* tp_descr_get */
-    0,                                    /* tp_descr_set */
-    0,                                    /* tp_dictoffset */
-    (initproc)APSWCursor_init,            /* tp_init */
-    0,                                    /* tp_alloc */
-    APSWCursor_new,                       /* tp_new */
-    0,                                    /* tp_free */
-    0,                                    /* tp_is_gc */
-    0,                                    /* tp_bases */
-    0,                                    /* tp_mro */
-    0,                                    /* tp_cache */
-    0,                                    /* tp_subclasses */
-    0,                                    /* tp_weaklist */
-    0                                     /* tp_del */
-    APSW_PYTYPE_VERSION};
+    PyVarObject_HEAD_INIT(NULL, 0) "apsw.Cursor",                                                /*tp_name*/
+    sizeof(APSWCursor),                                                                          /*tp_basicsize*/
+    0,                                                                                           /*tp_itemsize*/
+    (destructor)APSWCursor_dealloc,                                                              /*tp_dealloc*/
+    0,                                                                                           /*tp_print*/
+    0,                                                                                           /*tp_getattr*/
+    0,                                                                                           /*tp_setattr*/
+    0,                                                                                           /*tp_compare*/
+    0,                                                                                           /*tp_repr*/
+    0,                                                                                           /*tp_as_number*/
+    0,                                                                                           /*tp_as_sequence*/
+    0,                                                                                           /*tp_as_mapping*/
+    0,                                                                                           /*tp_hash */
+    0,                                                                                           /*tp_call*/
+    0,                                                                                           /*tp_str*/
+    0,                                                                                           /*tp_getattro*/
+    0,                                                                                           /*tp_setattro*/
+    0,                                                                                           /*tp_as_buffer*/
+    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HAVE_VERSION_TAG | Py_TPFLAGS_HAVE_GC, /*tp_flags*/
+    Cursor_init_DOC,                                                                             /* tp_doc */
+    (traverseproc)APSWCursor_tp_traverse,                                                        /* tp_traverse */
+    0,                                                                                           /* tp_clear */
+    0,                                                                                           /* tp_richcompare */
+    offsetof(APSWCursor, weakreflist),                                                           /* tp_weaklistoffset */
+    (getiterfunc)APSWCursor_iter,                                                                /* tp_iter */
+    (iternextfunc)APSWCursor_next,                                                               /* tp_iternext */
+    APSWCursor_methods,                                                                          /* tp_methods */
+    0,                                                                                           /* tp_members */
+    APSWCursor_getset,                                                                           /* tp_getset */
+    0,                                                                                           /* tp_base */
+    0,                                                                                           /* tp_dict */
+    0,                                                                                           /* tp_descr_get */
+    0,                                                                                           /* tp_descr_set */
+    0,                                                                                           /* tp_dictoffset */
+    (initproc)APSWCursor_init,                                                                   /* tp_init */
+    0,                                                                                           /* tp_alloc */
+    APSWCursor_new,                                                                              /* tp_new */
+    0,                                                                                           /* tp_free */
+    0,                                                                                           /* tp_is_gc */
+    0,                                                                                           /* tp_bases */
+    0,                                                                                           /* tp_mro */
+    0,                                                                                           /* tp_cache */
+    0,                                                                                           /* tp_subclasses */
+    0,                                                                                           /* tp_weaklist */
+    0,                                                                                           /* tp_del */
+    PyType_TRAILER
+};

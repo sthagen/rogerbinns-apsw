@@ -4,8 +4,6 @@
    See the accompanying LICENSE file.
 */
 
-#ifdef EXPERIMENTAL
-
 /**
 
 .. _virtualtables:
@@ -158,15 +156,15 @@ apswvtabCreateOrConnect(sqlite3 *db,
   schema = PySequence_GetItem(pyres, 0);
   if (!schema)
     goto pyexception;
-
+  if (!PyUnicode_Check(schema)) {
+    PyErr_Format(PyExc_TypeError, "Expected string for schema");
+    goto pyexception;
+  }
   {
-    PyObject *utf8schema = getutf8string(schema);
-    const char *cp_utf8schema;
-    if (!utf8schema)
+    const char *utf8schema = PyUnicode_AsUTF8(schema);
+    if(!utf8schema)
       goto pyexception;
-    cp_utf8schema = PyBytes_AsString(utf8schema);
-    _PYSQLITE_CALL_E(db, res = sqlite3_declare_vtab(db, cp_utf8schema));
-    Py_DECREF(utf8schema);
+    _PYSQLITE_CALL_E(db, res = sqlite3_declare_vtab(db, utf8schema));
     if (res != SQLITE_OK)
     {
       SET_EXC(res, db);
@@ -678,9 +676,9 @@ apswvtabBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *indexinfo)
         continue;
       }
       /* or an integer */
-      if (PyIntLong_Check(constraint))
+      if (PyLong_Check(constraint))
       {
-        indexinfo->aConstraintUsage[i].argvIndex = PyIntLong_AsLong(constraint) + 1;
+        indexinfo->aConstraintUsage[i].argvIndex = PyLong_AsLong(constraint) + 1;
         Py_DECREF(constraint);
         continue;
       }
@@ -697,7 +695,7 @@ apswvtabBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *indexinfo)
       omit = PySequence_GetItem(constraint, 1);
       if (!argvindex || !omit)
         goto constraintfail;
-      if (!PyIntLong_Check(argvindex))
+      if (!PyLong_Check(argvindex))
       {
         PyErr_Format(PyExc_TypeError, "argvindex for constraint #%d should be an integer", j);
         AddTraceBackHere(__FILE__, __LINE__, "VirtualTable.xBestIndex.result_constraint_argvindex", "{s: O, s: O, s: O, s: O, s: O}",
@@ -707,7 +705,7 @@ apswvtabBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *indexinfo)
       omitv = PyObject_IsTrue(omit);
       if (omitv == -1)
         goto constraintfail;
-      indexinfo->aConstraintUsage[i].argvIndex = PyIntLong_AsLong(argvindex) + 1;
+      indexinfo->aConstraintUsage[i].argvIndex = PyLong_AsLong(argvindex) + 1;
       indexinfo->aConstraintUsage[i].omit = omitv;
       Py_DECREF(constraint);
       Py_DECREF(argvindex);
@@ -731,14 +729,14 @@ apswvtabBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *indexinfo)
       goto pyexception;
     if (idxnum != Py_None)
     {
-      if (!PyIntLong_Check(idxnum))
+      if (!PyLong_Check(idxnum))
       {
         PyErr_Format(PyExc_TypeError, "idxnum must be an integer");
         AddTraceBackHere(__FILE__, __LINE__, "VirtualTable.xBestIndex.result_indexnum", "{s: O, s: O, s: O}", "self", vtable, "result", res, "indexnum", idxnum);
         Py_DECREF(idxnum);
         goto pyexception;
       }
-      indexinfo->idxNum = PyIntLong_AsLong(idxnum);
+      indexinfo->idxNum = PyLong_AsLong(idxnum);
     }
     Py_DECREF(idxnum);
   }
@@ -747,23 +745,21 @@ apswvtabBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *indexinfo)
   if (PySequence_Size(res) < 3)
     goto finally;
   {
-    PyObject *utf8str = NULL, *idxstr = NULL;
+    PyObject *idxstr = NULL;
     idxstr = PySequence_GetItem(res, 2);
     if (!idxstr)
       goto pyexception;
     if (idxstr != Py_None)
     {
-      utf8str = getutf8string(idxstr);
-      if (!utf8str)
-      {
+      if(!PyUnicode_Check(idxstr)) {
+        PyErr_Format(PyExc_TypeError, "Expected a string for idxStr");
         Py_DECREF(idxstr);
         goto pyexception;
       }
-      indexinfo->idxStr = sqlite3_mprintf("%s", PyBytes_AsString(utf8str));
+      indexinfo->idxStr = sqlite3_mprintf("%s", PyUnicode_AsUTF8(idxstr));
       indexinfo->needToFreeIdxStr = 1;
     }
-    Py_XDECREF(utf8str);
-    Py_DECREF(idxstr);
+
   }
 
   /* item 3 is orderByConsumed */
@@ -1550,5 +1546,4 @@ method then the first error may mask the second or vice versa.
    receive any constraintargs at all.
 */
 
-#endif /* EXPERIMENTAL */
 /* end of Virtual table code */

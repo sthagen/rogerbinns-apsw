@@ -83,17 +83,11 @@
 /* call from backup code */
 #define PYSQLITE_BACKUP_CALL(y) INUSE_CALL(_PYSQLITE_CALL_E(self->dest->db, y))
 
-#ifdef __GNUC__
-#define APSW_ARGUNUSED __attribute__((unused))
-#else
-#define APSW_ARGUNUSED
-#endif
-
 /* used to decide if we will use int (4 bytes) or long long (8 bytes) */
 #define APSW_INT32_MIN (-2147483647 - 1)
 #define APSW_INT32_MAX 2147483647
 
-/* 
+/*
    The default Python PyErr_WriteUnraiseable is almost useless.  It
    only prints the str() of the exception and the str() of the object
    passed in.  This gives the developer no clue whatsoever where in
@@ -118,7 +112,6 @@ apsw_write_unraiseable(PyObject *hookobject)
   PyObject *result = NULL;
   PyFrameObject *frame = NULL;
 
-#ifndef PYPY_VERSION
   /* fill in the rest of the traceback */
   frame = PyThreadState_GET()->frame;
   while (frame)
@@ -126,7 +119,6 @@ apsw_write_unraiseable(PyObject *hookobject)
     PyTraceBack_Here(frame);
     frame = frame->f_back;
   }
-#endif
 
   /* Get the exception details */
   PyErr_Fetch(&err_type, &err_value, &err_traceback);
@@ -138,7 +130,7 @@ apsw_write_unraiseable(PyObject *hookobject)
     PyErr_Clear();
     if (excepthook)
     {
-      result = PyEval_CallFunction(excepthook, "(OOO)", err_type ? err_type : Py_None, err_value ? err_value : Py_None, err_traceback ? err_traceback : Py_None);
+      result = PyObject_CallFunction(excepthook, "(OOO)", err_type ? err_type : Py_None, err_value ? err_value : Py_None, err_traceback ? err_traceback : Py_None);
       if (result)
         goto finally;
     }
@@ -150,16 +142,14 @@ apsw_write_unraiseable(PyObject *hookobject)
   {
     Py_INCREF(excepthook); /* borrowed reference from PySys_GetObject so we increment */
     PyErr_Clear();
-    result = PyEval_CallFunction(excepthook, "(OOO)", err_type ? err_type : Py_None, err_value ? err_value : Py_None, err_traceback ? err_traceback : Py_None);
+    result = PyObject_CallFunction(excepthook, "(OOO)", err_type ? err_type : Py_None, err_value ? err_value : Py_None, err_traceback ? err_traceback : Py_None);
     if (result)
       goto finally;
   }
 
   /* remove any error from callback failure */
   PyErr_Clear();
-#ifndef PYPY_VERSION
   PyErr_Display(err_type, err_value, err_traceback);
-#endif
 
 finally:
   Py_XDECREF(excepthook);
@@ -169,47 +159,6 @@ finally:
   Py_XDECREF(err_type);
   PyErr_Clear(); /* being paranoid - make sure no errors on return */
 }
-
-/* 
-   Python's handling of Unicode is horrible.  It can use 2 or 4 byte
-   unicode chars and the conversion routines like to put out BOMs
-   which makes life even harder.  These macros are used in pairs to do
-   the right form of conversion and tell us whether to use the plain
-   or -16 version of the SQLite function that is about to be called.
-*/
-
-#if Py_UNICODE_SIZE == 2
-#define UNIDATABEGIN(obj)                          \
-  {                                                \
-    size_t strbytes = 2 * PyUnicode_GET_SIZE(obj); \
-    const void *strdata = PyUnicode_AS_DATA(obj);
-
-#define UNIDATAEND(obj) \
-  }
-
-#define USE16(x) x##16
-
-#else /* Py_UNICODE_SIZE!=2 */
-
-#define UNIDATABEGIN(obj)                 \
-  {                                       \
-    Py_ssize_t strbytes = 0;              \
-    const char *strdata = NULL;           \
-    PyObject *_utf8 = NULL;               \
-    _utf8 = PyUnicode_AsUTF8String(obj);  \
-    if (_utf8)                            \
-    {                                     \
-      strbytes = PyBytes_GET_SIZE(_utf8); \
-      strdata = PyBytes_AS_STRING(_utf8); \
-    }
-
-#define UNIDATAEND(obj) \
-  Py_XDECREF(_utf8);    \
-  }
-
-#define USE16(x) x
-
-#endif /* Py_UNICODE_SIZE */
 
 /* Converts sqlite3_value to PyObject.  Returns a new reference. */
 static PyObject *
@@ -224,10 +173,6 @@ convert_value_to_pyobject(sqlite3_value *value)
   case SQLITE_INTEGER:
   {
     sqlite3_int64 val = sqlite3_value_int64(value);
-#if PY_MAJOR_VERSION < 3
-    if (val >= LONG_MIN && val <= LONG_MAX)
-      return PyInt_FromLong((long)val);
-#endif
     return PyLong_FromLongLong(val);
   }
 
@@ -235,13 +180,13 @@ convert_value_to_pyobject(sqlite3_value *value)
     return PyFloat_FromDouble(sqlite3_value_double(value));
 
   case SQLITE_TEXT:
-    return convertutf8stringsize((const char *)sqlite3_value_text(value), sqlite3_value_bytes(value));
+    return PyUnicode_FromStringAndSize((const char *)sqlite3_value_text(value), sqlite3_value_bytes(value));
 
   case SQLITE_NULL:
     Py_RETURN_NONE;
 
   case SQLITE_BLOB:
-    return converttobytes(sqlite3_value_blob(value), sqlite3_value_bytes(value));
+    return PyBytes_FromStringAndSize(sqlite3_value_blob(value), sqlite3_value_bytes(value));
 
   default:
     return PyErr_Format(APSWException, "Unknown sqlite column type %d!", coltype);
@@ -251,8 +196,8 @@ convert_value_to_pyobject(sqlite3_value *value)
   return NULL;
 }
 
-/* Converts column to PyObject.  Returns a new reference. Almost identical to above 
-   but we cannot just use sqlite3_column_value and then call the above function as 
+/* Converts column to PyObject.  Returns a new reference. Almost identical to above
+   but we cannot just use sqlite3_column_value and then call the above function as
    SQLite doesn't allow that ("unprotected values") */
 static PyObject *
 convert_column_to_pyobject(sqlite3_stmt *stmt, int col)
@@ -269,7 +214,7 @@ convert_column_to_pyobject(sqlite3_stmt *stmt, int col)
   {
     sqlite3_int64 val;
     _PYSQLITE_CALL_V(val = sqlite3_column_int64(stmt, col));
-    return PyIntLong_FromLongLong(val);
+    return PyLong_FromLongLong(val);
   }
 
   case SQLITE_FLOAT:
@@ -283,7 +228,7 @@ convert_column_to_pyobject(sqlite3_stmt *stmt, int col)
     const char *data;
     size_t len;
     _PYSQLITE_CALL_V((data = (const char *)sqlite3_column_text(stmt, col), len = sqlite3_column_bytes(stmt, col)));
-    return convertutf8stringsize(data, len);
+    return PyUnicode_FromStringAndSize(data, len);
   }
 
   case SQLITE_NULL:
@@ -294,7 +239,7 @@ convert_column_to_pyobject(sqlite3_stmt *stmt, int col)
     const void *data;
     size_t len;
     _PYSQLITE_CALL_V((data = sqlite3_column_blob(stmt, col), len = sqlite3_column_bytes(stmt, col)));
-    return converttobytes(data, len);
+    return PyBytes_FromStringAndSize(data, len);
   }
 
   default:
@@ -346,23 +291,17 @@ convert_column_to_pyobject(sqlite3_stmt *stmt, int col)
     }                                                                      \
   } while (0)
 
-/* It is 2009 - why do I have to write this? */
+/* This adds double nulls on the end - needed if string is a filename
+   used near vfs as it puts extra info after the first null */
 static char *apsw_strdup(const char *source)
 {
-  char *res = PyMem_Malloc(strlen(source) + 1);
+  size_t len = strlen(source);
+  char *res = PyMem_Malloc(len + 3);
   if (res)
-    strcpy(res, source);
-  return res;
-}
-
-/* It is 2016 - why do I have to write this? */
-static size_t apsw_strnlen(const char *s, size_t maxlen)
-{
-  size_t res = 0;
-  while (*s && res < maxlen)
   {
-    s++;
-    res++;
+    res[len] = res[len + 1] = res[len + 2] = 0;
+    PyOS_snprintf(res, len + 1, "%s", source);
   }
   return res;
 }
+

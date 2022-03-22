@@ -25,18 +25,14 @@ then
    APSW_TEST_ITERATIONS=${APSW_TEST_ITERATIONS:=150}
    apswopt="APSW_NO_MEMLEAK=t APSW_TEST_ITERATIONS=$APSW_TEST_ITERATIONS"
 else
-   options="--tool=callgrind --dump-instr=yes --trace-jump=yes"
+   options="--tool=callgrind --dump-line=yes --trace-jump=yes"
    cflags=""
    opt="-O2"
    apswopt=""
 fi
 
-DEFS="-DAPSW_NO_NDEBUG -DAPSW_TESTFIXTURES"
+DEFS="-DAPSW_NO_NDEBUG -DAPSW_TESTFIXTURES -DAPSW_USE_SQLITE_AMALGAMATION -DAPSW_USE_SQLITE_CONFIG"
 
-if [ -f sqlite3/sqlite3config.h ]
-then
-    DEFS="$DEFS -DAPSW_USE_SQLITE_CONFIG=\"sqlite3/sqlite3config.h\""
-fi
 # find python
 PYTHON=${PYTHON:-python3} # use whatever is in the path
 INCLUDEDIR=`$PYTHON -c "import sysconfig; print(sysconfig.get_path('include'))"`
@@ -49,6 +45,6 @@ SOSUFFIX=`$PYTHON -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFF
 rm -f apsw.o apsw.*.so apsw.so
 set -ex
 
-$CC $CFLAGS $MOREFLAGS $opt $cflags -DEXPERIMENTAL $DEFS -DAPSW_USE_SQLITE_AMALGAMATION=\"sqlite3/sqlite3.c\" -I$INCLUDEDIR -Isrc -I. -c src/apsw.c
+$CC $CFLAGS $MOREFLAGS $opt $cflags $DEFS -Isqlite3/ -I$INCLUDEDIR -Isrc -I. -c src/apsw.c
 $LINKER -g $opt apsw.o -o apsw$SOSUFFIX
 time env $apswopt valgrind $options $PYTHON $args

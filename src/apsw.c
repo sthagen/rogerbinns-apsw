@@ -35,7 +35,7 @@ API Reference
 #endif
 
 #ifdef APSW_USE_SQLITE_CONFIG
-#include APSW_USE_SQLITE_CONFIG
+#include "sqlite3config.h"
 #endif
 
 /* SQLite amalgamation */
@@ -46,7 +46,7 @@ API Reference
 #define SQLITE_EXTERN static
 #endif
 #define SQLITE_ENABLE_API_ARMOR 1
-#include APSW_USE_SQLITE_AMALGAMATION
+#include "sqlite3.c"
 #undef small
 
 /* Fight with SQLite over ndebug */
@@ -61,8 +61,8 @@ API Reference
 #include "sqlite3.h"
 #endif
 
-#if SQLITE_VERSION_NUMBER < 3037000
-#error Your SQLite version is too old.  It must be at least 3.37
+#if SQLITE_VERSION_NUMBER < 3038000
+#error Your SQLite version is too old.  It must be at least 3.38
 #endif
 
 /* system headers */
@@ -72,6 +72,8 @@ API Reference
 /* Get the version number */
 #include "apswversion.h"
 
+#include "apsw.docstrings"
+
 /* Python headers */
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
@@ -80,57 +82,46 @@ API Reference
 
 #ifdef APSW_TESTFIXTURES
 /* Fault injection */
-#define APSW_FAULT_INJECT(name, good, bad) \
-  do                                       \
-  {                                        \
-    if (APSW_Should_Fault(#name))          \
-    {                                      \
-      do                                   \
-      {                                    \
-        bad;                               \
-      } while (0);                         \
-    }                                      \
-    else                                   \
-    {                                      \
-      do                                   \
-      {                                    \
-        good;                              \
-      } while (0);                         \
-    }                                      \
+#define APSW_FAULT_INJECT(faultName, good, bad) \
+  do                                            \
+  {                                             \
+    if (APSW_Should_Fault(#faultName))          \
+    {                                           \
+      do                                        \
+      {                                         \
+        bad;                                    \
+      } while (0);                              \
+    }                                           \
+    else                                        \
+    {                                           \
+      do                                        \
+      {                                         \
+        good;                                   \
+      } while (0);                              \
+    }                                           \
   } while (0)
 
 static int APSW_Should_Fault(const char *);
 
-/* Are we Python 2.x (x>=5) and doing 64 bit? - _LP64 is best way I can find as sizeof isn't valid in cpp #if */
-#if PY_VERSION_HEX >= 0x02050000 && defined(_LP64) && _LP64
+/* Are we doing 64 bit? - _LP64 is best way I can find as sizeof isn't valid in cpp #if */
+#if defined(_LP64) && _LP64
 #define APSW_TEST_LARGE_OBJECTS
 #endif
 
 #else /* APSW_TESTFIXTURES */
-#define APSW_FAULT_INJECT(name, good, bad) \
-  do                                       \
-  {                                        \
-    good;                                  \
+#define APSW_FAULT_INJECT(faultName, good, bad) \
+  do                                            \
+  {                                             \
+    good;                                       \
   } while (0)
 
 #endif
 
-/* The encoding we use with SQLite.  SQLite supports either utf8 or 16
-   bit unicode (host byte order).  If the latter is used then all
-   functions have "16" appended to their name.  The encoding used also
-   affects how strings are stored in the database.  We use utf8 since
-   it is more space efficient, and Python can't make its mind up about
-   Unicode (it uses 16 or 32 bit unichars and often likes to use Byte
-   Order Markers as well). */
-#define STRENCODING "utf-8"
-
 /* The module object */
 static PyObject *apswmodule;
 
-/* Everything except the module itself is in separate files */
-#ifdef PYPY_VERSION
-#include "pypycompat.c"
-#endif
+/* Argument parsing helpers */
+#include "argparse.c"
 
 /* Augment tracebacks */
 #include "traceback.c"
@@ -143,9 +134,6 @@ static PyObject *apswmodule;
 
 /* various utility functions and macros */
 #include "util.c"
-
-/* buffer used in statement cache */
-#include "apswbuffer.c"
 
 /* The statement cache */
 #include "statementcache.c"
@@ -170,7 +158,7 @@ static PyObject *apswmodule;
 
 /* MODULE METHODS */
 
-/** .. method:: sqlitelibversion() -> string
+/** .. method:: sqlitelibversion() -> str
 
   Returns the version of the SQLite library.  This value is queried at
   run time from the library so if you use shared libraries it will be
@@ -182,10 +170,10 @@ static PyObject *apswmodule;
 static PyObject *
 getsqliteversion(void)
 {
-  return MAKESTR(sqlite3_libversion());
+  return PyUnicode_FromString(sqlite3_libversion());
 }
 
-/** .. method:: sqlite3_sourceid() -> string
+/** .. method:: sqlite3_sourceid() -> str
 
     Returns the exact checkin information for the SQLite 3 source
     being used.
@@ -196,20 +184,20 @@ getsqliteversion(void)
 static PyObject *
 get_sqlite3_sourceid(void)
 {
-  return MAKESTR(sqlite3_sourceid());
+  return PyUnicode_FromString(sqlite3_sourceid());
 }
 
-/** .. method:: apswversion() -> string
+/** .. method:: apswversion() -> str
 
   Returns the APSW version.
 */
 static PyObject *
 getapswversion(void)
 {
-  return MAKESTR(APSW_VERSION);
+  return PyUnicode_FromString(APSW_VERSION);
 }
 
-/** .. method:: enablesharedcache(bool)
+/** .. method:: enablesharedcache(enable: bool) -> None
 
   If you use the same :class:`Connection` across threads or use
   multiple :class:`connections <Connection>` accessing the same file,
@@ -220,13 +208,16 @@ getapswversion(void)
   -* sqlite3_enable_shared_cache
 */
 static PyObject *
-enablesharedcache(APSW_ARGUNUSED PyObject *self, PyObject *args)
+enablesharedcache(PyObject *Py_UNUSED(self), PyObject *args, PyObject *kwds)
 {
-  int setting, res;
-  if (!PyArg_ParseTuple(args, "i:enablesharedcache(boolean)", &setting))
-    return NULL;
-
-  APSW_FAULT_INJECT(EnableSharedCacheFail, res = sqlite3_enable_shared_cache(setting), res = SQLITE_NOMEM);
+  int enable = 0, res;
+  {
+    static char *kwlist[] = {"enable", NULL};
+    Apsw_enablesharedcache_CHECK;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O&:" Apsw_enablesharedcache_USAGE, kwlist, argcheck_bool, &enable))
+      return NULL;
+  }
+  APSW_FAULT_INJECT(EnableSharedCacheFail, res = sqlite3_enable_shared_cache(enable), res = SQLITE_NOMEM);
   SET_EXC(res, NULL);
 
   if (res != SQLITE_OK)
@@ -235,7 +226,7 @@ enablesharedcache(APSW_ARGUNUSED PyObject *self, PyObject *args)
   Py_RETURN_NONE;
 }
 
-/** .. method:: initialize()
+/** .. method:: initialize() -> None
 
   It is unlikely you will want to call this method as SQLite automatically initializes.
 
@@ -257,7 +248,7 @@ initialize(void)
   Py_RETURN_NONE;
 }
 
-/** .. method:: shutdown()
+/** .. method:: shutdown() -> None
 
   It is unlikely you will want to call this method and there is no
   need to do so.  It is a **really** bad idea to call it unless you
@@ -267,6 +258,9 @@ initialize(void)
 
   -* sqlite3_shutdown
 */
+#ifdef APSW_FORK_CHECKER
+static void free_fork_checker(void);
+#endif
 
 static PyObject *
 sqliteshutdown(void)
@@ -279,10 +273,14 @@ sqliteshutdown(void)
   if (res != SQLITE_OK)
     return NULL;
 
+#ifdef APSW_FORK_CHECKER
+  free_fork_checker();
+#endif
+
   Py_RETURN_NONE;
 }
 
-/** .. method:: config(op[, *args])
+/** .. method:: config(op: int, *args) -> None
 
   :param op: A `configuration operation <https://sqlite.org/c3ref/c_config_chunkalloc.html>`_
   :param args: Zero or more arguments as appropriate for *op*
@@ -300,7 +298,6 @@ sqliteshutdown(void)
   -* sqlite3_config
 */
 
-#ifdef EXPERIMENTAL
 static PyObject *logger_cb = NULL;
 
 static void
@@ -318,7 +315,7 @@ apsw_logger(void *arg, int errcode, const char *message)
 
   msgaspystring = convertutf8string(message);
   if (msgaspystring)
-    res = PyEval_CallFunction(arg, "iO", errcode, msgaspystring);
+    res = PyObject_CallFunction(arg, "iO", errcode, msgaspystring);
   if (!res)
   {
     AddTraceBackHere(__FILE__, __LINE__, "Call_Logger",
@@ -338,15 +335,15 @@ apsw_logger(void *arg, int errcode, const char *message)
 }
 
 static PyObject *
-config(APSW_ARGUNUSED PyObject *self, PyObject *args)
+config(PyObject *Py_UNUSED(self), PyObject *args)
 {
   int res, optdup;
   long opt;
 
-  if (PyTuple_GET_SIZE(args) < 1 || !PyIntLong_Check(PyTuple_GET_ITEM(args, 0)))
+  if (PyTuple_GET_SIZE(args) < 1 || !PyLong_Check(PyTuple_GET_ITEM(args, 0)))
     return PyErr_Format(PyExc_TypeError, "There should be at least one argument with the first being a number");
 
-  opt = PyIntLong_AsLong(PyTuple_GET_ITEM(args, 0));
+  opt = PyLong_AsLong(PyTuple_GET_ITEM(args, 0));
   if (PyErr_Occurred())
     return NULL;
 
@@ -374,7 +371,7 @@ config(APSW_ARGUNUSED PyObject *self, PyObject *args)
       SET_EXC(res, NULL);
       return NULL;
     }
-    return PyInt_FromLong(outval);
+    return PyLong_FromLong(outval);
   }
 
   case SQLITE_CONFIG_MEMSTATUS:
@@ -429,7 +426,6 @@ config(APSW_ARGUNUSED PyObject *self, PyObject *args)
 
   Py_RETURN_NONE;
 }
-#endif /* EXPERIMENTAL */
 
 /** .. method:: memoryused() -> int
 
@@ -447,7 +443,7 @@ memoryused(void)
   return PyLong_FromLongLong(sqlite3_memory_used());
 }
 
-/** .. method:: memoryhighwater(reset=False) -> int
+/** .. method:: memoryhighwater(reset: bool = False) -> int
 
   Returns the maximum amount of memory SQLite has used.  If *reset* is
   True then the high water mark is reset to the current value.
@@ -459,55 +455,64 @@ memoryused(void)
   -* sqlite3_memory_highwater
 */
 static PyObject *
-memoryhighwater(APSW_ARGUNUSED PyObject *self, PyObject *args)
+memoryhighwater(PyObject *Py_UNUSED(self), PyObject *args, PyObject *kwds)
 {
   int reset = 0;
 
-  if (!PyArg_ParseTuple(args, "|i:memoryhighwater(reset=False)", &reset))
-    return NULL;
-
+  {
+    static char *kwlist[] = {"reset", NULL};
+    Apsw_memoryhighwater_CHECK;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O&:" Apsw_memoryhighwater_USAGE, kwlist, argcheck_bool, &reset))
+      return NULL;
+  }
   return PyLong_FromLongLong(sqlite3_memory_highwater(reset));
 }
 
-/** .. method:: softheaplimit(bytes) -> oldlimit
+/** .. method:: softheaplimit(limit: int) -> int
 
-  Requests SQLite try to keep memory usage below *bytes* bytes and
-  returns the previous setting.
+  Requests SQLite try to keep memory usage below *amount* bytes and
+  returns the previous limit.
 
   -* sqlite3_soft_heap_limit64
 */
 static PyObject *
-softheaplimit(APSW_ARGUNUSED PyObject *self, PyObject *args)
+softheaplimit(PyObject *Py_UNUSED(self), PyObject *args, PyObject *kwds)
 {
-  long long limit, oldlimit;
-
-  if (!PyArg_ParseTuple(args, "L", &limit))
-    return NULL;
-
+  sqlite3_int64 limit, oldlimit;
+  {
+    static char *kwlist[] = {"limit", NULL};
+    Apsw_softheaplimit_CHECK;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "L:" Apsw_softheaplimit_USAGE, kwlist, &limit))
+      return NULL;
+  }
   oldlimit = sqlite3_soft_heap_limit64(limit);
 
   return PyLong_FromLongLong(oldlimit);
 }
 
-/** .. method:: randomness(bytes)  -> data
+/** .. method:: randomness(amount: int)  -> bytes
 
   Gets random data from SQLite's random number generator.
 
-  :param bytes: How many bytes to return
-  :rtype: (Python 2) string, (Python 3) bytes
+  :param amount: How many bytes to return
 
   -* sqlite3_randomness
 */
 static PyObject *
-randomness(APSW_ARGUNUSED PyObject *self, PyObject *args)
+randomness(PyObject *Py_UNUSED(self), PyObject *args, PyObject *kwds)
 {
   int amount;
   PyObject *bytes;
 
-  if (!PyArg_ParseTuple(args, "i", &amount))
-    return NULL;
+  {
+    static char *kwlist[] = {"amount", NULL};
+    Apsw_randomness_CHECK;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "i:" Apsw_randomness_USAGE, kwlist, &amount))
+      return NULL;
+  }
   if (amount < 0)
     return PyErr_Format(PyExc_ValueError, "Can't have negative number of bytes");
+
   bytes = PyBytes_FromStringAndSize(NULL, amount);
   if (!bytes)
     return bytes;
@@ -515,26 +520,29 @@ randomness(APSW_ARGUNUSED PyObject *self, PyObject *args)
   return bytes;
 }
 
-/** .. method:: releasememory(bytes) -> int
+/** .. method:: releasememory(amount: int) -> int
 
-  Requests SQLite try to free *bytes* bytes of memory.  Returns how
+  Requests SQLite try to free *amount* bytes of memory.  Returns how
   many bytes were freed.
 
   -* sqlite3_release_memory
 */
 
 static PyObject *
-releasememory(APSW_ARGUNUSED PyObject *self, PyObject *args)
+releasememory(PyObject *Py_UNUSED(self), PyObject *args, PyObject *kwds)
 {
   int amount;
 
-  if (!PyArg_ParseTuple(args, "i", &amount))
-    return NULL;
-
-  return PyInt_FromLong(sqlite3_release_memory(amount));
+  {
+    static char *kwlist[] = {"amount", NULL};
+    Apsw_releasememory_CHECK;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "i:" Apsw_releasememory_USAGE, kwlist, &amount))
+      return NULL;
+  }
+  return PyLong_FromLong(sqlite3_release_memory(amount));
 }
 
-/** .. method:: status(op, reset=False) -> (int, int)
+/** .. method:: status(op: int, reset: bool = False) -> Tuple[int, int]
 
   Returns current and highwater measurements.
 
@@ -550,13 +558,17 @@ releasememory(APSW_ARGUNUSED PyObject *self, PyObject *args)
 
 */
 static PyObject *
-status(APSW_ARGUNUSED PyObject *self, PyObject *args)
+status(PyObject *Py_UNUSED(self), PyObject *args, PyObject *kwds)
 {
   int res, op, reset = 0;
   sqlite3_int64 current = 0, highwater = 0;
 
-  if (!PyArg_ParseTuple(args, "i|i:status(op, reset=False)", &op, &reset))
-    return NULL;
+  {
+    static char *kwlist[] = {"op", "reset", NULL};
+    Apsw_status_CHECK;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "i|O&:" Apsw_status_USAGE, kwlist, &op, argcheck_bool, &reset))
+      return NULL;
+  }
 
   res = sqlite3_status64(op, &current, &highwater, reset);
   SET_EXC(res, NULL);
@@ -567,13 +579,13 @@ status(APSW_ARGUNUSED PyObject *self, PyObject *args)
   return Py_BuildValue("(LL)", current, highwater);
 }
 
-/** .. method:: vfsnames() -> list(string)
+/** .. method:: vfsnames() -> List[str]
 
   Returns a list of the currently installed :ref:`vfs <vfs>`.  The first
   item in the list is the default vfs.
 */
 static PyObject *
-vfsnames(APSW_ARGUNUSED PyObject *self)
+vfsnames(PyObject *Py_UNUSED(self))
 {
   PyObject *result = NULL, *str = NULL;
   int res;
@@ -604,7 +616,7 @@ error:
   return NULL;
 }
 
-/** .. method:: exceptionfor(int) -> Exception
+/** .. method:: exceptionfor(code: int) -> Exception
 
   If you would like to raise an exception that corresponds to a
   particular SQLite `error code
@@ -618,16 +630,17 @@ error:
 
 */
 static PyObject *
-getapswexceptionfor(APSW_ARGUNUSED PyObject *self, PyObject *pycode)
+getapswexceptionfor(PyObject *Py_UNUSED(self), PyObject *args, PyObject *kwds)
 {
-  int code, i;
+  int code = 0, i;
   PyObject *result = NULL;
 
-  if (!PyIntLong_Check(pycode))
-    return PyErr_Format(PyExc_TypeError, "Argument should be an integer");
-  code = PyIntLong_AsLong(pycode);
-  if (PyErr_Occurred())
-    return NULL;
+  {
+    static char *kwlist[] = {"code", NULL};
+    Apsw_exceptionfor_CHECK;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "i:" Apsw_exceptionfor_USAGE, kwlist, &code))
+      return NULL;
+  }
 
   for (i = 0; exc_descriptors[i].name; i++)
     if (exc_descriptors[i].code == (code & 0xff))
@@ -640,12 +653,12 @@ getapswexceptionfor(APSW_ARGUNUSED PyObject *self, PyObject *pycode)
   if (!result)
     return PyErr_Format(PyExc_ValueError, "%d is not a known error code", code);
 
-  PyObject_SetAttrString(result, "extendedresult", PyInt_FromLong(code));
-  PyObject_SetAttrString(result, "result", PyInt_FromLong(code & 0xff));
+  PyObject_SetAttrString(result, "extendedresult", PyLong_FromLong(code));
+  PyObject_SetAttrString(result, "result", PyLong_FromLong(code & 0xff));
   return result;
 }
 
-/** .. method:: complete(statement) -> bool
+/** .. method:: complete(statement: str) -> bool
 
   Returns True if the input string comprises one or more complete SQL
   statements by looking for an unquoted trailing semi-colon.
@@ -654,39 +667,37 @@ getapswexceptionfor(APSW_ARGUNUSED PyObject *self, PyObject *pycode)
   statements and needed to know if you had a whole statement, or
   needed to ask for another line::
 
-    statement=raw_input("SQL> ")
+    statement = input("SQL> ")
     while not apsw.complete(statement):
-       more=raw_input("  .. ")
-       statement=statement+"\n"+more
+       more = input("  .. ")
+       statement = statement + "\\n" + more
 
   -* sqlite3_complete
 */
 static PyObject *
-apswcomplete(APSW_ARGUNUSED Connection *self, PyObject *args)
+apswcomplete(PyObject *Py_UNUSED(self), PyObject *args, PyObject *kwds)
 {
-  char *statements = NULL;
+  const char *statement = NULL;
   int res;
 
-  if (!PyArg_ParseTuple(args, "es:complete(statement)", STRENCODING, &statements))
-    return NULL;
+  {
+    static char *kwlist[] = {"statement", NULL};
+    Apsw_complete_CHECK;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "s:" Apsw_complete_USAGE, kwlist, &statement))
+      return NULL;
+  }
 
-  res = sqlite3_complete(statements);
-
-  PyMem_Free(statements);
+  res = sqlite3_complete(statement);
 
   if (res)
-  {
-    Py_INCREF(Py_True);
-    return Py_True;
-  }
-  Py_INCREF(Py_False);
-  return Py_False;
+    Py_RETURN_TRUE;
+  Py_RETURN_FALSE;
 }
 
 #if defined(APSW_TESTFIXTURES) && defined(APSW_USE_SQLITE_AMALGAMATION)
 /* a routine to reset the random number generator so that we can test xRandomness */
 static PyObject *
-apsw_test_reset_rng(APSW_ARGUNUSED PyObject *self)
+apsw_test_reset_rng(PyObject *Py_UNUSED(self))
 {
   /* See sqlite3PrngResetState in sqlite's random.c */
   GLOBAL(struct sqlite3PrngType, sqlite3Prng).isInit = 0;
@@ -697,11 +708,10 @@ apsw_test_reset_rng(APSW_ARGUNUSED PyObject *self)
 
 #ifdef APSW_TESTFIXTURES
 static PyObject *
-apsw_fini(APSW_ARGUNUSED PyObject *self)
+apsw_fini(PyObject *Py_UNUSED(self))
 {
-  APSWBuffer_fini();
   Py_XDECREF(tls_errmsg);
-
+  statementcache_fini();
   Py_RETURN_NONE;
 }
 #endif
@@ -767,6 +777,10 @@ apsw_xMutexEnd(void)
   return apsw_orig_mutex_methods.xMutexEnd();
 }
 
+#define MUTEX_MAX_ALLOC 20
+static apsw_mutex *fork_checker_mutexes[MUTEX_MAX_ALLOC];
+static int current_apsw_fork_mutex = 0;
+
 static sqlite3_mutex *
 apsw_xMutexAlloc(int which)
 {
@@ -780,15 +794,15 @@ apsw_xMutexAlloc(int which)
 
     if (!m)
       return m;
-
-    am = malloc(sizeof(apsw_mutex));
+    assert(current_apsw_fork_mutex < MUTEX_MAX_ALLOC);
+    fork_checker_mutexes[current_apsw_fork_mutex++] = am = malloc(sizeof(apsw_mutex));
     am->pid = getpid();
     am->underlying_mutex = m;
     return (sqlite3_mutex *)am;
   }
   default:
     /* verify we have space */
-    assert(which < sizeof(apsw_mutexes) / sizeof(apsw_mutexes[0]));
+    assert((unsigned)which < sizeof(apsw_mutexes) / sizeof(apsw_mutexes[0]));
     /* fill in if missing */
     if (!apsw_mutexes[which])
     {
@@ -798,6 +812,23 @@ apsw_xMutexAlloc(int which)
     }
     return (sqlite3_mutex *)apsw_mutexes[which];
   }
+}
+
+static void
+free_fork_checker(void)
+{
+  unsigned i;
+  for (i = 0; i < sizeof(apsw_mutexes) / sizeof(apsw_mutexes[0]); i++)
+  {
+    free(apsw_mutexes[i]);
+    apsw_mutexes[i] = NULL;
+  }
+  for (i = 0; i < MUTEX_MAX_ALLOC; i++)
+  {
+    free(fork_checker_mutexes[i]);
+    fork_checker_mutexes[i] = 0;
+  }
+  current_apsw_fork_mutex = 0;
 }
 
 static int
@@ -885,7 +916,7 @@ static sqlite3_mutex_methods apsw_mutex_methods =
 #endif
 };
 
-/** .. method:: fork_checker()
+/** .. method:: fork_checker() -> None
 
   **Note** This method is not available on Windows as it does not
   support the fork system call.
@@ -931,7 +962,7 @@ static sqlite3_mutex_methods apsw_mutex_methods =
   checking as part of your test suite.
 */
 static PyObject *
-apsw_fork_checker(APSW_ARGUNUSED PyObject *self)
+apsw_fork_checker(PyObject *Py_UNUSED(self))
 {
   int rc;
 
@@ -973,6 +1004,7 @@ fail:
 #endif
 
 /** .. attribute:: compile_options
+    :type: Tuple
 
     A tuple of the options used to compile SQLite.  For example it
     will be something like this::
@@ -1006,7 +1038,7 @@ get_compile_options(void)
   {
     opt = sqlite3_compileoption_get(i); /* No PYSQLITE_CALL needed */
     assert(opt);
-    tmpstring = MAKESTR(opt);
+    tmpstring = PyUnicode_FromString(opt);
     if (!tmpstring)
       goto fail;
     PyTuple_SET_ITEM(res, i, tmpstring);
@@ -1019,6 +1051,7 @@ fail:
 }
 
 /** .. attribute:: keywords
+    :type: Set[str]
 
     A set containing every SQLite keyword
 
@@ -1041,7 +1074,7 @@ get_keywords(void)
   {
     j = sqlite3_keyword_name(i, &name, &size); /* No PYSQLITE_CALL needed */
     assert(j == SQLITE_OK);
-    tmpstring = convertutf8stringsize(name, size);
+    tmpstring = PyUnicode_FromStringAndSize(name, size);
     if (!tmpstring)
       goto fail;
     j = PySet_Add(res, tmpstring);
@@ -1056,137 +1089,130 @@ fail:
   return NULL;
 }
 
-/** .. method:: format_sql_value(value) -> string
+/** .. method:: format_sql_value(value: Union[None, int, float, bytes, str]) -> str
 
-  Returns a Python string (unicode) representing the supplied value in
-  SQL syntax.  Python 2 note: You must supply unicode strings not
-  plain strings.
+  Returns a Python string representing the supplied value in SQL syntax.
 
 */
 static PyObject *
-formatsqlvalue(APSW_ARGUNUSED PyObject *self, PyObject *value)
+formatsqlvalue(PyObject *Py_UNUSED(self), PyObject *value)
 {
   /* NULL/None */
   if (value == Py_None)
-  {
-    static PyObject *nullstr;
-    if (!nullstr)
-      nullstr = PyObject_Unicode(MAKESTR("NULL"));
-    Py_INCREF(nullstr);
-    return nullstr;
-  }
-  /* Integer/Long/Float */
-  if (PyIntLong_Check(value) /* ::TODO:: verify L is not appended in py 2.3 and similar vintage */
-      || PyFloat_Check(value))
-    return PyObject_Unicode(value);
-#if PY_MAJOR_VERSION < 3
-  /* We don't support plain strings only unicode */
-  if (PyString_Check(value))
-    return PyErr_Format(PyExc_TypeError, "Old plain strings not supported - use unicode");
-#endif
+    return PyUnicode_FromString("NULL");
+
+  /* Integer/Float */
+  if (PyLong_Check(value) || PyFloat_Check(value))
+    return PyObject_Str(value);
+
   /* Unicode */
   if (PyUnicode_Check(value))
   {
-    /* We optimize for the default case of there being no nuls or single quotes */
-    PyObject *unires;
-    Py_UNICODE *res;
-    Py_ssize_t left;
-    unires = PyUnicode_FromUnicode(NULL, PyUnicode_GET_SIZE(value) + 2);
-    if (!unires)
-      return NULL;
-    res = PyUnicode_AS_UNICODE(unires);
-    *res++ = '\'';
-    memcpy(res, PyUnicode_AS_UNICODE(value), PyUnicode_GET_DATA_SIZE(value));
-    res += PyUnicode_GET_SIZE(value);
-    *res++ = '\'';
-    /* Now look for nuls and single quotes */
-    res = PyUnicode_AS_UNICODE(unires) + 1;
-    left = PyUnicode_GET_SIZE(value);
-    for (; left; left--, res++)
+    Py_ssize_t needed_chars = 2; /* leading and trailing quote */
+    unsigned int input_kind = PyUnicode_KIND(value), output_kind;
+    void *input_data = PyUnicode_DATA(value);
+    Py_ssize_t input_length = PyUnicode_GET_LENGTH(value);
+    Py_ssize_t pos, outpos;
+    int simple = 1;
+    Py_UCS4 ch;
+
+    PyObject *strres;
+    void *output_data;
+
+    for (pos = 0; pos < input_length; pos++)
     {
-      if (*res == '\'' || *res == 0)
+      switch (PyUnicode_READ(input_kind, input_data, pos))
       {
-        /* we add one char for ' and 10 for null */
-        const int moveamount = *res == '\'' ? 1 : 10;
-        int retval;
-        APSW_FAULT_INJECT(FormatSQLValueResizeFails,
-                          retval = PyUnicode_Resize(&unires, PyUnicode_GET_SIZE(unires) + moveamount),
-                          retval = PyUnicode_Resize(&unires, -17));
-        if (retval == -1)
-        {
-          Py_DECREF(unires);
-          return NULL;
-        }
-        res = PyUnicode_AS_UNICODE(unires) + (PyUnicode_GET_SIZE(unires) - left - moveamount - 1);
-        memmove(res + moveamount, res, sizeof(Py_UNICODE) * (left + 1));
-        if (*res == 0)
-        {
-          *res++ = '\'';
-          *res++ = '|';
-          *res++ = '|';
-          *res++ = 'X';
-          *res++ = '\'';
-          *res++ = '0';
-          *res++ = '0';
-          *res++ = '\'';
-          *res++ = '|';
-          *res++ = '|';
-          *res = '\'';
-        }
-        else
-          res++;
+      case '\'':
+        needed_chars += 2;
+        simple = 0;
+        break;
+      case 0:
+        /* To output an embedded null we have to concatenate a blob
+           containing only a null to a string and sqlite does the
+           necessary co-ercion and gets things right irrespective of
+           the underlying string being utf8 or utf16.  It takes 11
+           characters to do that. */
+        needed_chars += 11;
+        simple = 0;
+        break;
+      default:
+        needed_chars += 1;
       }
     }
-    APSW_Unicode_Return(unires);
+
+    STRING_NEW(formatsqlStrFail, strres, needed_chars, PyUnicode_MAX_CHAR_VALUE(value));
+    if (!strres)
+      return NULL;
+    output_kind = PyUnicode_KIND(strres);
+    output_data = PyUnicode_DATA(strres);
+
+    PyUnicode_WRITE(output_kind, output_data, 0, '\'');
+    PyUnicode_WRITE(output_kind, output_data, needed_chars - 1, '\'');
+
+    if (simple)
+    {
+      PyUnicode_CopyCharacters(strres, 1, value, 0, input_length);
+      return strres;
+    }
+
+    outpos = 1;
+
+    for (pos = 0; pos < input_length; pos++)
+    {
+      switch (ch = PyUnicode_READ(input_kind, input_data, pos))
+      {
+      case 0:
+      {
+        int i;
+        for (i = 0; i < 11; i++)
+          PyUnicode_WRITE(output_kind, output_data, outpos++, "'||X'00'||'"[i]);
+      }
+      break;
+      case '\'':
+        PyUnicode_WRITE(output_kind, output_data, outpos++, ch);
+        /* fall through */
+      default:
+        PyUnicode_WRITE(output_kind, output_data, outpos++, ch);
+      }
+    }
+    return strres;
   }
   /* Blob */
-  if (
-#if PY_MAJOR_VERSION < 3
-      PyBuffer_Check(value)
-#else
-      PyBytes_Check(value)
-#endif
-  )
+  if (PyBytes_Check(value))
   {
-    const void *buffer;
-    const char *bufferc = NULL;
-    Py_ssize_t buflen;
     int asrb;
-    PyObject *unires;
-    Py_UNICODE *res;
-    READBUFFERVARS;
+    PyObject *strres;
+    void *unidata;
+    Py_ssize_t unipos = 0;
+    Py_buffer buffer;
+    Py_ssize_t buflen;
+    const unsigned char *bufferc;
 
-#define _HEXDIGITS
-    compat_PyObjectReadBuffer(value);
-    APSW_FAULT_INJECT(FormatSQLValueAsReadBufferFails,
-                      ,
-                      ENDREADBUFFER;
-                      (PyErr_NoMemory(), asrb = -1));
-    if (asrb != 0)
+    GET_BUFFER(formatsqlHexBufFail, asrb, value, &buffer);
+    if (asrb == -1)
       return NULL;
-    /* 3 is X, ', '  */
-    APSW_FAULT_INJECT(FormatSQLValuePyUnicodeFromUnicodeFails,
-                      unires = PyUnicode_FromUnicode(NULL, buflen * 2 + 3),
-                      unires = PyErr_NoMemory());
-    if (!unires)
-    {
-      ENDREADBUFFER;
-      return NULL;
-    }
-    bufferc = buffer;
-    res = PyUnicode_AS_UNICODE(unires);
-    *res++ = 'X';
-    *res++ = '\'';
+
+    STRING_NEW(formatsqlHexStrFail, strres, buffer.len * 2 + 3, 127);
+    if (!strres)
+      goto bytesfinally;
+
+    bufferc = buffer.buf;
+    buflen = buffer.len;
+    unidata = PyUnicode_DATA(strres);
+    PyUnicode_WRITE(PyUnicode_1BYTE_KIND, unidata, unipos++, 'X');
+    PyUnicode_WRITE(PyUnicode_1BYTE_KIND, unidata, unipos++, '\'');
     /* About the billionth time I have written a hex conversion routine */
     for (; buflen; buflen--)
     {
-      *res++ = "0123456789ABCDEF"[(*bufferc) >> 4];
-      *res++ = "0123456789ABCDEF"[(*bufferc++) & 0x0f];
+      PyUnicode_WRITE(PyUnicode_1BYTE_KIND, unidata, unipos++, "0123456789ABCDEF"[(*bufferc) >> 4]);
+      PyUnicode_WRITE(PyUnicode_1BYTE_KIND, unidata, unipos++, "0123456789ABCDEF"[(*bufferc++) & 0x0f]);
     }
-    *res++ = '\'';
+    PyUnicode_WRITE(PyUnicode_1BYTE_KIND, unidata, unipos++, '\'');
 
-    ENDREADBUFFER;
-    APSW_Unicode_Return(unires);
+  bytesfinally:
+    PyBuffer_Release(&buffer);
+    return strres;
   }
 
   return PyErr_Format(PyExc_TypeError, "Unsupported type");
@@ -1198,12 +1224,12 @@ formatsqlvalue(APSW_ARGUNUSED PyObject *self, PyObject *value)
   my code with the actual docstring from tools.py:main().
 */
 
-/** .. method:: log(level, message)
+/** .. method:: log(errorcode: int, message: str) -> None
 
     Calls the SQLite logging interface.  Note that you must format the
     message before passing it to this method::
 
-        apsw.log(apsw.SQLITE_NOMEM, "Need %d bytes of memory" % (1234,))
+        apsw.log(apsw.SQLITE_NOMEM, f"Need { needed } bytes of memory")
 
     See :ref:`tips <diagnostics_tips>` for an example of how to
     receive log messages.
@@ -1211,56 +1237,58 @@ formatsqlvalue(APSW_ARGUNUSED PyObject *self, PyObject *value)
     -* sqlite3_log
  */
 static PyObject *
-apsw_log(APSW_ARGUNUSED PyObject *self, PyObject *args)
+apsw_log(PyObject *Py_UNUSED(self), PyObject *args, PyObject *kwds)
 {
-  int level;
-  char *message;
-  if (!PyArg_ParseTuple(args, "ies", &level, STRENCODING, &message))
-    return NULL;
-  sqlite3_log(level, "%s", message); /* PYSQLITE_CALL not needed */
-  PyMem_Free(message);
+  int errorcode;
+  const char *message;
+  {
+    static char *kwlist[] = {"errorcode", "message", NULL};
+    Apsw_log_CHECK;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "is:" Apsw_log_USAGE, kwlist, &errorcode, &message))
+      return NULL;
+  }
+  sqlite3_log(errorcode, "%s", message); /* PYSQLITE_CALL not needed */
+
   Py_RETURN_NONE;
 }
 
 static PyMethodDef module_methods[] = {
     {"sqlite3_sourceid", (PyCFunction)get_sqlite3_sourceid, METH_NOARGS,
-     "Return the source identification of the SQLite library"},
+     Apsw_sqlite3_sourceid_DOC},
     {"sqlitelibversion", (PyCFunction)getsqliteversion, METH_NOARGS,
-     "Return the version of the SQLite library"},
+     Apsw_sqlitelibversion_DOC},
     {"apswversion", (PyCFunction)getapswversion, METH_NOARGS,
-     "Return the version of the APSW wrapper"},
+     Apsw_apswversion_DOC},
     {"vfsnames", (PyCFunction)vfsnames, METH_NOARGS,
-     "Returns list of vfs names"},
-    {"enablesharedcache", (PyCFunction)enablesharedcache, METH_VARARGS,
-     "Sets shared cache semantics for this thread"},
+     Apsw_vfsnames_DOC},
+    {"enablesharedcache", (PyCFunction)enablesharedcache, METH_VARARGS | METH_KEYWORDS,
+     Apsw_enablesharedcache_DOC},
     {"initialize", (PyCFunction)initialize, METH_NOARGS,
-     "Initialize SQLite library"},
+     Apsw_initialize_DOC},
     {"shutdown", (PyCFunction)sqliteshutdown, METH_NOARGS,
-     "Shutdown SQLite library"},
+     Apsw_shutdown_DOC},
     {"format_sql_value", (PyCFunction)formatsqlvalue, METH_O,
-     "Formats a SQL value as a string"},
-#ifdef EXPERIMENTAL
+     Apsw_format_sql_value_DOC},
     {"config", (PyCFunction)config, METH_VARARGS,
-     "Calls sqlite3_config"},
-    {"log", (PyCFunction)apsw_log, METH_VARARGS,
-     "Calls sqlite3_log"},
-#endif
+     Apsw_config_DOC},
+    {"log", (PyCFunction)apsw_log, METH_VARARGS | METH_KEYWORDS,
+     Apsw_log_DOC},
     {"memoryused", (PyCFunction)memoryused, METH_NOARGS,
-     "Current SQLite memory in use"},
-    {"memoryhighwater", (PyCFunction)memoryhighwater, METH_VARARGS,
-     "Most amount of memory used"},
-    {"status", (PyCFunction)status, METH_VARARGS,
-     "Gets various SQLite counters"},
-    {"softheaplimit", (PyCFunction)softheaplimit, METH_VARARGS,
-     "Sets soft limit on SQLite memory usage"},
-    {"releasememory", (PyCFunction)releasememory, METH_VARARGS,
-     "Attempts to free specified amount of memory"},
-    {"randomness", (PyCFunction)randomness, METH_VARARGS,
-     "Obtains random bytes"},
-    {"exceptionfor", (PyCFunction)getapswexceptionfor, METH_O,
-     "Returns exception instance corresponding to supplied sqlite error code"},
-    {"complete", (PyCFunction)apswcomplete, METH_VARARGS,
-     "Tests if a complete SQLite statement has been supplied (ie ends with ;)"},
+     Apsw_memoryused_DOC},
+    {"memoryhighwater", (PyCFunction)memoryhighwater, METH_VARARGS | METH_KEYWORDS,
+     Apsw_memoryhighwater_DOC},
+    {"status", (PyCFunction)status, METH_VARARGS | METH_KEYWORDS,
+     Apsw_status_DOC},
+    {"softheaplimit", (PyCFunction)softheaplimit, METH_VARARGS | METH_KEYWORDS,
+     Apsw_softheaplimit_DOC},
+    {"releasememory", (PyCFunction)releasememory, METH_VARARGS | METH_KEYWORDS,
+     Apsw_releasememory_DOC},
+    {"randomness", (PyCFunction)randomness, METH_VARARGS | METH_KEYWORDS,
+     Apsw_randomness_DOC},
+    {"exceptionfor", (PyCFunction)getapswexceptionfor, METH_VARARGS | METH_KEYWORDS,
+     Apsw_exceptionfor_DOC},
+    {"complete", (PyCFunction)apswcomplete, METH_VARARGS | METH_KEYWORDS,
+     Apsw_complete_DOC},
 #if defined(APSW_TESTFIXTURES) && defined(APSW_USE_SQLITE_AMALGAMATION)
     {"test_reset_rng", (PyCFunction)apsw_test_reset_rng, METH_NOARGS,
      "Resets random number generator so we can test vfs xRandomness"},
@@ -1271,14 +1299,13 @@ static PyMethodDef module_methods[] = {
 #endif
 #ifdef APSW_FORK_CHECKER
     {"fork_checker", (PyCFunction)apsw_fork_checker, METH_NOARGS,
-     "Installs fork checking code"},
+     Apsw_fork_checker_DOC},
 #endif
     {0, 0, 0, 0} /* Sentinel */
 };
 
 static void add_shell(PyObject *module);
 
-#if PY_MAJOR_VERSION >= 3
 static struct PyModuleDef apswmoduledef = {
     PyModuleDef_HEAD_INIT,
     "apsw",
@@ -1289,14 +1316,9 @@ static struct PyModuleDef apswmoduledef = {
     0,
     0,
     0};
-#endif
 
 PyMODINIT_FUNC
-#if PY_MAJOR_VERSION < 3
-initapsw(void)
-#else
 PyInit_apsw(void)
-#endif
 {
   PyObject *m = NULL;
   PyObject *thedict = NULL;
@@ -1314,22 +1336,10 @@ PyInit_apsw(void)
     goto fail;
   }
 
-  if (PyType_Ready(&ConnectionType) < 0 || PyType_Ready(&APSWCursorType) < 0 || PyType_Ready(&ZeroBlobBindType) < 0 || PyType_Ready(&APSWBlobType) < 0 || PyType_Ready(&APSWVFSType) < 0 || PyType_Ready(&APSWVFSFileType) < 0 || PyType_Ready(&APSWURIFilenameType) < 0 || PyType_Ready(&APSWStatementType) < 0 || PyType_Ready(&APSWBufferType) < 0 || PyType_Ready(&FunctionCBInfoType) < 0
-#ifdef EXPERIMENTAL
-      || PyType_Ready(&APSWBackupType) < 0
-#endif
-  )
+  if (PyType_Ready(&ConnectionType) < 0 || PyType_Ready(&APSWCursorType) < 0 || PyType_Ready(&ZeroBlobBindType) < 0 || PyType_Ready(&APSWBlobType) < 0 || PyType_Ready(&APSWVFSType) < 0 || PyType_Ready(&APSWVFSFileType) < 0 || PyType_Ready(&APSWURIFilenameType) < 0 || PyType_Ready(&FunctionCBInfoType) < 0 || PyType_Ready(&APSWBackupType) < 0)
     goto fail;
 
-  /* ensure threads are available */
-  PyEval_InitThreads();
-
-#if PY_MAJOR_VERSION < 3
-  m = apswmodule = Py_InitModule3("apsw", module_methods,
-                                  "Another Python SQLite Wrapper.");
-#else
   m = apswmodule = PyModule_Create(&apswmoduledef);
-#endif
 
   if (m == NULL)
     goto fail;
@@ -1362,6 +1372,7 @@ PyInit_apsw(void)
   PyModule_AddObject(m, "URIFilename", (PyObject *)&APSWURIFilenameType);
 
   /** .. attribute:: connection_hooks
+       :type: List[Callable]
 
        The purpose of the hooks is to allow the easy registration of
        :meth:`functions <Connection.createscalarfunction>`,
@@ -1382,7 +1393,8 @@ PyInit_apsw(void)
     goto fail;
   PyModule_AddObject(m, "connection_hooks", hooks);
 
-  /** .. data:: SQLITE_VERSION_NUMBER
+  /** .. attribute:: SQLITE_VERSION_NUMBER
+    :type: int
 
     The integer version number of SQLite that APSW was compiled
     against.  For example SQLite 3.6.4 will have the value *3006004*.
@@ -1394,6 +1406,7 @@ PyInit_apsw(void)
   PyModule_AddIntConstant(m, "SQLITE_VERSION_NUMBER", SQLITE_VERSION_NUMBER);
 
   /** .. attribute:: using_amalgamation
+    :type: bool
 
     If True then `SQLite amalgamation
     <https://sqlite.org/cvstrac/wiki?p=TheAmalgamation>`__ is in
@@ -1521,6 +1534,8 @@ modules etc. For example::
         ADDINT(SQLITE_INDEX_CONSTRAINT_IS),
         ADDINT(SQLITE_INDEX_CONSTRAINT_NE),
         ADDINT(SQLITE_INDEX_CONSTRAINT_FUNCTION),
+        ADDINT(SQLITE_INDEX_CONSTRAINT_OFFSET),
+        ADDINT(SQLITE_INDEX_CONSTRAINT_LIMIT),
         END,
 
         /* extended result codes */
@@ -1913,8 +1928,8 @@ modules etc. For example::
       }
       /* regular ADDINT */
       PyModule_AddIntConstant(m, name, value);
-      pyname = MAKESTR(name);
-      pyvalue = PyInt_FromLong(value);
+      pyname = PyUnicode_FromString(name);
+      pyvalue = PyLong_FromLong(value);
       if (!pyname || !pyvalue)
         goto fail;
       PyDict_SetItem(thedict, pyname, pyvalue);
@@ -1933,50 +1948,35 @@ modules etc. For example::
 
   if (!PyErr_Occurred())
   {
-    return
-#if PY_MAJOR_VERSION >= 3
-        m
-#endif
-        ;
+    return m;
   }
 
 fail:
   Py_XDECREF(m);
-  return
-#if PY_MAJOR_VERSION >= 3
-      NULL
-#endif
-      ;
+  return NULL;
 }
 
+static const char *apsw_shell_code =
+#include "shell.c"
+    ;
 static void
 add_shell(PyObject *apswmodule)
 {
-#ifndef PYPY_VERSION
-  PyObject *res = NULL, *maindict = NULL, *apswdict, *msvciscrap = NULL;
+  PyObject *res = NULL, *maindict = NULL, *apswdict = NULL;
 
   maindict = PyModule_GetDict(PyImport_AddModule("__main__"));
   apswdict = PyModule_GetDict(apswmodule);
   PyDict_SetItemString(apswdict, "__builtins__", PyDict_GetItemString(maindict, "__builtins__"));
   PyDict_SetItemString(apswdict, "apsw", apswmodule);
 
-  /* the toy compiler from microsoft falls over on string constants
-     bigger than will fit in a 16 bit quantity.  You remember 16 bits?
-     All the rage in the early 1980s.  So we have to compose chunks
-     into a bytes and use that instead.  The format string is as many
-     %s as there are chunks.  It is generated in setup.py.
-  */
-  msvciscrap = PyBytes_FromFormat(
-#include "shell.c"
-  );
-  if (msvciscrap)
-    res = PyRun_StringFlags(PyBytes_AS_STRING(msvciscrap), Py_file_input, apswdict, apswdict, NULL);
+  res = PyRun_StringFlags(apsw_shell_code, Py_file_input, apswdict, apswdict, NULL);
   if (!res)
+  {
     PyErr_Print();
-  assert(res);
-  Py_XDECREF(res);
-  Py_XDECREF(msvciscrap);
-#endif
+    return;
+  }
+
+  Py_DECREF(res);
 }
 
 #ifdef APSW_TESTFIXTURES
@@ -1999,7 +1999,7 @@ APSW_Should_Fault(const char *name)
       PyModule_AddObject(apswmodule, "faultdict", dict);
   }
 
-  value = MAKESTR(name);
+  value = PyUnicode_FromString(name);
 
   faultdict = PyObject_GetAttrString(apswmodule, "faultdict");
 

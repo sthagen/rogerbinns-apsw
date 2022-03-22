@@ -6,8 +6,6 @@
   See the accompanying LICENSE file.
 */
 
-#ifdef EXPERIMENTAL
-
 /**
 
 .. _backup:
@@ -29,7 +27,7 @@ Here is an example usage using the **with** statement to ensure
   with db.backup("main", source, "main") as b:
       while not b.done:
           b.step(100)
-          print b.remaining, b.pagecount, "\r",
+          print(b.remaining, b.pagecount, "\r", flush = True)
 
 If you are not using **with** then you'll need to ensure
 :meth:`~backup.finish` is called::
@@ -39,7 +37,7 @@ If you are not using **with** then you'll need to ensure
   try:
       while not b.done:
           b.step(100)
-          print b.remaining, b.pagecount, "\r",
+          print(b.remaining, b.pagecount, "\r", flush = True)
   finally:
       b.finish()
 
@@ -64,7 +62,7 @@ The destination database is locked during the copy.  You will get a
     }                                                                                                                      \
   } while (0)
 
-/** .. class:: backup
+/** .. class:: Backup
 
   You create a backup instance by calling :meth:`Connection.backup`.
 */
@@ -160,7 +158,7 @@ APSWBackup_dealloc(APSWBackup *self)
   Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
-/** .. method:: step([npages=All]) -> bool
+/** .. method:: step(npages: int = -1) -> bool
 
   Copies *npages* pages from the source to destination database.  The source database is locked during the copy so
   using smaller values allows other access to the source database.  The destination database is always locked until the
@@ -181,17 +179,20 @@ APSWBackup_dealloc(APSWBackup *self)
   -* sqlite3_backup_step
 */
 static PyObject *
-APSWBackup_step(APSWBackup *self, PyObject *args)
+APSWBackup_step(APSWBackup *self, PyObject *args, PyObject *kwds)
 {
-  int pages = -1, res;
+  int npages = -1, res;
 
   CHECK_USE(NULL);
   CHECK_BACKUP_CLOSED(NULL);
 
-  if (args && !PyArg_ParseTuple(args, "|i:step(pages=All)", &pages))
-    return NULL;
-
-  PYSQLITE_BACKUP_CALL(res = sqlite3_backup_step(self->backup, pages));
+  {
+    static char *kwlist[] = {"npages", NULL};
+    Backup_step_CHECK;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|i:" Backup_step_USAGE, kwlist, &npages))
+      return NULL;
+  }
+  PYSQLITE_BACKUP_CALL(res = sqlite3_backup_step(self->backup, npages));
   if (PyErr_Occurred())
     return NULL;
 
@@ -216,7 +217,7 @@ APSWBackup_step(APSWBackup *self, PyObject *args)
   return self->done;
 }
 
-/** .. method:: finish()
+/** .. method:: finish() -> None
 
   Completes the copy process.  If all pages have been copied then the
   transaction is committed on the destination database, otherwise it
@@ -243,7 +244,7 @@ APSWBackup_finish(APSWBackup *self)
   Py_RETURN_NONE;
 }
 
-/** .. method:: close([force=False])
+/** .. method:: close(force: bool = False) -> None
 
   Does the same thing as :meth:`~backup.finish`.  This extra api is
   provided to give the same api as other APSW objects such as
@@ -254,7 +255,7 @@ APSWBackup_finish(APSWBackup *self)
   :param force: If true then any exceptions are ignored.
 */
 static PyObject *
-APSWBackup_close(APSWBackup *self, PyObject *args)
+APSWBackup_close(APSWBackup *self, PyObject *args, PyObject *kwds)
 {
   int force = 0, setexc;
 
@@ -264,9 +265,12 @@ APSWBackup_close(APSWBackup *self, PyObject *args)
   if (!self->backup)
     Py_RETURN_NONE; /* already closed */
 
-  if (args && !PyArg_ParseTuple(args, "|i:close(force=False)", &force))
-    return NULL;
-
+  {
+    static char *kwlist[] = {"force", NULL};
+    Backup_close_CHECK;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O&:" Backup_close_USAGE, kwlist, argcheck_bool, &force))
+      return NULL;
+  }
   setexc = APSWBackup_close_internal(self, force);
   if (setexc)
     return NULL;
@@ -274,6 +278,7 @@ APSWBackup_close(APSWBackup *self, PyObject *args)
 }
 
 /** .. attribute:: remaining
+  :type: int
 
   Read only. How many pages were remaining to be copied after the last
   step.  If you haven't called :meth:`~backup.step` or the backup
@@ -283,13 +288,14 @@ APSWBackup_close(APSWBackup *self, PyObject *args)
   -* sqlite3_backup_remaining
 */
 static PyObject *
-APSWBackup_get_remaining(APSWBackup *self, APSW_ARGUNUSED void *ignored)
+APSWBackup_get_remaining(APSWBackup *self, void *Py_UNUSED(ignored))
 {
   CHECK_USE(NULL);
-  return PyInt_FromLong(self->backup ? sqlite3_backup_remaining(self->backup) : 0);
+  return PyLong_FromLong(self->backup ? sqlite3_backup_remaining(self->backup) : 0);
 }
 
 /** .. attribute:: pagecount
+  :type: int
 
   Read only. How many pages were in the source database after the last
   step.  If you haven't called :meth:`~backup.step` or the backup
@@ -299,13 +305,13 @@ APSWBackup_get_remaining(APSWBackup *self, APSW_ARGUNUSED void *ignored)
   -* sqlite3_backup_pagecount
 */
 static PyObject *
-APSWBackup_get_pagecount(APSWBackup *self, APSW_ARGUNUSED void *ignored)
+APSWBackup_get_pagecount(APSWBackup *self, void *Py_UNUSED(ignored))
 {
   CHECK_USE(NULL);
-  return PyInt_FromLong(self->backup ? sqlite3_backup_pagecount(self->backup) : 0);
+  return PyLong_FromLong(self->backup ? sqlite3_backup_pagecount(self->backup) : 0);
 }
 
-/** .. method:: __enter__() -> self
+/** .. method:: __enter__() -> Backup
 
   You can use the backup object as a `context manager
   <http://docs.python.org/reference/datamodel.html#with-statement-context-managers>`_
@@ -322,7 +328,7 @@ APSWBackup_enter(APSWBackup *self)
   return (PyObject *)self;
 }
 
-/** .. method:: __exit__() -> False
+/** .. method:: __exit__() -> Literal[False]
 
   Implements context manager in conjunction with :meth:`~backup.__enter__` ensuring
   that the copy is :meth:`finished <backup.finish>`.
@@ -359,37 +365,37 @@ APSWBackup_exit(APSWBackup *self, PyObject *args)
 }
 
 /** .. attribute:: done
+  :type: bool
 
   A boolean that is True if the copy completed in the last call to :meth:`~backup.step`.
 */
 static PyMemberDef backup_members[] = {
     /* name type offset flags doc */
-    {"done", T_OBJECT, offsetof(APSWBackup, done), READONLY, "True if all pages copied"},
+    {"done", T_OBJECT, offsetof(APSWBackup, done), READONLY, Backup_done_DOC},
     {0, 0, 0, 0, 0}};
 
 static PyGetSetDef backup_getset[] = {
     /* name getter setter doc closure */
-    {"remaining", (getter)APSWBackup_get_remaining, NULL, "Pages still to be copied", NULL},
-    {"pagecount", (getter)APSWBackup_get_pagecount, NULL, "Total pages in source database", NULL},
+    {"remaining", (getter)APSWBackup_get_remaining, NULL, Backup_remaining_DOC, NULL},
+    {"pagecount", (getter)APSWBackup_get_pagecount, NULL, Backup_pagecount_DOC, NULL},
     {0, 0, 0, 0, 0}};
 
 static PyMethodDef backup_methods[] = {
     {"__enter__", (PyCFunction)APSWBackup_enter, METH_NOARGS,
-     "Context manager entry"},
+     Backup_enter_DOC},
     {"__exit__", (PyCFunction)APSWBackup_exit, METH_VARARGS,
-     "Context manager exit"},
-    {"step", (PyCFunction)APSWBackup_step, METH_VARARGS,
-     "Copies some pages"},
+     Backup_exit_DOC},
+    {"step", (PyCFunction)APSWBackup_step, METH_VARARGS | METH_KEYWORDS,
+     Backup_step_DOC},
     {"finish", (PyCFunction)APSWBackup_finish, METH_NOARGS,
-     "Commits or rollsback backup"},
-    {"close", (PyCFunction)APSWBackup_close, METH_VARARGS,
-     "Alternate way to finish"},
+     Backup_finish_DOC},
+    {"close", (PyCFunction)APSWBackup_close, METH_VARARGS | METH_KEYWORDS,
+     Backup_close_DOC},
     {0, 0, 0, 0}};
 
 static PyTypeObject APSWBackupType =
     {
-        APSW_PYTYPE_INIT
-        "apsw.backup",                                                          /*tp_name*/
+        PyVarObject_HEAD_INIT(NULL, 0) "apsw.Backup",                           /*tp_name*/
         sizeof(APSWBackup),                                                     /*tp_basicsize*/
         0,                                                                      /*tp_itemsize*/
         (destructor)APSWBackup_dealloc,                                         /*tp_dealloc*/
@@ -408,7 +414,7 @@ static PyTypeObject APSWBackupType =
         0,                                                                      /*tp_setattro*/
         0,                                                                      /*tp_as_buffer*/
         Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HAVE_VERSION_TAG, /*tp_flags*/
-        "backup object",                                                        /* tp_doc */
+        Backup_init_DOC,                                                        /* tp_doc */
         0,                                                                      /* tp_traverse */
         0,                                                                      /* tp_clear */
         0,                                                                      /* tp_richcompare */
@@ -433,7 +439,6 @@ static PyTypeObject APSWBackupType =
         0,                                                                      /* tp_cache */
         0,                                                                      /* tp_subclasses */
         0,                                                                      /* tp_weaklist */
-        0                                                                       /* tp_del */
-        APSW_PYTYPE_VERSION};
-
-#endif /* EXPERIMENTAL */
+        0,                                                                      /* tp_del */
+        PyType_TRAILER
+};

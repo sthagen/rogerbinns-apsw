@@ -185,7 +185,7 @@ static int init_exceptions(PyObject *m)
 
   for (i = 0; i < sizeof(apswexceptions) / sizeof(apswexceptions[0]); i++)
   {
-    sprintf(buffy, "apsw.%s", apswexceptions[i].name);
+    PyOS_snprintf(buffy, sizeof(buffy), "apsw.%s", apswexceptions[i].name);
     *apswexceptions[i].var = PyErr_NewException(buffy, APSWException, NULL);
     if (!*apswexceptions[i].var)
       return -1;
@@ -199,12 +199,12 @@ static int init_exceptions(PyObject *m)
   /* all the ones corresponding to SQLITE error codes */
   for (i = 0; exc_descriptors[i].name; i++)
   {
-    sprintf(buffy, "apsw.%sError", exc_descriptors[i].name);
+    PyOS_snprintf(buffy, sizeof(buffy), "apsw.%sError", exc_descriptors[i].name);
     obj = PyErr_NewException(buffy, APSWException, NULL);
     if (!obj)
       return -1;
     exc_descriptors[i].cls = obj;
-    sprintf(buffy, "%sError", exc_descriptors[i].name);
+    PyOS_snprintf(buffy, sizeof(buffy), "%sError", exc_descriptors[i].name);
     /* PyModule_AddObject steals the ref, but we don't add a ref for
       ourselves because it leaks on module unload when we couldn't use
       these anyway */
@@ -235,10 +235,10 @@ static void make_exception(int res, sqlite3 *db)
       PyErr_Format(exc_descriptors[i].cls, "%sError: %s", exc_descriptors[i].name, errmsg);
       PyErr_Fetch(&etype, &eval, &etb);
       PyErr_NormalizeException(&etype, &eval, &etb);
-      tmp = PyIntLong_FromLongLong(res & 0xff);
+      tmp = PyLong_FromLongLong(res & 0xff);
       PyObject_SetAttrString(eval, "result", tmp);
       Py_DECREF(tmp);
-      tmp = PyIntLong_FromLongLong(res);
+      tmp = PyLong_FromLongLong(res);
       PyObject_SetAttrString(eval, "extendedresult", tmp);
       Py_DECREF(tmp);
       PyErr_Restore(etype, eval, etb);
@@ -278,9 +278,9 @@ MakeSqliteMsgFromPyException(char **errmsg)
       {
         /* extract it */
         PyObject *extended = PyObject_GetAttrString(evalue, "extendedresult");
-        if (extended && PyIntLong_Check(extended))
+        if (extended && PyLong_Check(extended))
           /* Any errors in this will be swallowed */
-          res = (PyIntLong_AsLong(extended) & 0xffffff00u) | res;
+          res = (PyLong_AsLong(extended) & 0xffffff00u) | res;
         Py_XDECREF(extended);
       }
       break;
@@ -294,7 +294,7 @@ MakeSqliteMsgFromPyException(char **errmsg)
     if (!str && etype)
       str = PyObject_Str(etype);
     if (!str)
-      str = MAKESTR("python exception with no information");
+      str = PyUnicode_FromString("python exception with no information");
     if (*errmsg)
       sqlite3_free(*errmsg);
     *errmsg = sqlite3_mprintf("%s", PyBytes_AsString(str));

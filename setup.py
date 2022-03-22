@@ -10,30 +10,17 @@ import re
 import time
 import zipfile
 import tarfile
+import subprocess
+import sysconfig
 
-try:
-    if not os.environ.get("APSW_FORCE_DISTUTILS"):
-        from setuptools import setup, Extension, Command
-    else:
-        raise ImportError()
-except ImportError:
-    from distutils.core import setup, Extension, Command
-
+from distutils.core import setup, Extension, Command
 from distutils.command import build_ext, build, sdist
-
-##
-## Do your customizations here or by creating a setup.cfg as documented at
-## http://www.python.org/doc/2.5.2/dist/setup-config.html
-##
+import distutils.ccompiler
 
 include_dirs = ['src']
 library_dirs = []
 define_macros = []
 libraries = []
-
-# This includes the functionality marked as experimental in SQLite 3.
-# Comment out the line to exclude them
-define_macros.append(('EXPERIMENTAL', '1'))
 
 ##
 ## End of customizations
@@ -51,15 +38,8 @@ def write(*args):
     dest.flush()
 
 
-py3 = sys.version_info >= (3, 0)
-
-
 # ensure files are closed
 def read_whole_file(name, mode):
-    if sys.version_info < (2, 4):
-        if "r" in mode and "U" in mode:
-            # python 2.3 returns file not found if "U" present!
-            mode = "".join([m for m in mode if m != "U"])
     f = open(name, mode)
     try:
         return f.read()
@@ -75,34 +55,23 @@ def write_whole_file(name, mode, data):
         f.close()
 
 
+# work out version number
+version = read_whole_file(os.path.join("src", "apswversion.h"), "rt").split()[2].strip('"')
+
+
 # They keep messing with where files are in URI
 def fixup_download_url(url):
     ver = re.search("3[0-9]{6}", url)
     if ver:
         ver = int(ver.group(0))
-        if ver >= 3071600:
-            if ver >= 3340100:
-                year = "2021"
-            elif ver >= 3310000:
-                year = "2020"
-            elif ver >= 3270000:
-                year = "2019"
-            elif ver >= 3220000:
-                year = "2018"
-            elif ver >= 3160000:
-                year = "2017"
-            elif ver >= 3100000:
-                year = "2016"
-            elif ver >= 3080800:
-                year = "2015"
-            elif ver >= 3080300:
-                year = "2014"
-            else:
-                year = "2013"
-            if "/" + year + "/" not in url:
-                url = url.split("/")
-                url.insert(3, year)
-                return "/".join(url)
+        if ver >= 3370200:
+            year = "2022"
+        elif ver >= 3340100:
+            year = "2021"
+        if "/" + year + "/" not in url:
+            url = url.split("/")
+            url.insert(3, year)
+            return "/".join(url)
     return url
 
 
@@ -152,71 +121,36 @@ class build_test_extension(Command):
         pass
 
     def run(self):
-        # On 64 bit windows we have to use MSVC
-        if sys.platform == 'win32':  # yes even on 64 bit
-            try:
-                import platform
-                if platform.architecture()[0] == '64bit':
-                    res = os.system(
-                        "cl /Gd src/testextension.c /I sqlite3 /I . /DDLL /LD /link /export:sqlite3_extension_init /export:alternate_sqlite3_extension_init /out:testextension.sqlext"
-                    )
-                    if res != 0:
-                        raise RuntimeError("Building test extension failed")
-                    return
-            except ImportError:
-                pass
-        shared = "shared"
-        if sys.platform.startswith("darwin"):
-            shared = "bundle"
-        res = os.system("gcc -fPIC -%s -o testextension.sqlext -Isqlite3 -I. src/testextension.c" % (shared, ))
-        if res != 0:
-            raise RuntimeError("Building test extension failed")
+        name = "testextension.sqlext"
 
+        def v(n):
+            return sysconfig.get_config_var(n)
 
-# Another hack.  Visual Studio 2008 & 2010 ship with 64
-# compilers, headers and the Windows SDK but claims it doesn't and
-# distutils can't find it.  The separate Windows SDK can't find this
-# and gets very confused not to mention being one of the buggiest cmd
-# scripts I have ever seen.  This hack just sets some environment
-# variables directly since all the "proper" ways are very broken.
-class win64hackvars(Command):
-    description = "Set env vars for Visual Studio 2008/2010 Express 64 bit"
+        # unixy platforms have this, and is necessary to match the 32/64 bitness of Python itself
+        if v('CC'):
+            cc = f"{ v('CC') } { v('CFLAGS') } { v('CCSHARED') } -Isqlite3 -I. -c src/testextension.c"
+            ld = f"{ v('LDSHARED') } testextension.o -o { name }"
 
-    user_options = []
-
-    def initialize_options(self):
-        pass
-
-    def finalize_options(self):
-        pass
-
-    def run(self):
-        vcver = 9
-        if sys.version_info >= (3, 3):
-            vcver = 10
-        sdkdir = r"C:\Program Files\Microsoft SDKs\Windows\v6.0A"
-        vsdir = r"C:\Program Files (x86)\Microsoft Visual Studio %d.0\VC" % vcver
-        assert os.path.isdir(sdkdir), "Expected sdk dir " + sdkdir
-        assert os.path.isdir(vsdir), "Expected visual studio dir " + vsdir
-        os.environ["PATH"] = r"%s\bin\amd64;%s\bin" % (vsdir, sdkdir)
-        os.environ["INCLUDE"] = r"%s\include;%s\include" % (vsdir, sdkdir)
-        os.environ["LIB"] = r"%s\lib\amd64;%s\lib\x64" % (vsdir, sdkdir)
-        os.environ["DISTUTILS_USE_SDK"] = "1"
-        os.environ["MSSdk"] = sdkdir
+            for cmd in cc, ld:
+                print(cmd)
+                subprocess.run(cmd, shell=True, check=True)
+        else:
+            # windows mostly
+            compiler = distutils.ccompiler.new_compiler(verbose=True)
+            compiler.add_include_dir("sqlite3")
+            compiler.add_include_dir(".")
+            preargs = ["/Gd"] if "msvc" in str(compiler.__class__).lower() else ["-fPIC"]
+            objs = compiler.compile(["src/testextension.c"], extra_preargs=preargs)
+            compiler.link_shared_object(objs, name)
 
 
 # deal with various python version compatibility issues with how
 # to treat returned web data as lines of text
 def fixupcode(code):
-    if sys.version_info < (2, 5):
-        if type(code) != str:
-            code = code.read()
-
-    if sys.version_info >= (3, 0):
-        if type(code) != bytes:
-            code = code.read()
-        if type(code) == bytes:
-            code = code.decode("iso8859-1")
+    if type(code) != bytes:
+        code = code.read()
+    if type(code) == bytes:
+        code = code.decode("iso8859-1")
 
     if type(code) == str:
         return [l + "\n" for l in code.split("\n")]
@@ -230,7 +164,7 @@ fetch_parts = []
 class fetch(Command):
     description = "Automatically downloads SQLite and components"
     user_options = [
-        ("version=", None, "Which version of SQLite/components to get (default current)"),
+        ("version=", None, f"Which version of SQLite/components to get (default { version.split('-')[0] })"),
         ("missing-checksum-ok", None, "Continue on a missing checksum (default abort)"),
         ("sqlite", None, "Download SQLite amalgamation"),
         ("all", None, "Download all downloadable components"),
@@ -245,8 +179,9 @@ class fetch(Command):
         self.missing_checksum_ok = False
 
     def finalize_options(self):
-        # If all is selected then turn on all components
         global fetch_parts
+        if self.version in ("self", None):
+            self.version = version.split("-")[0]
         if self.all:
             for i in self.fetch_options:
                 setattr(self, i, True)
@@ -255,8 +190,8 @@ class fetch(Command):
 
     def run(self):
         # work out the version
-        if self.version is None:
-            write("  Getting download page to work out current SQLite version")
+        if self.version == "latest":
+            write("  Getting download page to work out latest SQLite version")
             page = self.download("https://sqlite.org/download.html", text=True, checksum=False)
             match = re.search(r'sqlite-amalgamation-3([0-9][0-9])([0-9][0-9])([0-9][0-9])\.zip', page)
             if match:
@@ -264,7 +199,7 @@ class fetch(Command):
                 if self.version.endswith(".0"):
                     self.version = self.version[:-len(".0")]
             else:
-                write("Unable to determine current SQLite version.  Use --version=VERSION", sys.stderr)
+                write("Unable to determine latest SQLite version.  Use --version=VERSION", sys.stderr)
                 write("to set version - eg setup.py fetch --version=3.6.18", sys.stderr)
                 sys.exit(17)
             write("    Version is " + self.version)
@@ -463,16 +398,10 @@ class fetch(Command):
 
     # download a url
     def download(self, url, text=False, checksum=True):
-        if py3:
-            import urllib.request
-            urlopen = urllib.request.urlopen
-            import io
-            bytesio = io.BytesIO
-        else:
-            import urllib2
-            urlopen = urllib2.urlopen
-            import cStringIO
-            bytesio = cStringIO.StringIO
+        import urllib.request
+        urlopen = urllib.request.urlopen
+        import io
+        bytesio = io.BytesIO
 
         write("    Fetching", url)
         count = 0
@@ -499,8 +428,7 @@ class fetch(Command):
                     raise
 
         if text:
-            if py3:
-                page = page.decode("iso8859_1")
+            page = page.decode("iso8859_1")
 
         if checksum:
             self.verifyurl(url, page)
@@ -622,15 +550,10 @@ class apsw_build_ext(beparent):
 
         path = findamalgamation()
         if path:
-            if sys.platform == "win32" and sys.version_info < (3, 9):
-                # double quotes get consumed by python windows arg processing, fixed
-                # in python 3.9
-                ext.define_macros.append(('APSW_USE_SQLITE_AMALGAMATION', '\\"' + path + '\\"'))
-            else:
-                ext.define_macros.append(('APSW_USE_SQLITE_AMALGAMATION', '"' + path + '"'))
+            ext.define_macros.append(('APSW_USE_SQLITE_AMALGAMATION', '1'))
             ext.depends.append(path)
             # we also add the directory to include path since icu tries to use it
-            ext.include_dirs.append(os.path.dirname(path))
+            ext.include_dirs.insert(0, os.path.dirname(path))
             write("SQLite: Using amalgamation", path)
             load_extension = True
         else:
@@ -638,18 +561,17 @@ class apsw_build_ext(beparent):
             d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sqlite3")
             if os.path.isdir(d):
                 write("SQLite: Using include/libraries in sqlite3 subdirectory")
-                ext.include_dirs.append(d)
+                ext.include_dirs.insert(0, d)
                 ext.library_dirs.append(d)
             else:
                 write("SQLite: Using system sqlite include/libraries")
             ext.libraries.append('sqlite3')
 
-        s3config = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sqlite3", "sqlite3config.h")
+        # sqlite3config.h is generated by running configure (optional)
+        s3config = os.path.join(ext.include_dirs[0] if ext.include_dirs else ".", "sqlite3config.h")
         if os.path.exists(s3config):
-            if sys.platform == "win32":
-                ext.define_macros.append(('APSW_USE_SQLITE_CONFIG', '\\"' + s3config + '\\"'))
-            else:
-                ext.define_macros.append(('APSW_USE_SQLITE_CONFIG', '"' + s3config + '"'))
+            write(f"SQLite: Using configure generated { s3config }")
+            ext.define_macros.append(('APSW_USE_SQLITE_CONFIG', '1'))
 
         # enables
         addicuinclib = False
@@ -662,7 +584,8 @@ class apsw_build_ext(beparent):
                 ext.define_macros.append(("SQLITE_ENABLE_" + e.upper(), 1))
                 if e.upper() == "ICU":
                     addicuinclib = True
-                os.putenv("APSW_TEST_" + e.upper(), "1")
+                else:
+                    os.putenv("APSW_TEST_" + e.upper(), "1")
                 # See issue #55 where I had left off the 3 in fts3.  This code
                 # tries to catch misspelling the name of an extension.
                 # However the SQLITE_ENABLE prefix is also used by other
@@ -701,9 +624,8 @@ class apsw_build_ext(beparent):
             if find_in_path("icu-config"):
                 method = "icu-config"
 
-            if sys.version_info >= (2, 6):
-                # if posix is true then quotes get stripped such as from -Dfoo="bar"
-                kwargs["posix"] = False
+            # if posix is true then quotes get stripped such as from -Dfoo="bar"
+            kwargs["posix"] = False
             for part in shlex.split(os.popen(cmds[method][0], "r").read(), **kwargs):
                 if part.startswith("-I"):
                     ext.include_dirs.append(part[2:])
@@ -727,6 +649,7 @@ class apsw_build_ext(beparent):
 
             if foundicu:
                 write("ICU: Added includes, flags and libraries from " + method)
+                os.putenv("APSW_TEST_ICU", "1")
             else:
                 write("ICU: Unable to determine includes/libraries for ICU using pkg-config or icu-config")
                 write("ICU: You will need to manually edit setup.py or setup.cfg to set them")
@@ -848,11 +771,7 @@ def add_doc(archive, topdir):
 
 def create_c_file(src, dest):
     # Transforms Python src into C dest as a sequence of strings.
-    # Because of the pathetic microsoft compiler we have to break it
-    # up into small chunks
     out = ["/* Automatically generated by setup.py from " + src + " */", ""]
-    percents = 1
-    size = 0
     for line in read_whole_file(src, "rt").split("\n"):
         if "if__name__=='__main__':" in line.replace(" ", ""):
             break
@@ -860,19 +779,9 @@ def create_c_file(src, dest):
             continue
         if line.strip() == "import apsw":
             continue
-        size = size + len(line)
-        comma = size > 32000
-        if comma:
-            size = 0
-            percents += 1
         line=line.replace("\\", "\\\\").\
               replace('"', '\\"')
         out.append('  "' + line.rstrip() + '\\n"')
-        if comma:
-            out[-1] = out[-1] + ","
-    if out[-1].endswith(","):
-        out[-1] = out[-1][:-1]
-    out[1] = '"%s",' % ("%s" * percents, )
     write_whole_file(dest, "wt", "\n".join(out))
 
 
@@ -883,9 +792,6 @@ for f in (findamalgamation(), ):
         depends.append(f)
 # we produce a .c file from this
 depends.append("tools/shell.py")
-
-# work out version number
-version = read_whole_file(os.path.join("src", "apswversion.h"), "rt").split()[2].strip('"')
 
 # msi can't use normal version numbers because distutils is retarded,
 # so mangle ours to suit it
@@ -910,37 +816,39 @@ if "bdist_msi" in sys.argv:
 
     version = ".".join([str(v) for v in version])
 
-setup(name="apsw",
-      version=version,
-      description="Another Python SQLite Wrapper",
-      long_description=\
-"""A Python wrapper for the SQLite embedded relational database engine.
-In contrast to other wrappers such as pysqlite it focuses on being
-a minimal layer over SQLite attempting just to translate the
-complete SQLite API into Python.""",
-      author="Roger Binns",
-      author_email="rogerb@rogerbinns.com",
-      url="https://github.com/rogerbinns/apsw/",
-      classifiers=[
-    "Development Status :: 5 - Production/Stable",
-    "Intended Audience :: Developers",
-    "License :: OSI Approved",
-    "Operating System :: OS Independent",
-    "Programming Language :: C",
-    "Programming Language :: Python :: 2",
-    "Programming Language :: Python :: 3",
-    "Topic :: Database :: Front-Ends",
-    ],
-      keywords=["database", "sqlite"],
-      license="OSI Approved ::",
+if __name__ == '__main__':
+    setup(name="apsw",
+        version=version,
+        description="Another Python SQLite Wrapper",
+        long_description=\
+    """A Python wrapper for the SQLite embedded relational database engine.
+    In contrast to other wrappers such as pysqlite it focuses on being
+    a minimal layer over SQLite attempting just to translate the
+    complete SQLite API into Python.""",
+        author="Roger Binns",
+        author_email="rogerb@rogerbinns.com",
+        url="https://github.com/rogerbinns/apsw/",
+        classifiers=[
+        "Development Status :: 5 - Production/Stable",
+        "Intended Audience :: Developers",
+        "License :: OSI Approved",
+        "Operating System :: OS Independent",
+        "Programming Language :: C",
+        "Programming Language :: Python :: 3",
+        "Topic :: Database :: Front-Ends",
+        ],
+        keywords=["database", "sqlite"],
+        license="OSI Approved ::",
 
-      ext_modules=[Extension("apsw",
-                             ["src/apsw.c"],
-                             include_dirs=include_dirs,
-                             library_dirs=library_dirs,
-                             libraries=libraries,
-                             define_macros=define_macros,
-                             depends=depends)],
+        ext_modules=[Extension("apsw",
+                                ["src/apsw.c"],
+                                include_dirs=include_dirs,
+                                library_dirs=library_dirs,
+                                libraries=libraries,
+                                define_macros=define_macros,
+                                depends=depends)],
+
+        data_files=[("", ["apsw.pyi"])],
 
 
       cmdclass={'test': run_tests,
@@ -949,5 +857,4 @@ complete SQLite API into Python.""",
                 'build_ext': apsw_build_ext,
                 'build': apsw_build,
                 'sdist': apsw_sdist,
-                'win64hackvars': win64hackvars}
-      )
+      })

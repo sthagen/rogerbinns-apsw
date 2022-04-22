@@ -6,6 +6,7 @@ import apsw
 import sys
 import os
 import warnings
+import platform
 
 
 def print_version_info():
@@ -327,8 +328,8 @@ class APSW(unittest.TestCase):
         # read in contents, sort and compare
         lcontents = l.execute("select * from [" + left + "]").fetchall()
         rcontents = r.execute("select * from [" + right + "]").fetchall()
-        lcontents.sort()
-        rcontents.sort()
+        lcontents.sort(key=lambda x: repr(x))
+        rcontents.sort(key=lambda x: repr(x))
         self.assertEqual(lcontents, rcontents)
 
     def assertRaisesUnraisable(self, exc, func, *args, **kwargs):
@@ -2199,22 +2200,35 @@ class APSW(unittest.TestCase):
 
     def testTracebacks(self):
         "Verify augmented tracebacks"
-        return
 
         def badfunc(*args):
+            zebra = 3
             1 / 0
 
         self.db.createscalarfunction("badfunc", badfunc)
         try:
             c = self.db.cursor()
-            c.execute("select badfunc()")
+            c.execute("select badfunc(1,'two',3.14)")
             self.fail("Exception should have occurred")
         except ZeroDivisionError:
             tb = sys.exc_info()[2]
-            traceback.print_tb(tb)
-            del tb
+            frames = []
+            while tb:
+                frames.append(tb.tb_frame)
+                tb=tb.tb_next
         except:
             self.fail("Wrong exception type")
+
+        frames.reverse()
+        frame = frames[1]  # frame[0] is badfunc above
+        self.assertTrue(frame.f_code.co_filename.endswith(".c"))
+        self.assertTrue(frame.f_lineno > 100)
+        self.assertTrue(frame.f_code.co_name.endswith("-badfunc"))
+        # check local variables
+        if platform.python_implementation()!="PyPy":
+            l = frame.f_locals
+            self.assertIn("NumberOfArguments", l)
+            self.assertEqual(l["NumberOfArguments"], 3)
 
     def testLoadExtension(self):
         "Check loading of extensions"
@@ -4432,6 +4446,8 @@ class APSW(unittest.TestCase):
         "Verify VFS functionality"
         global testtimeout
 
+        testdb = vfstestdb
+
         # Check basic functionality and inheritance - make an obfuscated provider
 
         # obfusvfs code
@@ -4750,7 +4766,8 @@ class APSW(unittest.TestCase):
                 assert (type(handle) in (int, ))
                 assert (type(name) == type(u""))
                 res = super(TestVFS, self).xDlSym(handle, name)
-                if not iswindows and _ctypes:
+                # pypy doesn't have dlsym
+                if not iswindows and hasattr(_ctypes, "dlsym"):
                     assert (_ctypes.dlsym(handle, name) == res)
                 # windows has funky issues I don't want to deal with here
                 return res
@@ -8183,11 +8200,11 @@ shell.write(shell.stdout, "hello world\\n")
 
         ## xCheckReservedLockFails
         apsw.faultdict["xCheckReservedLockFails"] = True
-        self.assertRaises(apsw.IOError, self.assertRaisesUnraisable, apsw.IOError, testdb, vfsname="faultvfs")
+        self.assertRaises(apsw.IOError, self.assertRaisesUnraisable, apsw.IOError, vfstestdb, vfsname="faultvfs")
 
         ## xCheckReservedLockIsTrue
         apsw.faultdict["xCheckReservedLockIsTrue"] = True
-        testdb(vfsname="faultvfs")
+        vfstestdb(vfsname="faultvfs")
 
         ## xCloseFails
         t = apsw.VFSFile("", os.path.abspath(TESTFILEPREFIX + "testfile"),
@@ -8438,7 +8455,7 @@ shell.write(shell.stdout, "hello world\\n")
 testtimeout = False  # timeout testing adds several seconds to each run
 
 
-def testdb(filename=TESTFILEPREFIX + "testdb2", vfsname="apswtest", closedb=True, mode=None, attachdb=None):
+def vfstestdb(filename=TESTFILEPREFIX + "testdb2", vfsname="apswtest", closedb=True, mode=None, attachdb=None):
     "This method causes all parts of a vfs to be executed"
     gc.collect()  # free any existing db handles
     for suf in "", "-journal", "x", "x-journal":

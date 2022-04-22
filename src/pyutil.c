@@ -1,8 +1,13 @@
 /*
-  Cross Python version compatibility code
+  Cross Python version compatibility and utility code
 
   See the accompanying LICENSE file.
 */
+
+/* used in calls to AddTraceBackHere where O format takes non-null but
+   we often have null so convert to None */
+#define OBJ(o) ((o)?(o):(Py_None))
+
 
 /* we clear weakref lists when close is called on a blob/cursor as
    well as when it is deallocated */
@@ -54,8 +59,8 @@ Call_PythonMethod(PyObject *obj, const char *methodname, int mandatory, PyObject
     AddTraceBackHere(__FILE__, __LINE__, "Call_PythonMethod", "{s: s, s: i, s: O, s: O}",
                      "methodname", methodname,
                      "mandatory", mandatory,
-                     "args", args,
-                     "method", method);
+                     "args", OBJ(args),
+                     "method", OBJ(method));
 
 finally:
   if (pyerralreadyoccurred)
@@ -102,4 +107,35 @@ convertutf8string(const char *str)
 #define PyType_TRAILER  0
 #else
 #define PyType_TRAILER  0, 0, 0
+#endif
+
+#ifdef PYPY_VERSION
+static Py_hash_t
+_Py_HashBytes(const void *src, Py_ssize_t len)
+{
+  /* this only has to return the same output for the same input and is
+     only used in statementcache, so it doesn't have to be deep and
+     meaningful */
+  return len;
+}
+
+/* For some bizarre reason this stable API is not present in pypy.  We
+   only use it in one place, and the length values passed in are
+   correct hence no further error checking */
+static Py_ssize_t
+PyUnicode_CopyCharacters(PyObject *to, Py_ssize_t to_start, PyObject *from, Py_ssize_t from_start, Py_ssize_t how_many)
+{
+  Py_ssize_t res = 0;
+  Py_UCS4 c;
+  while (how_many > 0)
+  {
+    c = PyUnicode_ReadChar(from, from_start);
+    PyUnicode_WriteChar(to, to_start, c);
+    from_start++;
+    to_start++;
+    how_many--;
+    res++;
+  }
+  return res;
+}
 #endif

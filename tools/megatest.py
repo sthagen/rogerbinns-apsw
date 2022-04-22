@@ -162,6 +162,7 @@ def cmp(a, b):
 
 # Default versions we support
 PYVERS = (
+    '3.11.0a6',
     '3.10.2',
     '3.9.10',
     '3.8.10',
@@ -169,7 +170,7 @@ PYVERS = (
     'system',
 )
 
-SQLITEVERS = ('3.38.0', '3.38.1',)
+SQLITEVERS = ('3.38.0', '3.38.1', '3.38.2')
 
 BITS = (64, 32)
 

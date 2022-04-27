@@ -48,8 +48,7 @@ struct Connection
 
   struct StatementCache *stmtcache; /* prepared statement cache */
 
-  PyObject *dependents;       /* tracking cursors & blobs belonging to this connection */
-  PyObject *dependent_remove; /* dependents.remove for weak ref processing */
+  PyObject *dependents; /* tracking cursors & blobs etc as weakrefs belonging to this connection */
 
   /* registered hooks/handlers (NULL or callable) */
   PyObject *busyhandler;
@@ -142,28 +141,48 @@ Connection_internal_cleanup(Connection *self)
   Py_CLEAR(self->open_vfs);
 }
 
+static void
+Connection_remove_dependent(Connection *self, PyObject *o)
+{
+  /* in addition to removing the dependent, we also remove any dead
+     weakrefs */
+  Py_ssize_t i;
+
+  for (i = 0; i < PyList_GET_SIZE(self->dependents);)
+  {
+    PyObject *wr = PyList_GET_ITEM(self->dependents, i);
+    PyObject *wo = PyWeakref_GetObject(wr);
+    if (wo == o || wo == Py_None)
+    {
+      PyList_SetSlice(self->dependents, i, i + 1, NULL);
+      if (wo == Py_None)
+        continue;
+      else
+        return;
+    }
+    i++;
+  }
+}
+
 static int
 Connection_close_internal(Connection *self, int force)
 {
-  Py_ssize_t i;
   int res;
   PyObject *etype, *eval, *etb;
 
   if (force == 2)
     PyErr_Fetch(&etype, &eval, &etb);
 
-  /* Traverse dependents calling close.  We assume the list may be
-     perturbed by item we just called close on being removed from the
-     list. */
-  for (i = 0; i < PyList_GET_SIZE(self->dependents);)
+  /* close out dependents by repeatedly processing first item until
+     list is empty.  note that closing an item will cause the list to
+     be perturbed as a side effect */
+  while (PyList_GET_SIZE(self->dependents))
   {
-    PyObject *item, *closeres, *orig;
-
-    orig = PyList_GET_ITEM(self->dependents, i);
-    item = PyWeakref_GetObject(orig);
-    if (!item || item == Py_None)
+    PyObject *closeres, *item, *wr = PyList_GET_ITEM(self->dependents, 0);
+    item = PyWeakref_GetObject(wr);
+    if (item == Py_None)
     {
-      i++;
+      Connection_remove_dependent(self, item);
       continue;
     }
 
@@ -176,11 +195,6 @@ Connection_close_internal(Connection *self, int force)
         apsw_write_unraiseable(NULL);
       else
         return 1;
-    }
-    if (i < PyList_GET_SIZE(self->dependents) && orig == PyList_GET_ITEM(self->dependents, i))
-    {
-      /* list was not perturbed */
-      i++;
     }
   }
 
@@ -281,24 +295,8 @@ Connection_dealloc(Connection *self)
      released before this destructor could be called */
   assert(PyList_GET_SIZE(self->dependents) == 0);
   Py_CLEAR(self->dependents);
-  Py_CLEAR(self->dependent_remove);
 
   Py_TYPE(self)->tp_free((PyObject *)self);
-}
-
-static void
-Connection_remove_dependent(Connection *self, PyObject *o)
-{
-  Py_ssize_t i;
-
-  for (i = 0; i < PyList_GET_SIZE(self->dependents); i++)
-  {
-    if (PyWeakref_GetObject(PyList_GET_ITEM(self->dependents, i)) == o)
-    {
-      PyList_SetSlice(self->dependents, i, i + 1, NULL);
-      break;
-    }
-  }
 }
 
 static PyObject *
@@ -312,7 +310,6 @@ Connection_new(PyTypeObject *type, PyObject *Py_UNUSED(args), PyObject *Py_UNUSE
     self->db = 0;
     self->inuse = 0;
     self->dependents = PyList_New(0);
-    self->dependent_remove = PyObject_GetAttrString(self->dependents, "remove");
     self->stmtcache = 0;
     self->busyhandler = 0;
     self->rollbackhook = 0;
@@ -518,7 +515,7 @@ Connection_blobopen(Connection *self, PyObject *args, PyObject *kwds)
   }
 
   APSWBlob_init(apswblob, self, blob);
-  weakref = PyWeakref_NewRef((PyObject *)apswblob, self->dependent_remove);
+  weakref = PyWeakref_NewRef((PyObject *)apswblob, NULL);
   PyList_Append(self->dependents, weakref);
   Py_DECREF(weakref);
   return (PyObject *)apswblob;
@@ -558,6 +555,9 @@ Connection_backup(Connection *self, PyObject *args, PyObject *kwds)
 
   CHECK_USE(NULL);
   CHECK_CLOSED(self, NULL);
+
+  /* gc dependents removing dead items */
+  Connection_remove_dependent(self, NULL);
 
   /* self (destination) can't be used if there are outstanding blobs, cursors or backups */
   if (PyList_GET_SIZE(self->dependents))
@@ -632,14 +632,14 @@ Connection_backup(Connection *self, PyObject *args, PyObject *kwds)
   backup = NULL;
 
   /* add to dependent lists */
-  APSW_FAULT_INJECT(BackupDependent1, weakref = PyWeakref_NewRef((PyObject *)apswbackup, self->dependent_remove), weakref = PyErr_NoMemory());
+  APSW_FAULT_INJECT(BackupDependent1, weakref = PyWeakref_NewRef((PyObject *)apswbackup, NULL), weakref = PyErr_NoMemory());
   if (!weakref)
     goto finally;
   APSW_FAULT_INJECT(BackupDependent2, res = PyList_Append(self->dependents, weakref), (PyErr_NoMemory(), res = -1));
   if (res)
     goto finally;
   Py_DECREF(weakref);
-  APSW_FAULT_INJECT(BackupDependent3, weakref = PyWeakref_NewRef((PyObject *)apswbackup, sourceconnection->dependent_remove), weakref = PyErr_NoMemory());
+  APSW_FAULT_INJECT(BackupDependent3, weakref = PyWeakref_NewRef((PyObject *)apswbackup, NULL), weakref = PyErr_NoMemory());
   if (!weakref)
     goto finally;
   APSW_FAULT_INJECT(BackupDependent4, res = PyList_Append(sourceconnection->dependents, weakref), (PyErr_NoMemory(), res = -1));
@@ -688,7 +688,7 @@ Connection_cursor(Connection *self)
   if (!cursor)
     return NULL;
 
-  weakref = PyWeakref_NewRef((PyObject *)cursor, self->dependent_remove);
+  weakref = PyWeakref_NewRef((PyObject *)cursor, NULL);
   PyList_Append(self->dependents, weakref);
   Py_DECREF(weakref);
 
@@ -3559,6 +3559,7 @@ Connection_tp_traverse(Connection *self, visitproc visit, void *arg)
   Py_VISIT(self->exectrace);
   Py_VISIT(self->rowtrace);
   Py_VISIT(self->vfs);
+  Py_VISIT(self->dependents);
   return 0;
 }
 

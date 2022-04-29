@@ -13,8 +13,16 @@ import tarfile
 import subprocess
 import sysconfig
 
-from distutils.core import setup, Extension, Command
-from distutils.command import build_ext, build, sdist
+using_setuptools = False
+try:
+    from setuptools import setup, Extension, Command
+    from setuptools.command import build_ext, sdist
+    from distutils.command import build
+    using_setuptools = True
+except ImportError:
+    from distutils.core import setup, Extension, Command
+    from distutils.command import build_ext, build, sdist
+
 import distutils.ccompiler
 
 include_dirs = ['src']
@@ -818,7 +826,7 @@ if "bdist_msi" in sys.argv:
 
 if __name__ == '__main__':
     setup(name="apsw",
-        version=version,
+        version=version.replace("-r", ".post") if using_setuptools else version,
         description="Another Python SQLite Wrapper",
         long_description=\
     """A Python wrapper for the SQLite embedded relational database engine.

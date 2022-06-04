@@ -12,6 +12,7 @@ import zipfile
 import tarfile
 import subprocess
 import sysconfig
+import shutil
 
 using_setuptools = False
 try:
@@ -402,14 +403,20 @@ class apsw_build(bparent):
                   [ ("enable=", None, "Enable SQLite options (comma separated list)"),
                     ("omit=", None, "Omit SQLite functionality (comma separated list)"),
                     ("enable-all-extensions", None, "Enable all SQLite extensions"),
+                    ("fetch", None, "Fetches SQLite for pypi based build"),
                     ]
-    boolean_options = bparent.boolean_options + ["enable-all-extensions"]
+    boolean_options = bparent.boolean_options + ["enable-all-extensions", "fetch"]
+
+    def __init__(self, dist):
+        self._saved_dist=dist
+        bparent.__init__(self, dist)
 
     def initialize_options(self):
         v = bparent.initialize_options(self)
         self.enable = None
         self.omit = None
         self.enable_all_extensions = build_enable_all_extensions
+        self.fetch = False
         return v
 
     def finalize_options(self):
@@ -417,6 +424,12 @@ class apsw_build(bparent):
         build_enable = self.enable
         build_omit = self.omit
         build_enable_all_extensions = self.enable_all_extensions
+        if self.fetch:
+            fc = fetch(self._saved_dist)
+            fc.initialize_options()
+            fc.all = True
+            fc.finalize_options()
+            fc.run()
         return bparent.finalize_options(self)
 
 
@@ -625,13 +638,15 @@ class apsw_sdist(sparent):
 
     user_options = sparent.user_options + [
         ("add-doc", None, "Includes built documentation from doc/build/html into source"),
+        ("for-pypi", None, "Configure for pypi distribution"),
     ]
 
-    boolean_options = sparent.boolean_options + ["add-doc"]
+    boolean_options = sparent.boolean_options + ["add-doc", "for-pypi"]
 
     def initialize_options(self):
         sparent.initialize_options(self)
         self.add_doc = False
+        self.for_pypi = False
         # Were we made from a source archive?  If so include the help again
         if os.path.isfile("doc/index.html") and os.path.isfile("doc/_sources/pysqlite.txt"):
             self.add_doc = True
@@ -670,7 +685,13 @@ class apsw_sdist(sparent):
             mout.close()
 
     def run(self):
-        v = sparent.run(self)
+        cfg = "pypi" if self.for_pypi else "default"
+        shutil.copy2(f"tools/setup-{ cfg }.cfg", "setup.cfg")
+        try:
+            v = sparent.run(self)
+        finally:
+            os.remove("setup.cfg")
+
         if self.add_doc:
             if len(list(help_walker(''))) == 0:
                 raise Exception("The help is not built")
@@ -743,28 +764,15 @@ for f in (findamalgamation(), ):
 # we produce a .c file from this
 depends.append("tools/shell.py")
 
-# msi can't use normal version numbers because distutils is retarded,
-# so mangle ours to suit it
+# msi is fussy about version numbers, but StrictVersion in
+# setuptools is even stricter.  msi allows 4 number components
+# while StrictVersion only allows 3 but does allow an additional
+# number preceded by a or b (intended for alpha or beta).  SQLite
+# now only uses 3 numbers (semver) so we map or -r suffix to a 'b'
 if "bdist_msi" in sys.argv:
-    if version.endswith("-r1"):
-        version = version[:-len("-r1")]
-    else:
-        assert False, "MSI version needs help"
     version = [int(v) for v in re.split(r"[^\d]+", version)]
-    # easy pad to 3 items long
-    while len(version) < 3:
-        version.append(0)
-    # 4 is our normal length (eg 3.7.3-r1) but sometimes it is more eg
-    # 3.7.16.1-r1 so combine last elements if longer than 4
-    while len(version) > 4:
-        version[-2] = 10 * version[-2] + version - 1
-        del version[-1]
-    # combine first two elements
-    if len(version) > 3:
-        version[0] = 100 * version[0] + version[1]
-        del version[1]
-
-    version = ".".join([str(v) for v in version])
+    assert len(version) == 4
+    version = ".".join([str(v) for v in version[:3]]) + f"b{ version[-1] }"
 
 if __name__ == '__main__':
     setup(name="apsw",

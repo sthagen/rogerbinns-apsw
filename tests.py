@@ -3350,10 +3350,7 @@ class APSW(unittest.TestCase):
     def testIssue50(self):
         "Issue 50: Check Blob.read return value on eof"
         # first get what the system returns on eof
-        if iswindows:
-            f = open("nul", "rb")
-        else:
-            f = open("/dev/null", "rb")
+        f = open(os.devnull, "rb")
         try:
             # deliberately hit eof
             f.read()
@@ -8652,11 +8649,20 @@ if __name__ == '__main__':
             # execution returns the active mode
             c.cursor().execute("PRAGMA journal_mode=WAL").fetchall()
 
+        def fsync_off(c):
+            try:
+                c.cursor().execute("PRAGMA synchronous=OFF ; PRAGMA fullfsync=OFF; PRAGMA checkpoint_fullfsync=OFF")
+            except apsw.BusyError:
+                pass
+
         b4 = apsw.connection_hooks[:]
         try:
             if "APSW_TEST_WALMODE" in os.environ:
                 apsw.connection_hooks.append(set_wal_mode)
                 print("WAL mode testing")
+
+            if "APSW_TEST_FSYNC_OFF" in os.environ:
+                apsw.connection_hooks.append(fsync_off)
 
             if os.getenv("PYTRACE"):
                 import trace

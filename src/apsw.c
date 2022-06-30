@@ -13,15 +13,24 @@
 /**
 
 .. module:: apsw
-   :synopsis: Python access to SQLite database library
+  :synopsis: Python access to SQLite database library
 
 APSW Module
 ***********
 
 The module is the main interface to SQLite.  Methods and data on the
-module have process wide effects.  You can instantiate the
-:class:`Connection` and :class:`zeroblob` objects using
-:meth:`Connection` and :meth:`zeroblob` respectively.
+module have process wide effects.
+
+Type Annotations
+================
+
+Comprehensive `type annotations
+<https://docs.python.org/3/library/typing.html>`__ are included, and
+your code using apsw can be checked using tools like `mypy
+<http://mypy-lang.org/>`__.  You can refer to the types below for
+your annotations (eg :code:`apsw.SQLiteValue`)
+
+.. literalinclude:: ../src/types.py
 
 API Reference
 =============
@@ -1318,11 +1327,6 @@ static const char *apsw_shell_code =
 #include "shell.c"
     ;
 
-static const char *apsw_types_code =
-#include "types.c"
-    ;
-
-
 static struct PyModuleDef apswmoduledef = {
     PyModuleDef_HEAD_INIT,
     "apsw",
@@ -1958,7 +1962,6 @@ modules etc. For example::
     assert(thedict == NULL);
   }
 
-  add_py_code_string(m, apsw_types_code);
   add_py_code_string(m, apsw_shell_code);
 
   PyModule_AddObject(m, "compile_options", get_compile_options());

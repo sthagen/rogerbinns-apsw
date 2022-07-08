@@ -1,12 +1,12 @@
 
-SQLITEVERSION=3.38.5
-APSWSUFFIX=-r1
+SQLITEVERSION=3.39.0
+APSWSUFFIX=.0
 
 RELEASEDATE="5 June 2022"
 
 VERSION=$(SQLITEVERSION)$(APSWSUFFIX)
 VERDIR=apsw-$(VERSION)
-VERWIN=apsw-$(SQLITEVERSION)
+VERWIN=apsw-$(VERSION)
 
 PYTHON=python3
 
@@ -105,10 +105,9 @@ showsymbols:
 	set +e; nm --extern-only --defined-only apsw`$(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))"` | egrep -v ' (__bss_start|_edata|_end|_fini|_init|initapsw|PyInit_apsw)$$' ; test $$? -eq 1 || false
 
 # Windows compilation
-WINBPREFIX=fetch --version=$(SQLITEVERSION) --all build --enable-all-extensions
+WINBPREFIX=fetch --version=$(SQLITEVERSION) --all build_ext --enable-all-extensions --inplace build
 WINBSUFFIX=build_test_extension test
 WINBINST=bdist_wininst
-WINBMSI=bdist_msi
 WINBWHEEL=bdist_wheel
 
 compile-win:
@@ -120,14 +119,14 @@ compile-win:
 	cmd /c del /s /q dist
 	cmd /c del /s /q build
 	-cmd /c md dist
-	c:/python310-32/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBMSI) $(WINBWHEEL)
-	c:/python310/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBMSI) $(WINBWHEEL)
-	c:/python39-32/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBMSI) $(WINBWHEEL)
-	c:/python39/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBMSI) $(WINBWHEEL)
-	c:/python38/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBMSI) $(WINBWHEEL)
-	c:/python38-64/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBMSI) $(WINBWHEEL)
-	c:/python37/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBMSI) $(WINBWHEEL)
-	c:/python37-64/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBMSI)  $(WINBWHEEL)
+	c:/python310-32/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBWHEEL)
+	c:/python310/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBWHEEL)
+	c:/python39-32/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBWHEEL)
+	c:/python39/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBWHEEL)
+	c:/python38/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBWHEEL)
+	c:/python38-64/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBWHEEL)
+	c:/python37/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBWHEEL)
+	c:/python37-64/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBINST) $(WINBWHEEL)
 	del dist\\*.egg
 
 setup-wheel:
@@ -165,28 +164,6 @@ source: source_nocheck
 
 release:
 	test -f dist/$(VERDIR).zip
-	test -f dist/$(VERWIN).win32-py3.7.exe
-	test -f dist/$(VERWIN).win32-py3.7.msi
-	test -f dist/$(VERWIN)-cp37-cp37m-win32.whl
-	test -f dist/$(VERWIN).win-amd64-py3.7.exe
-	test -f dist/$(VERWIN).win-amd64-py3.7.msi
-	test -f dist/$(VERWIN)-cp37-cp37m-win_amd64.whl
-	test -f dist/$(VERWIN).win32-py3.8.exe
-	test -f dist/$(VERWIN).win32-py3.8.msi
-	test -f dist/$(VERWIN)-cp38-cp38-win32.whl
-	test -f dist/$(VERWIN).win-amd64-py3.8.exe
-	test -f dist/$(VERWIN).win-amd64-py3.8.msi
-	test -f dist/$(VERWIN)-cp38-cp38-win_amd64.whl
-	test -f dist/$(VERWIN).win32-py3.9.exe
-	test -f dist/$(VERWIN).win32-py3.9.msi
-	test -f dist/$(VERWIN)-cp39-cp39-win32.whl
-	test -f dist/$(VERWIN).win-amd64-py3.9.exe
-	test -f dist/$(VERWIN).win-amd64-py3.9.msi
-	test -f dist/$(VERWIN)-cp39-cp39-win_amd64.whl
-	test -f dist/$(VERWIN).win32-py3.10.msi
-	test -f dist/$(VERWIN)-cp310-cp310-win32.whl
-	test -f dist/$(VERWIN).win-amd64-py3.10.msi
-	test -f dist/$(VERWIN)-cp310-cp310-win_amd64.whl
 	-rm -f dist/$(VERDIR)-sigs.zip dist/*.asc
 	for f in dist/* ; do gpg --use-agent --armor --detach-sig "$$f" ; done
 	cd dist ; zip -m $(VERDIR)-sigs.zip *.asc

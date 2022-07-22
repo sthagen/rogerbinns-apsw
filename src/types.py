@@ -1,6 +1,6 @@
 
 from typing import Union, Tuple, List, Optional, Callable, Any, Dict, \
-        Iterator, Sequence, Literal, Set, Protocol
+        Iterator, Sequence, Literal, Set
 from array import array
 from types import TracebackType
 
@@ -15,16 +15,27 @@ Bindings = Union[Sequence[Union[SQLiteValue, zeroblob]], Dict[str, Union[SQLiteV
 """Query bindings are either a sequence of SQLiteValue, or a dict mapping names
 to SQLiteValues"""
 
-class AggregateProtocol(Protocol):
-    "Used to implement aggegrate function callbacks"
-    def step(self, *values: SQLiteValue) -> None:
-        "Called with value(s) from each matched row"
-        ...
-    def finalize(self) -> SQLiteValue:
-        "Called to get a final result value"
-        ...
+# Neither TypeVar nor ParamSpec work, when either should
+AggregateT = Any
+"An object called as first parameter of step and final"
 
-AggregateFactory = Callable[[], AggregateProtocol]
+AggregateStep = Union[
+        Callable[[AggregateT], None],
+        Callable[[AggregateT, SQLiteValue], None],
+        Callable[[AggregateT, SQLiteValue, SQLiteValue], None],
+        Callable[[AggregateT, SQLiteValue, SQLiteValue, SQLiteValue], None],
+        Callable[[AggregateT, SQLiteValue, SQLiteValue, SQLiteValue, SQLiteValue], None],
+        Callable[[AggregateT, SQLiteValue, SQLiteValue, SQLiteValue, SQLiteValue, SQLiteValue], None],
+        Callable[[AggregateT, SQLiteValue, SQLiteValue, SQLiteValue, SQLiteValue, SQLiteValue, SQLiteValue], None],
+]
+"Step is called on each matching row with the function values"
+
+AggregateFinal= Callable[[AggregateT], SQLiteValue]
+"Final is called after all matching rows have been processed by step"
+
+AggregateCallbacks = Tuple[AggregateT, AggregateStep, AggregateFinal]
+
+AggregateFactory = Callable[[], AggregateCallbacks]
 "Called each time for the start of a new calculation using an aggregate function"
 
 ScalarProtocol = Union[

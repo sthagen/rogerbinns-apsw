@@ -1,8 +1,8 @@
 
-SQLITEVERSION=3.39.0
+SQLITEVERSION=3.39.2
 APSWSUFFIX=.0
 
-RELEASEDATE="5 June 2022"
+RELEASEDATE="31 August 2022"
 
 VERSION=$(SQLITEVERSION)$(APSWSUFFIX)
 VERDIR=apsw-$(VERSION)
@@ -30,7 +30,7 @@ GENDOCS = \
 
 .PHONY : all docs doc header linkcheck publish showsymbols compile-win source source_nocheck release tags clean ppa dpkg dpkg-bin coverage valgrind valgrind1 tagpush pydebug test fulltest test_debug
 
-all: header docs
+all: header src/apsw.docstrings apsw/__init__.pyi test docs
 
 tagpush:
 	git tag -af $(SQLITEVERSION)$(APSWSUFFIX)
@@ -42,18 +42,22 @@ clean:
 	mkdir dist
 	for i in 'vgcore.*' '.coverage' '*.pyc' '*.pyo' '*~' '*.o' '*.so' '*.dll' '*.pyd' '*.gcov' '*.gcda' '*.gcno' '*.orig' '*.tmp' 'testdb*' 'testextension.sqlext' ; do \
 		find . -type f -name "$$i" -print0 | xargs -0t --no-run-if-empty rm -f ; done
+	rm -f doc/typing.rstgen doc/example.rst src/shell.c $(GENDOCS)
 
 doc: docs
 
-docs: build_ext $(GENDOCS) doc/example.rst doc/.static
+docs: build_ext $(GENDOCS) doc/example.rst doc/.static doc/typing.rstgen
 	env PYTHONPATH=. $(PYTHON) tools/docmissing.py
 	env PYTHONPATH=. $(PYTHON) tools/docupdate.py $(VERSION)
 	make PYTHONPATH="`pwd`" VERSION=$(VERSION) RELEASEDATE=$(RELEASEDATE) -C doc clean html
-	-tools/spellcheck.sh
+	tools/spellcheck.sh
 
 doc/example.rst: example-code.py tools/example2rst.py src/apswversion.h
 	rm -f dbfile
 	env PYTHONPATH=. $(PYTHON) tools/example2rst.py
+
+doc/typing.rstgen: src/types.py
+	$(PYTHON) tools/types2rst.py
 
 doc/.static:
 	mkdir -p doc/.static
@@ -62,7 +66,7 @@ doc/.static:
 $(GENDOCS): doc/%.rst: src/%.c tools/code2rst.py
 	env PYTHONPATH=. $(PYTHON) tools/code2rst.py $(SQLITEVERSION) $< $@
 
-src/apsw.docstrings: $(GENDOCS) tools/rst2docstring.py src/types.py
+apsw/__init__.pyi src/apsw.docstrings: $(GENDOCS) tools/rst2docstring.py src/types.py
 	env PYTHONPATH=. $(PYTHON) tools/rst2docstring.py src/apsw.docstrings $(GENDOCS)
 
 build_ext:
@@ -190,7 +194,7 @@ tags:
 
 # building a python debug interpreter
 
-PYDEBUG_VER=3.10.2
+PYDEBUG_VER=3.10.5
 PYDEBUG_DIR=/space/pydebug
 PYVALGRIND_VER=$(PYDEBUG_VER)
 PYVALGRIND_DIR=/space/pyvalgrind

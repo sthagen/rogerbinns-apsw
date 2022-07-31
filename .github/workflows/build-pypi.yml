@@ -15,7 +15,7 @@ jobs:
 
       - uses: actions/setup-python@v4
         with:
-          python-version: 3.10
+          python-version: "3.10"
 
       - name: Set up QEMU
         if: runner.os == 'Linux'
@@ -24,7 +24,7 @@ jobs:
           platforms: all
 
       - name: Install cibuildwheel
-        run: python -m pip install cibuildwheel==2.8.0
+        run: python -m pip install cibuildwheel==2.8.1
 
       - name: Build wheels
         run: python -m cibuildwheel --output-dir wheelhouse
@@ -52,7 +52,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: 3.10
+        python-version: "3.10"
 
     - name: Install dependencies
       run: |

@@ -107,9 +107,9 @@ class run_tests(Command):
 
     def run(self):
         import unittest
-        import tests
-        tests.setup()
-        suite = unittest.TestLoader().loadTestsFromModule(tests)
+        import apsw.tests
+        apsw.tests.setup()
+        suite = unittest.TestLoader().loadTestsFromModule(apsw.tests)
         # verbosity of zero doesn't print anything, one prints a dot
         # per test and two prints each test name
         result = unittest.TextTestRunner(verbosity=self.show_tests + 1).run(suite)
@@ -617,7 +617,7 @@ class apsw_build_ext(beparent):
 
         # files included in c
         for src, dest in (
-            ("tools/shell.py", "src/shell.c"),
+            ("tools/shell.py", "src/apswshell.c"),
         ):
             if not os.path.exists(dest) or \
                 os.path.getmtime(dest)<os.path.getmtime(src) or \

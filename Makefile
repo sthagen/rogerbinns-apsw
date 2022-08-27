@@ -42,7 +42,7 @@ clean:
 	mkdir dist
 	for i in 'vgcore.*' '.coverage' '*.pyc' '*.pyo' '*~' '*.o' '*.so' '*.dll' '*.pyd' '*.gcov' '*.gcda' '*.gcno' '*.orig' '*.tmp' 'testdb*' 'testextension.sqlext' ; do \
 		find . -type f -name "$$i" -print0 | xargs -0t --no-run-if-empty rm -f ; done
-	rm -f doc/typing.rstgen doc/example.rst src/apswshell.c $(GENDOCS)
+	rm -f doc/typing.rstgen doc/example.rst $(GENDOCS)
 
 doc: docs
 
@@ -70,7 +70,7 @@ apsw/__init__.pyi src/apsw.docstrings: $(GENDOCS) tools/rst2docstring.py src/typ
 	env PYTHONPATH=. $(PYTHON) tools/rst2docstring.py src/apsw.docstrings $(GENDOCS)
 
 build_ext:
-	env $(PYTHON) setup.py fetch --version=$(SQLITEVERSION) --all build_ext --inplace --force --enable-all-extensions
+	env $(PYTHON) setup.py fetch --version=$(SQLITEVERSION) --all build_ext -DSQLITE_ENABLE_COLUMN_METADATA --inplace --force --enable-all-extensions
 
 build_ext_debug:
 	env $(PYTHON) setup.py fetch --version=$(SQLITEVERSION) --all build_ext --inplace --force --enable-all-extensions --debug
@@ -79,7 +79,7 @@ coverage:
 	env $(PYTHON) setup.py fetch --version=$(SQLITEVERSION) --all && env APSW_PY_COVERAGE=t tools/coverage.sh
 
 test: build_ext
-	env PYTHONHASHSEED=random $(PYTHON) apsw/tests.py
+	env PYTHONHASHSEED=random $(PYTHON) -m apsw.tests
 
 test_debug: $(PYDEBUG_DIR)/bin/python3
 	$(MAKE) build_ext_debug PYTHON=$(PYDEBUG_DIR)/bin/python3

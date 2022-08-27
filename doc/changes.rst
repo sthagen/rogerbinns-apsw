@@ -7,24 +7,27 @@ next
 
 Instead of using scripts, you can now run several tools directly:
 
-* Tests
+* :ref:`tests <testing>`:  python3 **-m apsw.tests** *[options]*
 
-  python3 -m apsw.tests [options]
+* :ref:`tracer <apswtrace>`:  python3 **-m apsw.trace** *[options]*
 
-* :ref:`tracer <apswtrace>`::
+* :ref:`speed tester <speedtest>`:  python3 **-m apsw.speedtest** *[options]*
 
-  python3 -m apsw.trace [options]
+* :ref:`shell <shell>`:  python3 **-m apsw** *[options]*
 
-* :ref:`speed tester <speedtest>`::
-
-  python3 -m apsw.speedtest [options]
-
-* :ref:`shell <shell>`::
-
-  python3 -m apsw [options]
+The shell class has moved from apsw.Shell to
+:class:`apsw.shell.Shell` (:issue:`356`)
 
 :ref:`shell`: On Windows the native console support for colour is now used
 (previously a third party module was supported).
+
+You :ref:`can use --definevalues in setup.py build_ext
+<setup_build_flags>` to provide compiler defines used for configuring
+SQLite. (:issue:`357`)
+
+If SQLITE_ENABLE_COLUMN_METADATA is enabled then
+:attr:`Cursor.description_full` is available providing all the column
+metadata available. (:issue:`354`)
 
 3.39.2.0
 ========

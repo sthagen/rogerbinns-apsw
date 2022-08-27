@@ -3,6 +3,7 @@
 # See the accompanying LICENSE file.
 
 import apsw
+import apsw.shell
 import sys
 import os
 import warnings
@@ -712,11 +713,17 @@ class APSW(unittest.TestCase):
         )
         c.execute("drop table foo; create table foo (%s)" % (", ".join(["[%s] %s" % (n, t) for n, t in cols]), ))
         c.execute("insert into foo([x a space]) values(1)")
+        c.execute("create temp table two(fred banana); insert into two values(7); create temp view three as select fred as [a space] from two")
+        has_full=any(o=="ENABLE_COLUMN_METADATA" or o.startswith("ENABLE_COLUMN_METADATA=") for o in apsw.compile_options)
         for row in c.execute("select * from foo"):
             self.assertEqual(cols, c.getdescription())
+            self.assertEqual(has_full, hasattr(c, "description_full"))
             self.assertEqual(cols, tuple([d[:2] for d in c.description]))
             self.assertEqual((None, None, None, None, None), c.description[0][2:])
             self.assertEqual(list(map(len, c.description)), [7] * len(cols))
+        if has_full:
+            for row in c.execute("select * from foo join three"):
+                self.assertEqual(c.description_full, (('x a space', 'INTEGER', 'main', 'foo', 'x a space'), ('y', 'TEXT', 'main', 'foo', 'y'), ('z', 'foo', 'main', 'foo', 'z'), ('a', 'char', 'main', 'foo', 'a'), ('êã', 'öû', 'main', 'foo', 'êã'), ('a space', 'banana', 'temp', 'two', 'fred')))
         # check description caching isn't broken
         cols2 = cols[1:4]
         for row in c.execute("select y,z,a from foo"):
@@ -727,6 +734,8 @@ class APSW(unittest.TestCase):
         # execution is complete ...
         self.assertRaises(apsw.ExecutionCompleteError, c.getdescription)
         self.assertRaises(apsw.ExecutionCompleteError, lambda: c.description)
+        if has_full:
+            self.assertRaises(apsw.ExecutionCompleteError, lambda: c.description_full)
         self.assertRaises(StopIteration, lambda xx=0: _realnext(c))
         self.assertRaises(StopIteration, lambda xx=0: _realnext(c))
         # fetchone is used throughout, check end behaviour
@@ -3479,7 +3488,7 @@ class APSW(unittest.TestCase):
             rows = (["correct"], ["horse"], ["battery"], ["staple"])
             self.db.cursor().execute("create table foo(x)")
             self.db.cursor().executemany("insert into foo values(?)", rows)
-            shell = apsw.Shell(db=self.db, **kwargs)
+            shell = apsw.shell.Shell(db=self.db, **kwargs)
             shell.command_dump([])
 
             fh[1].seek(0)
@@ -3779,7 +3788,12 @@ class APSW(unittest.TestCase):
            # is already held by enclosing sqlite3_step and the
            # methods will only be called from that same thread so it
            # isn't a problem.
-                        'skipcalls': re.compile("^sqlite3_(blob_bytes|column_count|bind_parameter_count|data_count|vfs_.+|changes64|total_changes64|get_autocommit|last_insert_rowid|complete|interrupt|limit|malloc64|free|threadsafe|value_.+|libversion|enable_shared_cache|initialize|shutdown|config|memory_.+|soft_heap_limit(64)?|randomness|db_readonly|db_filename|release_memory|status64|result_.+|user_data|mprintf|aggregate_context|declare_vtab|backup_remaining|backup_pagecount|mutex_enter|mutex_leave|sourceid|uri_.+)$"),
+                        'skipcalls': re.compile("^sqlite3_(blob_bytes|column_count|bind_parameter_count|data_count|vfs_.+|changes64|total_changes64"
+                                                "|get_autocommit|last_insert_rowid|complete|interrupt|limit|malloc64|free|threadsafe|value_.+"
+                                                "|libversion|enable_shared_cache|initialize|shutdown|config|memory_.+|soft_heap_limit(64)?"
+                                                "|randomness|db_readonly|db_filename|release_memory|status64|result_.+|user_data|mprintf|aggregate_context"
+                                                "|declare_vtab|backup_remaining|backup_pagecount|mutex_enter|mutex_leave|sourceid|uri_.+"
+                                                "|column_name|column_decltype|column_database_name|column_table_name|column_origin_name)$"),
                         # error message
                         'desc': "sqlite3_ calls must wrap with PYSQLITE_CALL",
                         },
@@ -5557,7 +5571,7 @@ class APSW(unittest.TestCase):
             testdb()
         finally:
             apsw.connection_hooks = saved
-            
+
         ## xSectorSize
         self.assertRaises(TypeError, t.xSectorSize, 3)
         TestFile.xSectorSize = TestFile.xSectorSize1
@@ -6033,7 +6047,7 @@ class APSW(unittest.TestCase):
     def testShell(self, shellclass=None):
         "Check Shell functionality"
         if shellclass is None:
-            shellclass = apsw.Shell
+            shellclass = apsw.shell.Shell
 
         fh = [open(TESTFILEPREFIX + "test-shell-" + t, "w+", encoding="utf8") for t in ("in", "out", "err")]
         kwargs = {"stdin": fh[0], "stdout": fh[1], "stderr": fh[2]}
@@ -7597,11 +7611,11 @@ shell.write(shell.stdout, "hello world\\n")
         # I had problems with the compiled bytecode being around
         for suff in "c", "o":
             try:
-                os.remove("tools/shell.py" + suff)
+                os.remove("apsw/shell.py" + suff)
             except:
                 pass
 
-        spec = importlib.util.spec_from_file_location("shell_coverage", "tools/shell.py")
+        spec = importlib.util.spec_from_file_location("shell_coverage", "apsw/shell.py")
         module = importlib.util.module_from_spec(spec)
         sys.modules[module.__name__] = module
         if coverage: coverage.start()
@@ -7612,7 +7626,7 @@ shell.write(shell.stdout, "hello world\\n")
             if coverage:
                 coverage.stop()
                 coverage.annotate(morfs=[module])
-                os.rename("tools/shell.py,cover", "shell.py.gcov")
+                os.rename("apsw/shell.py,cover", "shell.py.gcov")
 
     # Note that faults fire only once, so there is no need to reset
     # them.  The testing for objects bigger than 2GB is done in

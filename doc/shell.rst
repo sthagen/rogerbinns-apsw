@@ -17,6 +17,23 @@ easily include it into your own program to provide SQLite interaction
 and add your own commands.  The autoimport and find commands are also
 useful.
 
+Notes
+=====
+
+To interrupt the shell press Control-C. (On Windows if you press
+Control-Break then the program will be instantly aborted.)
+
+For Windows users you won't have command line editing and completion
+unless you install a `readline module
+<http://docs.python.org/library/readline.html>`__. You can pip install
+`pyreadline3 <https://pypi.org/project/pyreadline3/>`__ to get full
+functionality.
+
+For Windows users, the builtin console support for colour is used.  It
+is enabled by default in current versions of Windows, and a registry
+key enables for older versions `(details)
+<https://github.com/kiedtl/winfetch/wiki/ANSI-Colors>`__.
+
 Commands
 ========
 
@@ -120,23 +137,6 @@ The following command line options are accepted:
 
 .. usage-end:
 
-Notes
-=====
-
-To interrupt the shell press Control-C. (On Windows if you press
-Control-Break then the program will be instantly aborted.)
-
-For Windows users you won't have command line editing and completion
-unless you install a `readline module
-<http://docs.python.org/library/readline.html>`__. You can pip install
-`pyreadline3 <https://pypi.org/project/pyreadline3/>`__ to get full
-functionality.
-
-For Windows users, the builtin console support for colour is used.  It
-is enabled by default in current versions of Windows, and a registry
-key enables for older versions `(details)
-<https://github.com/kiedtl/winfetch/wiki/ANSI-Colors>`__.
-
 Example
 =======
 
@@ -209,6 +209,6 @@ Note that in addition to extending the shell, you can also use the
 can then `monkey patch <http://en.wikipedia.org/wiki/Monkey_patch>`__
 the shell as needed.
 
-.. autoclass:: apsw.Shell
+.. automodule:: apsw.shell
      :members:
      :undoc-members:

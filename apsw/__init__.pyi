@@ -763,6 +763,18 @@ class Connection:
         :rtype: :class:`Cursor`"""
         ...
 
+    cursor_factory: Callable[[Connection], Any]
+    """Defaults to :class:`Cursor`
+
+    Called with a :class:`Connection` as the only parameter when a cursor
+    is needed such as by the :meth:`cursor` method, or
+    :meth:`Connection.execute`.
+
+    Note that whatever is returned doesn't have to be an actual
+    :class:`Cursor` instance, and just needs to have the methods present
+    that are actually called.  These are likely to be `execute`,
+    `executemany`, `close` etc."""
+
     def db_filename(self, name: str) -> str:
         """Returns the full filename of the named (attached) database.  The
         main database is named "main".
@@ -815,19 +827,35 @@ class Connection:
         transaction is rolled back, otherwise it is committed.  For example::
 
           with connection:
-              connection.cursor().execute("....")
+              connection.execute("....")
               with connection:
                   # nested is supported
                   call_function(connection)
-                  connection.cursor().execute("...")
+                  connection.execute("...")
                   with connection as db:
                       # You can also use 'as'
                       call_function2(db)
-                      db.cursor().execute("...")
+                      db.execute("...")
 
         Behind the scenes the `savepoint
         <https://sqlite.org/lang_savepoint.html>`_ functionality introduced in
         SQLite 3.6.8 is used to provide nested transactions."""
+        ...
+
+    def execute(self, statements: str, bindings: Optional[Bindings] = None) -> Cursor:
+        """Executes the statements using the supplied bindings.  Execution
+        returns when the first row is available or all statements have
+        completed.  (A cursor is automatically obtained).
+
+        See :meth:`Cursor.execute` for more details."""
+        ...
+
+    def executemany(self, statements: str, sequenceofbindings:Sequence[Bindings]) -> Cursor:
+        """This method is for when you want to execute the same statements over a
+        sequence of bindings, such as inserting into a database.  (A cursor is
+        automatically obtained).
+
+        See :meth:`Cursor.executemany` for more details."""
         ...
 
     def __exit__(self) -> Literal[False]:
@@ -1670,15 +1698,12 @@ class VFSFile:
 
     def xWrite(self, data: bytes, offset: int) -> None:
         """Write the *data* starting at absolute *offset*. You must write all the data
-          requested, or return an error. If you have the file open for
-          non-blocking I/O or if signals happen then it is possible for the
-          underlying operating system to do a partial write. You will need to
-          write the remaining data.
+        requested, or return an error. If you have the file open for
+        non-blocking I/O or if signals happen then it is possible for the
+        underlying operating system to do a partial write. You will need to
+        write the remaining data.
 
-          :param offset: Where to start writing. This number may be 64 bit once the database is larger than 2GB.
-
-        URIFilename class
-        ================="""
+        :param offset: Where to start writing. This number may be 64 bit once the database is larger than 2GB."""
         ...
 
 
@@ -1858,16 +1883,13 @@ class VFS:
 
     def xSleep(self, microseconds: int) -> int:
         """Pause execution of the thread for at least the specified number of
-            microseconds (millionths of a second).  This routine is typically called from the busy handler.
+        microseconds (millionths of a second).  This routine is typically called from the busy handler.
 
-            :returns: How many microseconds you actually requested the
-              operating system to sleep for. For example if your operating
-              system sleep call only takes seconds then you would have to have
-              rounded the microseconds number up to the nearest second and
-              should return that rounded up value.
-
-        VFSFile class
-        ============="""
+        :returns: How many microseconds you actually requested the
+          operating system to sleep for. For example if your operating
+          system sleep call only takes seconds then you would have to have
+          rounded the microseconds number up to the nearest second and
+          should return that rounded up value."""
         ...
 
 
@@ -1877,7 +1899,7 @@ class zeroblob:
         ...
 
     def length(self) -> int:
-        """Returns size of zero blob in bytes."""
+        """Size of zero blob in bytes."""
         ...
 
 

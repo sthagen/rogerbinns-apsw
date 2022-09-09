@@ -836,6 +836,19 @@
 "\n" \
 ":rtype: :class:`Cursor`\n" 
 
+#define  Connection_cursor_factory_DOC ":type: Callable[[Connection], Any]\n" \
+"\n" \
+"Defaults to :class:`Cursor`\n" \
+"\n" \
+"Called with a :class:`Connection` as the only parameter when a cursor\n" \
+"is needed such as by the :meth:`cursor` method, or\n" \
+":meth:`Connection.execute`.\n" \
+"\n" \
+"Note that whatever is returned doesn't have to be an actual\n" \
+":class:`Cursor` instance, and just needs to have the methods present\n" \
+"that are actually called.  These are likely to be `execute`,\n" \
+"`executemany`, `close` etc.\n" 
+
 #define  Connection_db_filename_DOC "db_filename($self,name)\n--\n\nConnection.db_filename(name: str) -> str\n\n" \
 "Returns the full filename of the named (attached) database.  The\n" \
 "main database is named \"main\".\n" \
@@ -906,19 +919,33 @@
 "transaction is rolled back, otherwise it is committed.  For example::\n" \
 "\n" \
 "  with connection:\n" \
-"      connection.cursor().execute(\"....\")\n" \
+"      connection.execute(\"....\")\n" \
 "      with connection:\n" \
 "          # nested is supported\n" \
 "          call_function(connection)\n" \
-"          connection.cursor().execute(\"...\")\n" \
+"          connection.execute(\"...\")\n" \
 "          with connection as db:\n" \
 "              # You can also use 'as'\n" \
 "              call_function2(db)\n" \
-"              db.cursor().execute(\"...\")\n" \
+"              db.execute(\"...\")\n" \
 "\n" \
 "Behind the scenes the `savepoint\n" \
 "<https://sqlite.org/lang_savepoint.html>`_ functionality introduced in\n" \
 "SQLite 3.6.8 is used to provide nested transactions.\n" 
+
+#define  Connection_execute_DOC "execute($self,statements,bindings=None)\n--\n\nConnection.execute(statements: str, bindings: Optional[Bindings] = None) -> Cursor\n\n" \
+"Executes the statements using the supplied bindings.  Execution\n" \
+"returns when the first row is available or all statements have\n" \
+"completed.  (A cursor is automatically obtained).\n" \
+"\n" \
+"See :meth:`Cursor.execute` for more details.\n" 
+
+#define  Connection_executemany_DOC "executemany($self,statements,sequenceofbindings)\n--\n\nConnection.executemany(statements: str, sequenceofbindings:Sequence[Bindings]) -> Cursor\n\n" \
+"This method is for when you want to execute the same statements over a\n" \
+"sequence of bindings, such as inserting into a database.  (A cursor is\n" \
+"automatically obtained).\n" \
+"\n" \
+"See :meth:`Cursor.executemany` for more details.\n" 
 
 #define  Connection_exit_DOC "__exit__($self)\n--\n\nConnection.__exit__() -> Literal[False]\n\n" \
 "Implements context manager in conjunction with\n" \
@@ -2064,15 +2091,12 @@
 
 #define  VFSFile_xWrite_DOC "xWrite($self,data,offset)\n--\n\nVFSFile.xWrite(data: bytes, offset: int) -> None\n\n" \
 "Write the *data* starting at absolute *offset*. You must write all the data\n" \
-"  requested, or return an error. If you have the file open for\n" \
-"  non-blocking I/O or if signals happen then it is possible for the\n" \
-"  underlying operating system to do a partial write. You will need to\n" \
-"  write the remaining data.\n" \
+"requested, or return an error. If you have the file open for\n" \
+"non-blocking I/O or if signals happen then it is possible for the\n" \
+"underlying operating system to do a partial write. You will need to\n" \
+"write the remaining data.\n" \
 "\n" \
-"  :param offset: Where to start writing. This number may be 64 bit once the database is larger than 2GB.\n" \
-"\n" \
-"URIFilename class\n" \
-"=================\n" 
+":param offset: Where to start writing. This number may be 64 bit once the database is larger than 2GB.\n" 
 
 #define VFSFile_xWrite_USAGE "VFSFile.xWrite(data: bytes, offset: int) -> None"
 
@@ -2365,16 +2389,13 @@
 
 #define  VFS_xSleep_DOC "xSleep($self,microseconds)\n--\n\nVFS.xSleep(microseconds: int) -> int\n\n" \
 "Pause execution of the thread for at least the specified number of\n" \
-"    microseconds (millionths of a second).  This routine is typically called from the busy handler.\n" \
+"microseconds (millionths of a second).  This routine is typically called from the busy handler.\n" \
 "\n" \
-"    :returns: How many microseconds you actually requested the\n" \
-"      operating system to sleep for. For example if your operating\n" \
-"      system sleep call only takes seconds then you would have to have\n" \
-"      rounded the microseconds number up to the nearest second and\n" \
-"      should return that rounded up value.\n" \
-"\n" \
-"VFSFile class\n" \
-"=============\n" 
+":returns: How many microseconds you actually requested the\n" \
+"  operating system to sleep for. For example if your operating\n" \
+"  system sleep call only takes seconds then you would have to have\n" \
+"  rounded the microseconds number up to the nearest second and\n" \
+"  should return that rounded up value.\n" 
 
 #define VFS_xSleep_USAGE "VFS.xSleep(microseconds: int) -> int"
 
@@ -2415,8 +2436,5 @@
 
 
 #define  Zeroblob_length_DOC "length($self)\n--\n\nzeroblob.length() -> int\n\n" \
-"Size of zero blob in bytes.\n" \
-"\n" \
-"Blob class\n" \
-"==========\n" 
+"Size of zero blob in bytes.\n" 
 

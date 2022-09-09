@@ -2,8 +2,21 @@ Change History
 **************
 .. currentmodule:: apsw
 
-next
-====
+3.39.3.0
+========
+
+Test no longer fails if APSW was compiled without
+SQLITE_ENABLE_COLUMN_METADATA but sqlite3 was separately compiled with
+it.  APSW should be compiled with the same flags as sqlite3 to match
+functionality and APIs. (:issue:`363`)
+
+`--use-system-sqlite-config` setup.py `build_ext` option added to
+allow :ref:`matching_sqlite_options`. (:issue:`364`)
+
+3.39.2.1
+========
+
+PyPI now includes Python 3.11 builds.
 
 Instead of using scripts, you can now run several tools directly:
 
@@ -15,8 +28,9 @@ Instead of using scripts, you can now run several tools directly:
 
 * :ref:`shell <shell>`:  python3 **-m apsw** *[options]*
 
-The shell class has moved from apsw.Shell to
-:class:`apsw.shell.Shell` (:issue:`356`)
+The shell class has moved from apsw.Shell to :class:`apsw.shell.Shell`
+(:issue:`356`).  You can still reference it via the old name (ie
+existing code will not break, except on Python 3.6).
 
 :ref:`shell`: On Windows the native console support for colour is now used
 (previously a third party module was supported).
@@ -28,6 +42,15 @@ SQLite. (:issue:`357`)
 If SQLITE_ENABLE_COLUMN_METADATA is enabled then
 :attr:`Cursor.description_full` is available providing all the column
 metadata available. (:issue:`354`)
+
+:attr:`Connection.cursor_factory` attribute is now present and is used
+when :meth:`Connection.cursor` is called.  Added
+:meth:`Connection.execute` and :meth:`Connection.executemany` which
+automatically obtain the underlying cursor.  See :ref:`customizing
+connections and cursors <customizing_connection_cursor>` in the
+:doc:`tips`.  (:issue:`361`)
+
+
 
 3.39.2.0
 ========

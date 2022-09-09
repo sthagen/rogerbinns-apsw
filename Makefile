@@ -1,8 +1,8 @@
 
-SQLITEVERSION=3.39.2
+SQLITEVERSION=3.39.3
 APSWSUFFIX=.0
 
-RELEASEDATE="31 August 2022"
+RELEASEDATE="11 September 2022"
 
 VERSION=$(SQLITEVERSION)$(APSWSUFFIX)
 VERDIR=apsw-$(VERSION)
@@ -124,6 +124,10 @@ compile-win:
 	cmd /c del /s /q dist
 	cmd /c del /s /q build
 	-cmd /c md dist
+	c:/python311-32/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBWHEEL)
+	$(WINCICONFIG) c:/python311-32/python -m apsw.tests
+	c:/python311/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBWHEEL)
+	$(WINCICONFIG) c:/python311/python -m apsw.tests
 	c:/python310-32/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBWHEEL)
 	$(WINCICONFIG) c:/python310-32/python -m apsw.tests
 	c:/python310/python setup.py $(WINBPREFIX) $(WINBSUFFIX) $(WINBWHEEL)
@@ -146,6 +150,10 @@ compile-win:
 	$(WINCICONFIG) c:/python36-64/python -m apsw.tests
 
 setup-wheel:
+	c:/python311/python -m ensurepip
+	c:/python311/python -m pip install --upgrade wheel setuptools
+	c:/python311-32/python -m ensurepip
+	c:/python311-32/python -m pip install --upgrade wheel setuptools
 	c:/python310/python -m ensurepip
 	c:/python310/python -m pip install --upgrade wheel setuptools
 	c:/python310-32/python -m ensurepip
@@ -177,7 +185,7 @@ source: source_nocheck
 	rm -rf work/$(VERDIR)
 	cd work ; unzip -q ../dist/$(VERDIR).zip
 # Make certain various files do/do not exist
-	for f in doc/vfs.html doc/_sources/pysqlite.txt tools/apswtrace.py ; do test -f work/$(VERDIR)/$$f ; done
+	for f in doc/vfs.html doc/_sources/pysqlite.txt apsw/trace.py ; do test -f work/$(VERDIR)/$$f ; done
 	for f in sqlite3.c sqlite3/sqlite3.c debian/control ; do test ! -f work/$(VERDIR)/$$f ; done
 # Test code works
 	cd work/$(VERDIR) ; $(PYTHON) setup.py fetch --version=$(SQLITEVERSION) --all build_ext --inplace --enable-all-extensions build_test_extension test

@@ -6,20 +6,22 @@ from types import TracebackType
 
 SQLiteValue = Union[None, int, float, bytes, str]
 """SQLite supports 5 types - None (NULL), 64 bit signed int, 64 bit
-float, bytes, and unicode text"""
+float, bytes, and str (unicode text)"""
 
 SQLiteValues = Union[Tuple[()], Tuple[SQLiteValue, ...]]
 "A sequence of zero or more SQLiteValue"
 
 Bindings = Union[Sequence[Union[SQLiteValue, zeroblob]], Dict[str, Union[SQLiteValue, zeroblob]]]
 """Query bindings are either a sequence of SQLiteValue, or a dict mapping names
-to SQLiteValues.  You can also provide zeroblob in Bindings."""
+to SQLiteValues.  You can also provide zeroblob in Bindings. You can use
+dict subclasses or any type registered with :class:`collections.abc.Mapping`
+for named bindings"""
 
 # Neither TypeVar nor ParamSpec work, when either should
 AggregateT = Any
 "An object provided as first parameter of step and final aggregate functions"
 
-AggregateStep = Union[
+AggregateStep = Union [
         Callable[[AggregateT], None],
         Callable[[AggregateT, SQLiteValue], None],
         Callable[[AggregateT, SQLiteValue, SQLiteValue], None],
@@ -37,7 +39,7 @@ AggregateFactory = Callable[[], Tuple[AggregateT, AggregateStep, AggregateFinal]
 """Called each time for the start of a new calculation using an aggregate function,
 returning an object, a step function and a final function"""
 
-ScalarProtocol = Union[
+ScalarProtocol = Union [
         Callable[[], SQLiteValue],
         Callable[[SQLiteValue], SQLiteValue],
         Callable[[SQLiteValue, SQLiteValue], SQLiteValue],

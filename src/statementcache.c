@@ -31,7 +31,13 @@
    A copy of the query has to be kept around for doing equality
    comparisons when looking in the cache.  But sqlite also keeps a
    copy of the query, so we try to use that if possible.
-    */
+*/
+
+typedef struct APSWStatementOptions
+{
+  int can_cache;     /* are we allowed to cache this statement */
+  int prepare_flags; /* sqlite3_prepare_v3 flags */
+} APSWStatementOptions;
 
 typedef struct APSWStatement
 {
@@ -40,8 +46,10 @@ typedef struct APSWStatement
   const char *utf8;            /* pointer to the utf8 */
   Py_ssize_t utf8_size;        /* length of the utf8 in bytes */
   Py_ssize_t query_size;       /* how many bytes of utf8 constitute the first query
-                                  (the utf8 could have more than one) */
+                                  (the utf8 could have more than one query) */
   Py_hash_t hash;              /* hash of all of utf8 */
+  APSWStatementOptions options;
+  unsigned uses; /* how many times the prepared statement has been (re)used */
 } APSWStatement;
 
 typedef struct StatementCache
@@ -52,6 +60,13 @@ typedef struct StatementCache
   unsigned highest_used;  /* largest entry we have used - no point scanning beyond */
   unsigned maxentries;    /* maximum number of entries */
   unsigned next_eviction; /* which entry is evicted next */
+  /* stats tracking */
+  unsigned evictions; /* how many there have been */
+  unsigned no_cache;  /* can cache was false */
+  unsigned hits;      /* found in cache */
+  unsigned misses;    /* not found in cache */
+  unsigned no_vdbe;   /* no bytecode emitted */
+  unsigned too_big;   /* query was bigger than SC_MAX_ITEM_SIZE */
 } StatementCache;
 
 /* we don't bother caching larger than this many bytes */
@@ -114,7 +129,10 @@ statementcache_finalize(StatementCache *sc, APSWStatement *statement)
     if (sc->next_eviction == sc->maxentries)
       sc->next_eviction = 0;
     if (evictee)
+    {
       statementcache_free_statement(sc, evictee);
+      sc->evictions++;
+    }
   }
   else
   {
@@ -125,7 +143,7 @@ statementcache_finalize(StatementCache *sc, APSWStatement *statement)
 }
 
 static int
-statementcache_prepare_internal(StatementCache *sc, const char *utf8, Py_ssize_t utf8size, PyObject *query, APSWStatement **statement_out)
+statementcache_prepare_internal(StatementCache *sc, const char *utf8, Py_ssize_t utf8size, PyObject *query, APSWStatement **statement_out, APSWStatementOptions *options)
 {
   Py_hash_t hash = SC_SENTINEL_HASH;
   APSWStatement *statement = NULL;
@@ -134,7 +152,7 @@ statementcache_prepare_internal(StatementCache *sc, const char *utf8, Py_ssize_t
   int res = SQLITE_OK;
 
   *statement_out = NULL;
-  if (sc->maxentries && utf8size < SC_MAX_ITEM_SIZE)
+  if (sc->maxentries && utf8size < SC_MAX_ITEM_SIZE && options->can_cache)
   {
     unsigned i;
 #ifdef PYPY_VERSION
@@ -144,7 +162,7 @@ statementcache_prepare_internal(StatementCache *sc, const char *utf8, Py_ssize_t
 #endif
     for (i = 0; i <= sc->highest_used; i++)
     {
-      if (sc->hashes[i] == hash && sc->caches[i]->utf8_size == utf8size && 0 == memcmp(utf8, sc->caches[i]->utf8, utf8size))
+      if (sc->hashes[i] == hash && sc->caches[i]->utf8_size == utf8size && 0 == memcmp(utf8, sc->caches[i]->utf8, utf8size) && 0 == memcmp(&sc->caches[i]->options, options, sizeof(APSWStatementOptions)))
       {
         /* cache hit */
         sc->hashes[i] = SC_SENTINEL_HASH;
@@ -160,6 +178,8 @@ statementcache_prepare_internal(StatementCache *sc, const char *utf8, Py_ssize_t
           return res;
         }
         *statement_out = statement;
+        statement->uses++;
+        sc->hits++;
         assert(res == SQLITE_OK);
         return res;
       }
@@ -181,7 +201,7 @@ statementcache_prepare_internal(StatementCache *sc, const char *utf8, Py_ssize_t
 
   assert(0 == utf8[utf8size]);
   /* note that prepare can return ok while a python level occurred that couldn't be reported */
-  PYSQLITE_SC_CALL(res = sqlite3_prepare_v2(sc->db, utf8, utf8size + 1, &vdbestatement, &tail));
+  PYSQLITE_SC_CALL(res = sqlite3_prepare_v3(sc->db, utf8, utf8size + 1, options->prepare_flags, &vdbestatement, &tail));
   if (!*tail && tail - utf8 < utf8size)
     PyErr_Format(PyExc_ValueError, "null character in query");
   if (res != SQLITE_OK || PyErr_Occurred())
@@ -212,10 +232,18 @@ statementcache_prepare_internal(StatementCache *sc, const char *utf8, Py_ssize_t
     }
   }
 
+  sc->misses++;
+  if (!options->can_cache)
+    sc->no_cache++;
+  else if (utf8size >= SC_MAX_ITEM_SIZE)
+    sc->too_big++;
+
   statement->hash = hash;
   statement->vdbestatement = vdbestatement;
   statement->query_size = tail - utf8;
   statement->utf8_size = utf8size;
+  statement->uses = 1;
+  memcpy(&statement->options, options, sizeof(APSWStatementOptions));
 
   if (!statementcache_hasmore(statement))
   {
@@ -231,23 +259,26 @@ statementcache_prepare_internal(StatementCache *sc, const char *utf8, Py_ssize_t
     Py_INCREF(query);
   }
   *statement_out = statement;
+  if (!vdbestatement)
+    sc->no_vdbe++;
   return SQLITE_OK;
 }
 
 static APSWStatement *
-statementcache_prepare(StatementCache *sc, PyObject *query)
+statementcache_prepare(StatementCache *sc, PyObject *query, APSWStatementOptions *options)
 {
   const char *utf8 = NULL;
   Py_ssize_t utf8size = 0;
   APSWStatement *statement = NULL;
   int res;
 
+  assert(options->can_cache == 0 || options->can_cache == 1);
   assert(PyUnicode_Check(query));
   utf8 = PyUnicode_AsUTF8AndSize(query, &utf8size);
   if (!utf8)
     return NULL;
 
-  res = statementcache_prepare_internal(sc, utf8, utf8size, query, &statement);
+  res = statementcache_prepare_internal(sc, utf8, utf8size, query, &statement, options);
   assert((res == SQLITE_OK && statement && !PyErr_Occurred()) || (res != SQLITE_OK && !statement));
   if (res)
     SET_EXC(res, sc->db);
@@ -266,7 +297,7 @@ statementcache_next(StatementCache *sc, APSWStatement **statement)
   assert(statementcache_hasmore(old));
 
   /* we have to prepare the new one ... */
-  res = statementcache_prepare_internal(sc, old->utf8 + old->query_size, old->utf8_size - old->query_size, old->query, &new);
+  res = statementcache_prepare_internal(sc, old->utf8 + old->query_size, old->utf8_size - old->query_size, old->query, &new, &old->options);
   assert((res == SQLITE_OK && new) || (res != SQLITE_OK && !new));
 
   /* ... before finalizing the old */
@@ -307,14 +338,12 @@ static StatementCache *
 statementcache_init(sqlite3 *db, unsigned size)
 {
   StatementCache *res;
-  APSW_FAULT_INJECT(StatementCacheAllocFails, res = (StatementCache *)PyMem_Malloc(sizeof(StatementCache)), res = NULL);
+  APSW_FAULT_INJECT(StatementCacheAllocFails, res = (StatementCache *)PyMem_Calloc(1, sizeof(StatementCache)), res = NULL);
   if (res)
   {
     res->hashes = size ? PyMem_Calloc(size, sizeof(Py_hash_t)) : 0;
     res->caches = size ? PyMem_Calloc(size, sizeof(APSWStatement *)) : 0;
-    res->highest_used = 0;
     res->maxentries = size;
-    res->next_eviction = 0;
     res->db = db;
     if (res->hashes)
     {
@@ -330,6 +359,67 @@ statementcache_init(sqlite3 *db, unsigned size)
     PyErr_NoMemory();
   }
   return res;
+}
+
+static PyObject *
+statementcache_stats(StatementCache *sc, int include_entries)
+{
+  /* Update the table of explanations in Connection_cache_stats if you
+     update this */
+  PyObject *res = NULL, *entries = NULL, *entry = NULL;
+
+  APSW_FAULT_INJECT(SCStatsBuildFail,
+                    res = Py_BuildValue("{s: I, s: I, s: I, s: I, s: I, s: I, s: I, s: I, s: I}",
+                                        "size", sc->maxentries,
+                                        "evictions", sc->evictions,
+                                        "no_cache", sc->no_cache,
+                                        "hits", sc->hits,
+                                        "no_vdbe", sc->no_vdbe,
+                                        "misses", sc->misses,
+                                        "too_big", sc->too_big,
+                                        "no_cache", sc->no_cache,
+                                        "max_cacheable_bytes", SC_MAX_ITEM_SIZE),
+                    PyErr_NoMemory());
+  if (res && include_entries)
+  {
+    int pycres;
+    APSW_FAULT_INJECT(SCStatsListFail, entries = PyList_New(0), entries = PyErr_NoMemory());
+    if (!entries)
+      goto fail;
+
+    unsigned i;
+    for (i = 0; sc->hashes && i <= sc->highest_used; i++)
+    {
+      if (sc->hashes[i] != SC_SENTINEL_HASH)
+      {
+        APSWStatement *stmt = sc->caches[i];
+        APSW_FAULT_INJECT(SCStatsEntryBuildFail,
+                          entry = Py_BuildValue("{s: s#, s: O, s: i, s: I}",
+                                                "query", stmt->utf8, stmt->query_size,
+                                                "has_more", (stmt->query_size == stmt->utf8_size) ? Py_False : Py_True,
+                                                "prepare_flags", stmt->options.prepare_flags,
+                                                "uses", stmt->uses),
+                          entry = PyErr_NoMemory());
+        if (!entry)
+          goto fail;
+        APSW_FAULT_INJECT(SCStatsAppendFail, pycres = PyList_Append(entries, entry), (PyErr_NoMemory(), pycres = -1));
+        if (pycres)
+          goto fail;
+        Py_CLEAR(entry);
+      }
+    }
+    APSW_FAULT_INJECT(SCStatsEntriesSetFail, pycres = PyDict_SetItemString(res, "entries", entries), (PyErr_NoMemory(), pycres = -1));
+    if (pycres)
+      goto fail;
+    Py_DECREF(entries);
+  }
+  return res;
+
+fail:
+  Py_XDECREF(entries);
+  Py_XDECREF(res);
+  Py_XDECREF(entry);
+  return NULL;
 }
 
 #ifdef APSW_TESTFIXTURES

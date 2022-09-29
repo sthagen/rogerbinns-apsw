@@ -11,8 +11,12 @@
 Cursors (executing SQL)
 ***********************
 
-A cursor encapsulates a SQL query and returning results.  To make a
-new cursor you should call :meth:`~Connection.cursor` on your
+A cursor encapsulates a SQL query and returning results.  You only need an
+explicit cursor if you want more information or control over execution.  Using
+:meth:`Connection.execute` or :meth:`Connection.executemany` will automatically
+obtain a cursor behind the scenes.
+
+If you need a cursor you should call :meth:`~Connection.cursor` on your
 database::
 
   db=apsw.Connection("databasefilename")
@@ -142,9 +146,10 @@ struct APSWCursor
   PyObject *bindings;        /* dict or sequence */
   Py_ssize_t bindingsoffset; /* for sequence tracks how far along we are when dealing with multiple statements */
 
-  /* iterator for executemany, original query string */
+  /* iterator for executemany, original query string, prepare options */
   PyObject *emiter;
   PyObject *emoriginalquery;
+  APSWStatementOptions emoptions;
 
   /* tracing functions */
   PyObject *exectrace;
@@ -158,6 +163,8 @@ struct APSWCursor
 
 typedef struct APSWCursor APSWCursor;
 static PyTypeObject APSWCursorType;
+
+static PyObject *collections_abc_Mapping;
 
 /* CURSOR CODE */
 
@@ -521,6 +528,31 @@ static PyObject *APSWCursor_getdescription_full(APSWCursor *self)
 }
 #endif
 
+static int
+APSWCursor_is_dict_binding(PyObject *obj)
+{
+  /* See https://github.com/rogerbinns/apsw/issues/373 for why this function exists */
+  assert(obj);
+
+  /* check the most common cases first */
+  if (PyDict_CheckExact(obj))
+    return 1;
+  if (PyList_CheckExact(obj) || PyTuple_CheckExact(obj))
+    return 0;
+
+  /* possible but less likely */
+  if (PyDict_Check(obj))
+    return 1;
+  if (PyList_Check(obj) || PyTuple_Check(obj))
+    return 0;
+
+  /* abstract base classes final answer */
+  if (PyObject_IsInstance(obj, collections_abc_Mapping) == 1)
+    return 1;
+
+  return 0;
+}
+
 /* internal function - returns SQLite error code (ie SQLITE_OK if all is well) */
 static int
 APSWCursor_dobinding(APSWCursor *self, int arg, PyObject *obj)
@@ -625,11 +657,10 @@ APSWCursor_dobindings(APSWCursor *self)
   }
 
   /* a dictionary? */
-  if (self->bindings && PyDict_Check(self->bindings))
+  if (self->bindings && APSWCursor_is_dict_binding(self->bindings))
   {
     for (arg = 1; arg <= nargs; arg++)
     {
-      PyObject *keyo = NULL;
       const char *key;
 
       PYSQLITE_CUR_CALL(key = sqlite3_bind_parameter_name(self->statement->vdbestatement, arg));
@@ -643,13 +674,18 @@ APSWCursor_dobindings(APSWCursor *self)
       assert(*key == ':' || *key == '$');
       key++; /* first char is a colon or dollar which we skip */
 
-      keyo = PyUnicode_DecodeUTF8(key, strlen(key), NULL);
-      if (!keyo)
+      /*
+      Here be dragons: PyDict_GetItemString swallows exceptions if
+      the item doesn't exist (or any other reason) and apsw has therefore
+      always had the behaviour that missing dict keys get bound as
+      None/null.  PyMapping_GetItemString does throw exceptions.  So to
+      preserve existing behaviour, missing keys from dict are treated as
+      None, while missing keys from other types will throw an exception.
+      */
+
+      obj = PyDict_Check(self->bindings) ? PyDict_GetItemString(self->bindings, key) : PyMapping_GetItemString(self->bindings, key);
+      if (PyErr_Occurred())
         return -1;
-
-      obj = PyDict_GetItem(self->bindings, keyo);
-      Py_DECREF(keyo);
-
       if (!obj)
         /* this is where we could error on missing keys */
         continue;
@@ -722,7 +758,7 @@ APSWCursor_doexectrace(APSWCursor *self, Py_ssize_t savedbindingsoffset)
   /* now deal with the bindings */
   if (self->bindings)
   {
-    if (PyDict_Check(self->bindings))
+    if (APSWCursor_is_dict_binding(self->bindings))
     {
       bindings = self->bindings;
       Py_INCREF(self->bindings);
@@ -859,7 +895,7 @@ APSWCursor_step(APSWCursor *self)
       Py_CLEAR(self->bindings);
       self->bindingsoffset = 0;
       /* verify type of next before putting in bindings */
-      if (PyDict_Check(next))
+      if (APSWCursor_is_dict_binding(next))
         self->bindings = next;
       else
       {
@@ -877,7 +913,7 @@ APSWCursor_step(APSWCursor *self)
     {
       /* we are going again in executemany mode */
       assert(self->emiter);
-      INUSE_CALL(self->statement = statementcache_prepare(self->connection->stmtcache, self->emoriginalquery));
+      INUSE_CALL(self->statement = statementcache_prepare(self->connection->stmtcache, self->emoriginalquery, &self->emoptions));
       res = (self->statement) ? SQLITE_OK : SQLITE_ERROR;
     }
     else
@@ -927,7 +963,7 @@ APSWCursor_step(APSWCursor *self)
   return NULL;
 }
 
-/** .. method:: execute(statements: str, bindings: Optional[Bindings] = None) -> Cursor
+/** .. method:: execute(statements: str, bindings: Optional[Bindings] = None, *, can_cache: bool = True, prepare_flags: int = 0) -> Cursor
 
     Executes the statements using the supplied bindings.  Execution
     returns when the first row is available or all statements have
@@ -937,6 +973,10 @@ APSWCursor_step(APSWCursor *self)
       from books`` or ``begin; insert into books ...; select
       last_insert_rowid(); end``.
     :param bindings: If supplied should either be a sequence or a dictionary.  Each item must be one of the :ref:`supported types <types>`
+    :param can_cache: If False then the statement cache will not be used to find an already prepared query, nor will it be
+      placed in the cache after execution
+    :param prepare_flags: `flags <https://sqlite.org/c3ref/c_prepare_normalize.htm>`__ passed to
+      `sqlite_prepare_v3 <https://sqlite.org/c3ref/prepare.html>`__
 
     If you use numbered bindings in the query then supply a sequence.
     Any sequence will work including lists and iterators.  For
@@ -973,7 +1013,7 @@ APSWCursor_step(APSWCursor *self)
     :raises BindingsError: You supplied too many or too few bindings for the statements
     :raises IncompleteExecutionError: There are remaining unexecuted queries from your last execute
 
-    -* sqlite3_prepare_v2 sqlite3_step sqlite3_bind_int64 sqlite3_bind_null sqlite3_bind_text sqlite3_bind_double sqlite3_bind_blob sqlite3_bind_zeroblob
+    -* sqlite3_prepare_v3 sqlite3_step sqlite3_bind_int64 sqlite3_bind_null sqlite3_bind_text sqlite3_bind_double sqlite3_bind_blob sqlite3_bind_zeroblob
 
     .. seealso::
 
@@ -986,8 +1026,11 @@ APSWCursor_execute(APSWCursor *self, PyObject *args, PyObject *kwds)
 {
   int res;
   int savedbindingsoffset = -1;
+  int prepare_flags = 0;
+  int can_cache = 1;
   PyObject *retval = NULL;
   PyObject *statements, *bindings = NULL;
+  APSWStatementOptions options;
 
   CHECK_USE(NULL);
   CHECK_CURSOR_CLOSED(NULL);
@@ -1001,16 +1044,19 @@ APSWCursor_execute(APSWCursor *self, PyObject *args, PyObject *kwds)
 
   assert(!self->bindings);
   {
-    static char *kwlist[] = {"statements", "bindings", NULL};
+    static char *kwlist[] = {"statements", "bindings", "can_cache", "prepare_flags", NULL};
     Cursor_execute_CHECK;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!|O&:" Cursor_execute_USAGE, kwlist, &PyUnicode_Type, &statements, argcheck_Optional_Bindings, &bindings))
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!|O&$O&i:" Cursor_execute_USAGE, kwlist, &PyUnicode_Type, &statements, argcheck_Optional_Bindings, &bindings, argcheck_bool, &can_cache, &prepare_flags))
       return NULL;
   }
   self->bindings = bindings;
 
+  options.can_cache = can_cache;
+  options.prepare_flags = prepare_flags;
+
   if (self->bindings)
   {
-    if (PyDict_Check(self->bindings))
+    if (APSWCursor_is_dict_binding(self->bindings))
       Py_INCREF(self->bindings);
     else
     {
@@ -1022,7 +1068,7 @@ APSWCursor_execute(APSWCursor *self, PyObject *args, PyObject *kwds)
 
   assert(!self->statement);
   assert(!PyErr_Occurred());
-  INUSE_CALL(self->statement = statementcache_prepare(self->connection->stmtcache, statements));
+  INUSE_CALL(self->statement = statementcache_prepare(self->connection->stmtcache, statements, &options));
   if (!self->statement)
   {
     AddTraceBackHere(__FILE__, __LINE__, "APSWCursor_execute.sqlite3_prepare", "{s: O, s: O}",
@@ -1062,7 +1108,7 @@ APSWCursor_execute(APSWCursor *self, PyObject *args, PyObject *kwds)
   return retval;
 }
 
-/** .. method:: executemany(statements: str, sequenceofbindings: Sequence[Bindings]) -> Cursor
+/** .. method:: executemany(statements: str, sequenceofbindings: Sequence[Bindings], *, can_cache: bool = True, prepare_flags: int = 0) -> Cursor
 
   This method is for when you want to execute the same statements over
   a sequence of bindings.  Conceptually it does this::
@@ -1093,6 +1139,8 @@ APSWCursor_executemany(APSWCursor *self, PyObject *args, PyObject *kwds)
   PyObject *next = NULL;
   PyObject *statements = NULL;
   int savedbindingsoffset = -1;
+  int can_cache = 1;
+  int prepare_flags = 0;
 
   CHECK_USE(NULL);
   CHECK_CURSOR_CLOSED(NULL);
@@ -1109,9 +1157,9 @@ APSWCursor_executemany(APSWCursor *self, PyObject *args, PyObject *kwds)
   assert(!self->emoriginalquery);
   assert(self->status == C_DONE);
   {
-    static char *kwlist[] = {"statements", "sequenceofbindings", NULL};
+    static char *kwlist[] = {"statements", "sequenceofbindings", "can_cache", "prepare_flags", NULL};
     Cursor_executemany_CHECK;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O:" Cursor_executemany_USAGE, kwlist, &PyUnicode_Type, &statements, &sequenceofbindings))
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O|$|O&i:" Cursor_executemany_USAGE, kwlist, &PyUnicode_Type, &statements, &sequenceofbindings, argcheck_bool, &can_cache, &prepare_flags))
       return NULL;
   }
   self->emiter = PyObject_GetIter(sequenceofbindings);
@@ -1128,7 +1176,7 @@ APSWCursor_executemany(APSWCursor *self, PyObject *args, PyObject *kwds)
     return (PyObject *)self;
   }
 
-  if (PyDict_Check(next))
+  if (APSWCursor_is_dict_binding(next))
     self->bindings = next;
   else
   {
@@ -1138,10 +1186,13 @@ APSWCursor_executemany(APSWCursor *self, PyObject *args, PyObject *kwds)
       return NULL;
   }
 
+  self->emoptions.can_cache = can_cache;
+  self->emoptions.prepare_flags = prepare_flags;
+
   assert(!self->statement);
   assert(!PyErr_Occurred());
   assert(!self->statement);
-  INUSE_CALL(self->statement = statementcache_prepare(self->connection->stmtcache, statements));
+  INUSE_CALL(self->statement = statementcache_prepare(self->connection->stmtcache, statements, &self->emoptions));
   if (!self->statement)
   {
     AddTraceBackHere(__FILE__, __LINE__, "APSWCursor_executemany.sqlite3_prepare", "{s: O, s: O}",
@@ -1477,6 +1528,74 @@ APSWCursor_fetchone(APSWCursor *self)
   return res;
 }
 
+/** .. attribute:: is_explain
+    :type: int
+
+  Returns 0 if executing a normal query, 1 if it is an EXPLAIN query,
+  and 2 if an EXPLAIN QUERY PLAN query.
+
+  -* sqlite3_stmt_isexplain
+*/
+static PyObject *
+APSWCursor_is_explain(APSWCursor *self)
+{
+  CHECK_USE(NULL);
+  CHECK_CURSOR_CLOSED(NULL);
+
+  return PyLong_FromLong(sqlite3_stmt_isexplain(self->statement->vdbestatement));
+}
+
+/** .. attribute:: is_readonly
+    :type: bool
+
+  Returns True if the current query does not change the database.
+
+  Note that called functions, virtual tables etc could make changes though.
+
+  -* sqlite3_stmt_readonly
+*/
+static PyObject *
+APSWCursor_is_readonly(APSWCursor *self)
+{
+  CHECK_USE(NULL);
+  CHECK_CURSOR_CLOSED(NULL);
+
+  if (sqlite3_stmt_readonly(self->statement->vdbestatement))
+    Py_RETURN_TRUE;
+  Py_RETURN_FALSE;
+}
+
+/** .. attribute:: expanded_sql
+    :type: str
+
+  The SQL text with bound parameters expanded.  For example::
+
+     execute("select ?, ?", (3, "three"))
+
+  would return::
+
+     select 3, 'three'
+
+  Note that while SQLite supports nulls in strings, their implementation
+  of sqlite3_expanded_sql stops at the first null.
+
+  -* sqlite3_expanded_sql
+*/
+static PyObject *
+APSWCursor_expanded_sql(APSWCursor *self)
+{
+  PyObject *res;
+  const char *es;
+  CHECK_USE(NULL);
+  CHECK_CURSOR_CLOSED(NULL);
+
+  PYSQLITE_VOID_CALL(es = sqlite3_expanded_sql(self->statement->vdbestatement));
+
+  res = convertutf8string(es);
+  sqlite3_free((void *)es);
+  return res;
+}
+
 static PyMethodDef APSWCursor_methods[] = {
     {"execute", (PyCFunction)APSWCursor_execute, METH_VARARGS | METH_KEYWORDS,
      Cursor_execute_DOC},
@@ -1508,6 +1627,9 @@ static PyGetSetDef APSWCursor_getset[] = {
 #ifdef SQLITE_ENABLE_COLUMN_METADATA
     {"description_full", (getter)APSWCursor_getdescription_full, NULL, Cursor_description_full_DOC, NULL},
 #endif
+    {"is_explain", (getter)APSWCursor_is_explain, NULL, Cursor_is_explain_DOC, NULL},
+    {"is_readonly", (getter)APSWCursor_is_readonly, NULL, Cursor_is_readonly_DOC, NULL},
+    {"expanded_sql", (getter)APSWCursor_expanded_sql, NULL, Cursor_expanded_sql_DOC, NULL},
     {NULL, NULL, NULL, NULL, NULL}};
 
 static PyTypeObject APSWCursorType = {

@@ -28,7 +28,7 @@ Comprehensive `type annotations
 <https://docs.python.org/3/library/typing.html>`__ are included, and
 your code using apsw can be checked using tools like `mypy
 <http://mypy-lang.org/>`__.  You can refer to the types below for
-your annotations (eg as :code:`apsw.SQLiteValue`)
+your annotations (eg as :class:`apsw.SQLiteValue`)
 
 .. include:: ../doc/typing.rstgen
 
@@ -1925,7 +1925,15 @@ modules etc. For example::
         ADDINT(SQLITE_TXN_NONE),
         ADDINT(SQLITE_TXN_READ),
         ADDINT(SQLITE_TXN_WRITE),
-        END};
+        END,
+
+        DICT("mapping_prepare_flags"),
+        ADDINT(SQLITE_PREPARE_PERSISTENT),
+        ADDINT(SQLITE_PREPARE_NORMALIZE),
+        ADDINT(SQLITE_PREPARE_NO_VTAB),
+        END
+
+        };
 
     for (i = 0; i < sizeof(integers) / sizeof(integers[0]); i++)
     {
@@ -1969,6 +1977,16 @@ modules etc. For example::
 
   PyModule_AddObject(m, "compile_options", get_compile_options());
   PyModule_AddObject(m, "keywords", get_keywords());
+
+  {
+    PyObject *mod = PyImport_ImportModule("collections.abc");
+    if(mod)
+    {
+      collections_abc_Mapping = PyObject_GetAttrString(mod, "Mapping");
+      Py_DECREF(mod);
+    }
+    assert(collections_abc_Mapping);
+  }
 
   if (!PyErr_Occurred())
   {

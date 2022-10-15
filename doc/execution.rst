@@ -87,7 +87,7 @@ Unfortunately SQLite is limited to 32 bit quantities for strings,
 blobs, number of columns etc even when compiled for 64 bit.
 Consequently you will get a TooBig exception from APSW which checks if
 strings/buffers longer than 1GB or 2GB (depends on internal storage)
-are used. See :cvstrac:`2125` and :cvstrac:`3246` for more details.
+are used. cvstrac 2125 and 3246 had more details.
 
 .. _statementcache:
 
@@ -236,8 +236,8 @@ All output is UTF-8 encoded.  The following options are available:
     --reports=REPORTS     Which reports to show
                           [summary,popular,aggregate,individual]
 
-This is sample output with the following options: :option:`--sql`,
-:option:`--rows`, :option:`--timestamps`, :option:`--thread`
+This is sample output with the following options: **--sql**,
+**--rows**, **--timestamps**, **--thread**
 
 .. code-block:: text
 

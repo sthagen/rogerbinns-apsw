@@ -1977,6 +1977,7 @@ Connection_deserialize(Connection *self, PyObject *args, PyObject *kwds)
 }
 #endif /* SQLITE_OMIT_DESERIALZE */
 
+#ifndef SQLITE_OMIT_LOAD_EXTENSION
 /** .. method:: enableloadextension(enable: bool) -> None
 
   Enables/disables `extension loading
@@ -2064,6 +2065,7 @@ Connection_loadextension(Connection *self, PyObject *args, PyObject *kwds)
   }
   Py_RETURN_NONE;
 }
+#endif
 
 /* USER DEFINED FUNCTION CODE.*/
 static PyTypeObject FunctionCBInfoType =
@@ -3051,7 +3053,7 @@ Connection_createmodule(Connection *self, PyObject *args, PyObject *kwds)
   :param name: Function name
   :param nargs: How many arguments the function takes
 
-  Due to :cvstrac:`3507` underlying errors will not be returned.
+  Due to cvstrac 3507 underlying errors will not be returned.
 
   -* sqlite3_overload_function
 */
@@ -3659,6 +3661,7 @@ The returned dictionary has the following information.
 
 .. list-table::
   :header-rows: 1
+  :widths: auto
 
   * - Key
     - Explanation
@@ -3689,6 +3692,7 @@ If `entries` is present, then each list entry is a dict with the following infor
 
 .. list-table::
   :header-rows: 1
+  :widths: auto
 
   * - Key
     - Explanation
@@ -3777,6 +3781,23 @@ Connection_set_cursor_factory(Connection *self, PyObject *value)
   return 0;
 }
 
+/** .. attribute:: in_transaction
+  :type: bool
+
+  True if currently in a transaction, else False
+
+  -* sqlite3_get_autocommit
+*/
+static PyObject *
+Connection_get_in_transaction(Connection *self)
+{
+  CHECK_USE(NULL);
+  CHECK_CLOSED(self, NULL);
+  if(!sqlite3_get_autocommit(self->db))
+    Py_RETURN_TRUE;
+  Py_RETURN_FALSE;
+}
+
 static PyGetSetDef Connection_getseters[] = {
     /* name getter setter doc closure */
     {"filename",
@@ -3784,6 +3805,8 @@ static PyGetSetDef Connection_getseters[] = {
      Connection_filename_DOC, NULL},
     {"cursor_factory", (getter)Connection_get_cursor_factory,
      (setter)Connection_set_cursor_factory, Connection_cursor_factory_DOC, NULL},
+    {"in_transaction", (getter)Connection_get_in_transaction,
+     NULL, Connection_in_transaction_DOC},
     /* Sentinel */
     {
         NULL, NULL, NULL, NULL, NULL}};
@@ -3873,7 +3896,7 @@ static PyMethodDef Connection_methods[] = {
      Connection_limit_DOC},
     {"setprofile", (PyCFunction)Connection_setprofile, METH_VARARGS | METH_KEYWORDS,
      Connection_setprofile_DOC},
-#if !defined(SQLITE_OMIT_LOAD_EXTENSION)
+#ifndef SQLITE_OMIT_LOAD_EXTENSION
     {"enableloadextension", (PyCFunction)Connection_enableloadextension, METH_VARARGS | METH_KEYWORDS,
      Connection_enableloadextension_DOC},
     {"loadextension", (PyCFunction)Connection_loadextension, METH_VARARGS | METH_KEYWORDS,

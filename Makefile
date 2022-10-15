@@ -38,7 +38,7 @@ tagpush:
 
 clean:
 	make PYTHONPATH="`pwd`" VERSION=$(VERSION) -C doc clean
-	rm -rf dist build work/* megatestresults apsw.egg-info __pycache__ :memory: .mypy_cache .ropeproject
+	rm -rf dist build work/* megatestresults apsw.egg-info __pycache__ :memory: .mypy_cache .ropeproject htmlcov
 	mkdir dist
 	for i in 'vgcore.*' '.coverage' '*.pyc' '*.pyo' '*~' '*.o' '*.so' '*.dll' '*.pyd' '*.gcov' '*.gcda' '*.gcno' '*.orig' '*.tmp' 'testdb*' 'testextension.sqlext' ; do \
 		find . -type f -name "$$i" -print0 | xargs -0t --no-run-if-empty rm -f ; done
@@ -77,6 +77,18 @@ build_ext_debug:
 
 coverage:
 	env $(PYTHON) setup.py fetch --version=$(SQLITEVERSION) --all && env APSW_PY_COVERAGE=t tools/coverage.sh
+
+PYCOVERAGEOPTS=--source apsw --append
+
+pycoverage:
+	-rm -rf .coverage htmlcov
+	$(PYTHON) -m coverage run $(PYCOVERAGEOPTS) -m apsw.tests
+	$(PYTHON) -m coverage run $(PYCOVERAGEOPTS) -m apsw ":memory:" .quit
+	$(PYTHON) -m coverage run $(PYCOVERAGEOPTS) -m apsw.speedtest --apsw --sqlite3
+	$(PYTHON) -m coverage run $(PYCOVERAGEOPTS) -m apsw.trace -o /dev/null --sql --rows --timestamps --thread example-code.py >/dev/null
+	$(PYTHON) -m coverage report -m
+	$(PYTHON) -m coverage html --title "APSW python coverage"
+	$(PYTHON) -m webbrowser -t htmlcov/index.html
 
 test: build_ext
 	env PYTHONHASHSEED=random $(PYTHON) -m apsw.tests
@@ -202,7 +214,7 @@ tags:
 
 # building a python debug interpreter
 
-PYDEBUG_VER=3.10.5
+PYDEBUG_VER=3.10.7
 PYDEBUG_DIR=/space/pydebug
 PYVALGRIND_VER=$(PYDEBUG_VER)
 PYVALGRIND_DIR=/space/pyvalgrind

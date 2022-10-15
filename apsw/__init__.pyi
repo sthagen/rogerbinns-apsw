@@ -5,6 +5,10 @@ from typing import Union, Tuple, List, Optional, Callable, Any, Dict, \
 from collections.abc import Mapping
 from array import array
 from types import TracebackType
+try:
+        from types import NoneType
+except ImportError:
+        NoneType = type(None)
 
 SQLiteValue = Union[NoneType, int, float, bytes, str]
 """SQLite supports 5 types - None (NULL), 64 bit signed int, 64 bit
@@ -950,6 +954,11 @@ class Connection:
           * :ref:`tracing`"""
         ...
 
+    in_transaction: bool
+    """True if currently in a transaction, else False
+
+    Calls: `sqlite3_get_autocommit <https://sqlite.org/c3ref/get_autocommit.html>`__"""
+
     def interrupt(self) -> None:
         """Causes any pending operations on the database to abort at the
         earliest opportunity. You can call this from any thread.  For
@@ -1014,7 +1023,7 @@ class Connection:
         :param name: Function name
         :param nargs: How many arguments the function takes
 
-        Due to :cvstrac:`3507` underlying errors will not be returned.
+        Due to cvstrac 3507 underlying errors will not be returned.
 
         Calls: `sqlite3_overload_function <https://sqlite.org/c3ref/overload_function.html>`__"""
         ...

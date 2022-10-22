@@ -5,10 +5,16 @@ Change History
 next
 ====
 
+Fixed regression in statement cache update (version 3.38.1-r1) where
+trailing whitespace in queries would be incorrectly treated as
+incomplete execution (:issue:`376`)
+
 Added :doc:`ext` (:issue:`369`)
 
 Added more Pythonic attributes as an alternative to getters and
-setters, including :attr:`Connection.in_transaction` (:issue:`371`)
+setters, including :attr:`Connection.in_transaction`,
+:attr:`Connection.exectrace`, :attr:`Connection.rowtrace`,
+:attr:`Cursor.exectrace`, :attr:`Cursor.rowtrace` (:issue:`371`)
 
 3.39.4.0
 ========

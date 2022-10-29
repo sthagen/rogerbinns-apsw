@@ -98,7 +98,7 @@ Each :class:`Connection` maintains a cache mapping SQL queries to a
 `prepared statement <https://sqlite.org/c3ref/stmt.html>`_ to avoid
 the overhead of `repreparing
 <https://sqlite.org/c3ref/prepare.html>`_ queries that are executed
-multiple times.  This is a classic tradeoff using more memory to
+multiple times.  This is a classic trade off using more memory to
 reduce CPU consumption.
 
 By default there are up to 100 entries in the cache.  Once the cache
@@ -109,14 +109,12 @@ You should pick a larger cache size if you have more than 100 unique
 queries that you run.  For example if you have 101 different queries
 you run in order then the cache will not help.
 
-You can also :class:`specify zero <Connection>` which will disable the
-statement cache.
 
-If you are using :meth:`authorizers <Connection.setauthorizer>` then
-you should disable the statement cache.  This is because the
-authorizer callback is only called while statements are being
-prepared.
-
+If you are using :attr:`authorizers <Connection.authorizer>` then be
+aware authorizer callback is only called while statements are being
+prepared.  You can :class:`specify zero <Connection>` which will
+disable the statement cache completely, use use `can_cache = False`
+flag to `execute`/`executemany`.
 
 .. _tracing:
 
@@ -137,7 +135,7 @@ code.
   in the tracer then do them from a new cursor object.  For example::
 
     def exectracer(cursor, sql, bindings):
-      cursor.getconnection().cursor().execute("insert into log values(?,?)", (sql,str(bindings)))
+      cursor.connection.cursor().execute("insert into log values(?,?)", (sql,str(bindings)))
       return True
 
 .. _executiontracer:
@@ -162,9 +160,9 @@ If the tracer return value evaluates to False/None then execution is
 aborted with an :exc:`ExecTraceAbort` exception.  See the
 :ref:`example <example-exectrace>`.
 
-Execution tracers can be installed on a specific cursor by calling
-:meth:`Cursor.setexectrace` or for all cursors by calling
-:meth:`Connection.setexectrace`, with the cursor tracer taking
+Execution tracers can be installed on a specific cursor by setting
+:attr:`Cursor.exectrace` or for all cursors by setting
+:attr:`Connection.exectrace`, with the cursor tracer taking
 priority.
 
 If you use the Connection :meth:`with <Connection.__enter__>` statement
@@ -190,9 +188,9 @@ Whatever you return from the tracer is what is actually returned to
 the caller of :meth:`~Cursor.execute`. If you return None then the
 whole row is skipped. See the :ref:`example <example-rowtrace>`.
 
-Row tracers can be installed on a specific cursor by calling
-:meth:`Cursor.setrowtrace` or for all cursors by calling
-:meth:`Connection.setrowtrace`, with the cursor tracer taking
+Row tracers can be installed on a specific cursor by setting
+:attr:`Cursor.rowtrace` or for all cursors by setting
+:attr:`Connection.rowtrace`, with the cursor tracer taking
 priority.
 
 .. _apswtrace:

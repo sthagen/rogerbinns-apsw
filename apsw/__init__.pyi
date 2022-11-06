@@ -5,12 +5,8 @@ from typing import Union, Tuple, List, Optional, Callable, Any, Dict, \
 from collections.abc import Mapping
 from array import array
 from types import TracebackType
-try:
-        from types import NoneType
-except ImportError:
-        NoneType = type(None)
 
-SQLiteValue = Union[NoneType, int, float, bytes, str]
+SQLiteValue = Union[None, int, float, bytes, str]
 """SQLite supports 5 types - None (NULL), 64 bit signed int, 64 bit
 float, bytes, and str (unicode text)"""
 
@@ -68,6 +64,8 @@ ExecTracer = Callable[[Cursor, str, Optional[Bindings]], bool]
 used.  Return False/None to abort execution, or True to continue"""
 
 Authorizer = Callable[[int, Optional[str], Optional[str], Optional[str], Optional[str]], int]
+"""Authorizers are called with an operation code and 4 strings (which could be None) depending
+on the operatation.  Return SQLITE_OK, SQLITE_DENY, or SQLITE_IGNORE"""
 SQLITE_VERSION_NUMBER: int
 """The integer version number of SQLite that APSW was compiled
 against.  For example SQLite 3.6.4 will have the value *3006004*.
@@ -248,6 +246,7 @@ def memoryused() -> int:
     .. seealso::
       :meth:`status`
 
+
     Calls: `sqlite3_memory_used <https://sqlite.org/c3ref/memory_highwater.html>`__"""
     ...
 
@@ -326,6 +325,8 @@ def vfsnames() -> List[str]:
 
 
 class Backup:
+    """You create a backup instance by calling :meth:`Connection.backup`."""
+
     def close(self, force: bool = False) -> None:
         """Does the same thing as :meth:`~backup.finish`.  This extra api is
         provided to give the same api as other APSW objects such as
@@ -399,6 +400,20 @@ class Backup:
 
 
 class Blob:
+    """This object is created by :meth:`Connection.blobopen` and provides
+    access to a blob in the database.  It behaves like a Python file.
+    At the C level it wraps a `sqlite3_blob
+    <https://sqlite.org/c3ref/blob.html>`_.
+
+    .. note::
+
+      You cannot change the size of a blob using this object. You should
+      create it with the correct size in advance either by using
+      :class:`zeroblob` or the `zeroblob()
+      <https://sqlite.org/lang_corefunc.html>`_ function.
+
+    See the :ref:`example <example-blobio>`."""
+
     def close(self, force: bool = False) -> None:
         """Closes the blob.  Note that even if an error occurs the blob is
         still closed.
@@ -514,37 +529,8 @@ class Blob:
 
 
 class Connection:
-    def __init__(self, filename: str, flags: int = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, vfs: Optional[str] = None, statementcachesize: int = 100):
-        """:type: Optional[Authorizer]
-
-        While `preparing <https://sqlite.org/c3ref/prepare.html>`_
-        statements, SQLite will call any defined authorizer to see if a
-        particular action is ok to be part of the statement.
-
-        Typical usage would be if you are running user supplied SQL and want
-        to prevent harmful operations.  You should also
-        set the :class:`statementcachesize <Connection>` to zero.
-
-        The authorizer callback has 5 parameters:
-
-          * An `operation code <https://sqlite.org/c3ref/c_alter_table.html>`_
-          * A string (or None) dependent on the operation `(listed as 3rd) <https://sqlite.org/c3ref/c_alter_table.html>`_
-          * A string (or None) dependent on the operation `(listed as 4th) <https://sqlite.org/c3ref/c_alter_table.html>`_
-          * A string name of the database (or None)
-          * Name of the innermost trigger or view doing the access (or None)
-
-        The authorizer callback should return one of :const:`SQLITE_OK`,
-        :const:`SQLITE_DENY` or :const:`SQLITE_IGNORE`.
-        (:const:`SQLITE_DENY` is returned if there is an error in your
-        Python code).
-
-        .. seealso::
-
-          * :ref:`Example <authorizer-example>`
-          * :ref:`statementcache`
-
-        Calls: `sqlite3_set_authorizer <https://sqlite.org/c3ref/set_authorizer.html>`__"""
-        ...
+    """This object wraps a `sqlite3 pointer
+    <https://sqlite.org/c3ref/sqlite3.html>`_."""
 
     authorizer: Optional[Authorizer]
     """While `preparing <https://sqlite.org/c3ref/prepare.html>`_
@@ -633,7 +619,63 @@ class Connection:
         ...
 
     def cache_stats(self, include_entries: bool = False) -> Dict[str, int]:
-        """Returns information about the statement cache as dict."""
+        """Returns information about the statement cache as dict.
+
+        .. note::
+
+          Calling execute with "select a; select b; insert into c ..." will
+          result in 3 cache entries corresponding to each of the 3 queries
+          present.
+
+        The returned dictionary has the following information.
+
+        .. list-table::
+          :header-rows: 1
+          :widths: auto
+
+          * - Key
+            - Explanation
+          * - size
+            - Maximum number of entries in the cache
+          * - evictions
+            - How many entries were removed (expired) to make space for a newer
+              entry
+          * - no_cache
+            - Queries that had can_cache parameter set to False
+          * - hits
+            - A match was found in the cache
+          * - misses
+            - No match was found in the cache, or the cache couldn't be used
+          * - no_vdbe
+            - The statement was empty (eg a comment) or SQLite took action
+              during parsing (eg some pragmas).  These are not cached and also
+              included in the misses count
+          * - too_big
+            - UTF8 query size was larger than considered for caching.  These are also included
+              in the misses count.
+          * - max_cacheable_bytes
+            - Maximum size of query (in bytes of utf8) that will be considered for caching
+          * - entries
+            - (Only present if `include_entries` is True) A list of the cache entries
+
+        If `entries` is present, then each list entry is a dict with the following information.
+
+        .. list-table::
+          :header-rows: 1
+          :widths: auto
+
+          * - Key
+            - Explanation
+          * - query
+            - Text of the query itself (first statement only)
+          * - prepare_flags
+            - Flags passed to `sqlite3_prepare_v3 <https://sqlite.org/c3ref/prepare.html>`__
+              for this query
+          * - uses
+            - How many times this entry has been (re)used
+          * - has_more
+            - Boolean indicating if there was more query text than
+              the first statement"""
         ...
 
     def changes(self) -> int:
@@ -867,11 +909,11 @@ class Connection:
 
         :param enable: If True then extension loading is enabled, else it is disabled.
 
+        Calls: `sqlite3_enable_load_extension <https://sqlite.org/c3ref/enable_load_extension.html>`__
+
         .. seealso::
 
-          * :meth:`~Connection.loadextension`
-
-        Calls: `sqlite3_enable_load_extension <https://sqlite.org/c3ref/enable_load_extension.html>`__"""
+          * :meth:`~Connection.loadextension`"""
         ...
 
     def __enter__(self) -> Connection:
@@ -1011,6 +1053,27 @@ class Connection:
 
     Calls: `sqlite3_get_autocommit <https://sqlite.org/c3ref/get_autocommit.html>`__"""
 
+    def __init__(self, filename: str, flags: int = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, vfs: Optional[str] = None, statementcachesize: int = 100):
+        """Opens the named database.  You can use ``:memory:`` to get a private temporary
+        in-memory database that is not shared with any other connections.
+
+        :param flags: One or more of the `open flags <https://sqlite.org/c3ref/c_open_autoproxy.html>`_ orred together
+        :param vfs: The name of the `vfs <https://sqlite.org/c3ref/vfs.html>`_ to use.  If :const:`None` then the default
+           vfs will be used.
+
+        :param statementcachesize: Use zero to disable the statement cache,
+          or a number larger than the total distinct SQL statements you
+          execute frequently.
+
+        Calls: `sqlite3_open_v2 <https://sqlite.org/c3ref/open.html>`__
+
+        .. seealso::
+
+          * :attr:`apsw.connection_hooks`
+          * :ref:`statementcache`
+          * :ref:`vfs`"""
+        ...
+
     def interrupt(self) -> None:
         """Causes any pending operations on the database to abort at the
         earliest opportunity. You can call this from any thread.  For
@@ -1031,16 +1094,17 @@ class Connection:
         """If called with one parameter then the current limit for that *id* is
         returned.  If called with two then the limit is set to *newval*.
 
+
         :param id: One of the `runtime limit ids <https://sqlite.org/c3ref/c_limit_attached.html>`_
         :param newval: The new limit.  This is a 32 bit signed integer even on 64 bit platforms.
 
         :returns: The limit in place on entry to the call.
 
+        Calls: `sqlite3_limit <https://sqlite.org/c3ref/limit.html>`__
+
         .. seealso::
 
-          * :ref:`Example <example-limit>`
-
-        Calls: `sqlite3_limit <https://sqlite.org/c3ref/limit.html>`__"""
+          * :ref:`Example <example-limit>`"""
         ...
 
     def loadextension(self, filename: str, entrypoint: Optional[str] = None) -> None:
@@ -1055,11 +1119,11 @@ class Connection:
         :raises ExtensionLoadingError: If the extension could not be
           loaded.  The exception string includes more details.
 
+        Calls: `sqlite3_load_extension <https://sqlite.org/c3ref/load_extension.html>`__
+
         .. seealso::
 
-          * :meth:`~Connection.enableloadextension`
-
-        Calls: `sqlite3_load_extension <https://sqlite.org/c3ref/load_extension.html>`__"""
+          * :meth:`~Connection.enableloadextension`"""
         ...
 
     open_flags: int
@@ -1118,7 +1182,7 @@ class Connection:
 
            * :meth:`Connection.deserialize`
 
-        Calls: `sqlite3_serialize <https://sqlite.org/c3ref/serialize.html>`__"""
+         Calls: `sqlite3_serialize <https://sqlite.org/c3ref/serialize.html>`__"""
         ...
 
     def set_last_insert_rowid(self, rowid: int) -> None:
@@ -1313,8 +1377,8 @@ class Connection:
     def wal_autocheckpoint(self, n: int) -> None:
         """Sets how often the :ref:`wal` checkpointing is run.
 
-        :param n: A number representing the checkpointing interval or
-          zero/negative to disable auto checkpointing.
+         :param n: A number representing the checkpointing interval or
+           zero/negative to disable auto checkpointing.
 
         Calls: `sqlite3_wal_autocheckpoint <https://sqlite.org/c3ref/wal_autocheckpoint.html>`__"""
         ...
@@ -1322,20 +1386,22 @@ class Connection:
     def wal_checkpoint(self, dbname: Optional[str] = None, mode: int = SQLITE_CHECKPOINT_PASSIVE) -> Tuple[int, int]:
         """Does a WAL checkpoint.  Has no effect if the database(s) are not in WAL mode.
 
-        :param dbname:  The name of the database or all databases if None
+          :param dbname:  The name of the database or all databases if None
 
-        :param mode: One of the `checkpoint modes <https://sqlite.org/c3ref/wal_checkpoint_v2.html>`__.
+          :param mode: One of the `checkpoint modes <https://sqlite.org/c3ref/wal_checkpoint_v2.html>`__.
 
-        :return: A tuple of the size of the WAL log in frames and the
-           number of frames checkpointed as described in the
-           `documentation
-           <https://sqlite.org/c3ref/wal_checkpoint_v2.html>`__.
+          :return: A tuple of the size of the WAL log in frames and the
+             number of frames checkpointed as described in the
+             `documentation
+             <https://sqlite.org/c3ref/wal_checkpoint_v2.html>`__.
 
         Calls: `sqlite3_wal_checkpoint_v2 <https://sqlite.org/c3ref/wal_checkpoint_v2.html>`__"""
         ...
 
 
 class Cursor:
+    """You obtain cursors by calling :meth:`Connection.cursor`."""
+
     def close(self, force: bool = False) -> None:
         """It is very unlikely you will need to call this method.  It exists
         because older versions of SQLite required all Connection/Cursor
@@ -1442,11 +1508,6 @@ class Cursor:
         :raises TypeError: The bindings supplied were neither a dict nor a sequence
         :raises BindingsError: You supplied too many or too few bindings for the statements
         :raises IncompleteExecutionError: There are remaining unexecuted queries from your last execute
-
-        .. seealso::
-
-           * :ref:`executionmodel`
-           * :ref:`Example <example-cursor>`
 
         Calls:
           * `sqlite3_prepare_v3 <https://sqlite.org/c3ref/prepare.html>`__
@@ -1625,6 +1686,19 @@ class Cursor:
 
 
 class URIFilename:
+    """SQLite uses a convoluted method of storing `uri parameters
+    <https://sqlite.org/uri.html>`__ after the filename binding the
+    C filename representation and parameters together.  This class
+    encapsulates that binding.  The :ref:`example <example-vfs>` shows
+    usage of this class.
+
+    Your :meth:`VFS.xOpen` method will generally be passed one of
+    these instead of a string as the filename if the URI flag was used
+    or the main database flag is set.
+
+    You can safely pass it on to the :class:`VFSFile` constructor
+    which knows how to get the name back out."""
+
     def filename(self) -> str:
         """Returns the filename."""
         ...
@@ -1651,6 +1725,15 @@ class URIFilename:
 
 
 class VFSFile:
+    """Wraps access to a file.  You only need to derive from this class
+    if you want the file object returned from :meth:`VFS.xOpen` to
+    inherit from an existing VFS implementation.
+
+    .. note::
+
+       All file sizes and offsets are 64 bit quantities even on 32 bit
+       operating systems."""
+
     def excepthook(self, etype: type[BaseException], evalue: BaseException, etraceback: Optional[TracebackType]) ->None:
         """Called when there has been an exception in a :class:`VFSFile`
         routine.  The default implementation calls ``sys.excepthook`` and
@@ -1661,6 +1744,25 @@ class VFSFile:
         :param evalue: The exception  value
         :param etraceback: The exception traceback.  Note this
           includes all frames all the way up to the thread being started."""
+        ...
+
+    def __init__(self, vfs: str, filename: Union[str,URIFilename], flags: List[int]):
+        """:param vfs: The vfs you want to inherit behaviour from.  You can
+           use an empty string ``""`` to inherit from the default vfs.
+        :param name: The name of the file being opened.  May be an instance of :class:`URIFilename`.
+        :param flags: A two item list ``[inflags, outflags]`` as detailed in :meth:`VFS.xOpen`.
+
+        :raises ValueError: If the named VFS is not registered.
+
+        .. note::
+
+          If the VFS that you inherit from supports :ref:`write ahead
+          logging <wal>` then your :class:`VFSFile` will also support the
+          xShm methods necessary to implement wal.
+
+        .. seealso::
+
+          :meth:`VFS.xOpen`"""
         ...
 
     def xCheckReservedLock(self) -> bool:
@@ -1773,11 +1875,41 @@ class VFSFile:
 
 
 class VFS:
+    """Provides operating system access.  You can get an overview in the
+    `SQLite documentation <https://sqlite.org/c3ref/vfs.html>`_.  To
+    create a VFS your Python class must inherit from :class:`VFS`."""
+
     def excepthook(self, etype: type[BaseException], evalue: BaseException, etraceback: Optional[TracebackType]) -> Any:
         """Called when there has been an exception in a :class:`VFS` routine.
         The default implementation passes args to ``sys.excepthook`` and if that
         fails then ``PyErr_Display``.  The three arguments correspond to
         what ``sys.exc_info()`` would return."""
+        ...
+
+    def __init__(self, name: str, base: Optional[str] = None, makedefault: bool = False, maxpathname: int = 1024):
+        """:param name: The name to register this vfs under.  If the name
+            already exists then this vfs will replace the prior one of the
+            same name.  Use :meth:`apsw.vfsnames` to get a list of
+            registered vfs names.
+
+        :param base: If you would like to inherit behaviour from an already registered vfs then give
+            their name.  To inherit from the default vfs, use a zero
+            length string ``""`` as the name.
+
+        :param makedefault: If true then this vfs will be registered as the default, and will be
+            used by any opens that don't specify a vfs.
+
+        :param maxpathname: The maximum length of database name in bytes when
+            represented in UTF-8.  If a pathname is passed in longer than
+            this value then SQLite will not `be able to open it
+            <https://sqlite.org/src/tktview/c060923a5422590b3734eb92eae0c94934895b68>`__.
+
+        :raises ValueError: If *base* is not :const:`None` and the named vfs is not
+          currently registered.
+
+        Calls:
+          * `sqlite3_vfs_register <https://sqlite.org/c3ref/vfs_find.html>`__
+          * `sqlite3_vfs_find <https://sqlite.org/c3ref/vfs_find.html>`__"""
         ...
 
     def unregister(self) -> None:
@@ -1959,8 +2091,31 @@ class VFS:
 
 
 class zeroblob:
+    """If you want to insert a blob into a row, you previously needed to
+    supply the entire blob in one go.  To read just one byte also
+    required retrieving the blob in its entirety. For example to insert
+    a 100MB file you would have done::
+
+       largedata=open("largefile", "rb").read()
+       cur.execute("insert into foo values(?)", (largedata,))
+
+    SQLite 3.5 allowed for incremental Blob I/O so you can read and
+    write blobs in small amounts.  You cannot change the size of a blob
+    so you need to reserve space which you do through zeroblob which
+    creates a blob of the specified size but full of zero bytes.  For
+    example you would reserve space for your 100MB one of these two
+    ways::
+
+      cur.execute("insert into foo values(zeroblob(100000000))")
+      cur.execute("insert into foo values(?),
+                   (apsw.zeroblob(100000000),))
+
+    This class is used for the second way.  Once a blob exists in the
+    database, you then use the :class:`blob` class to read and write its
+    contents."""
+
     def __init__(self, size: int):
-        """Size of zero blob in bytes."""
+        """:param size: Number of zeroed bytes to create"""
         ...
 
     def length(self) -> int:
@@ -1969,420 +2124,1149 @@ class zeroblob:
 
 
 
-SQLITE_ABORT: int
-SQLITE_ABORT_ROLLBACK: int
-SQLITE_ACCESS_EXISTS: int
-SQLITE_ACCESS_READ: int
-SQLITE_ACCESS_READWRITE: int
-SQLITE_ALTER_TABLE: int
-SQLITE_ANALYZE: int
-SQLITE_ATTACH: int
-SQLITE_AUTH: int
-SQLITE_AUTH_USER: int
-SQLITE_BUSY: int
-SQLITE_BUSY_RECOVERY: int
-SQLITE_BUSY_SNAPSHOT: int
-SQLITE_BUSY_TIMEOUT: int
-SQLITE_CANTOPEN: int
-SQLITE_CANTOPEN_CONVPATH: int
-SQLITE_CANTOPEN_DIRTYWAL: int
-SQLITE_CANTOPEN_FULLPATH: int
-SQLITE_CANTOPEN_ISDIR: int
-SQLITE_CANTOPEN_NOTEMPDIR: int
-SQLITE_CANTOPEN_SYMLINK: int
-SQLITE_CHECKPOINT_FULL: int
-SQLITE_CHECKPOINT_PASSIVE: int
-SQLITE_CHECKPOINT_RESTART: int
-SQLITE_CHECKPOINT_TRUNCATE: int
-SQLITE_CONFIG_COVERING_INDEX_SCAN: int
-SQLITE_CONFIG_GETMALLOC: int
-SQLITE_CONFIG_GETMUTEX: int
-SQLITE_CONFIG_GETPCACHE: int
-SQLITE_CONFIG_GETPCACHE2: int
-SQLITE_CONFIG_HEAP: int
-SQLITE_CONFIG_LOG: int
-SQLITE_CONFIG_LOOKASIDE: int
-SQLITE_CONFIG_MALLOC: int
-SQLITE_CONFIG_MEMDB_MAXSIZE: int
-SQLITE_CONFIG_MEMSTATUS: int
-SQLITE_CONFIG_MMAP_SIZE: int
-SQLITE_CONFIG_MULTITHREAD: int
-SQLITE_CONFIG_MUTEX: int
-SQLITE_CONFIG_PAGECACHE: int
-SQLITE_CONFIG_PCACHE: int
-SQLITE_CONFIG_PCACHE2: int
-SQLITE_CONFIG_PCACHE_HDRSZ: int
-SQLITE_CONFIG_PMASZ: int
-SQLITE_CONFIG_SCRATCH: int
-SQLITE_CONFIG_SERIALIZED: int
-SQLITE_CONFIG_SINGLETHREAD: int
-SQLITE_CONFIG_SMALL_MALLOC: int
-SQLITE_CONFIG_SORTERREF_SIZE: int
-SQLITE_CONFIG_SQLLOG: int
-SQLITE_CONFIG_STMTJRNL_SPILL: int
-SQLITE_CONFIG_URI: int
-SQLITE_CONFIG_WIN32_HEAPSIZE: int
-SQLITE_CONSTRAINT: int
-SQLITE_CONSTRAINT_CHECK: int
-SQLITE_CONSTRAINT_COMMITHOOK: int
-SQLITE_CONSTRAINT_DATATYPE: int
-SQLITE_CONSTRAINT_FOREIGNKEY: int
-SQLITE_CONSTRAINT_FUNCTION: int
-SQLITE_CONSTRAINT_NOTNULL: int
-SQLITE_CONSTRAINT_PINNED: int
-SQLITE_CONSTRAINT_PRIMARYKEY: int
-SQLITE_CONSTRAINT_ROWID: int
-SQLITE_CONSTRAINT_TRIGGER: int
-SQLITE_CONSTRAINT_UNIQUE: int
-SQLITE_CONSTRAINT_VTAB: int
-SQLITE_COPY: int
-SQLITE_CORRUPT: int
-SQLITE_CORRUPT_INDEX: int
-SQLITE_CORRUPT_SEQUENCE: int
-SQLITE_CORRUPT_VTAB: int
-SQLITE_CREATE_INDEX: int
-SQLITE_CREATE_TABLE: int
-SQLITE_CREATE_TEMP_INDEX: int
-SQLITE_CREATE_TEMP_TABLE: int
-SQLITE_CREATE_TEMP_TRIGGER: int
-SQLITE_CREATE_TEMP_VIEW: int
-SQLITE_CREATE_TRIGGER: int
-SQLITE_CREATE_VIEW: int
-SQLITE_CREATE_VTABLE: int
-SQLITE_DBCONFIG_DEFENSIVE: int
-SQLITE_DBCONFIG_DQS_DDL: int
-SQLITE_DBCONFIG_DQS_DML: int
-SQLITE_DBCONFIG_ENABLE_FKEY: int
-SQLITE_DBCONFIG_ENABLE_FTS3_TOKENIZER: int
-SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION: int
-SQLITE_DBCONFIG_ENABLE_QPSG: int
-SQLITE_DBCONFIG_ENABLE_TRIGGER: int
-SQLITE_DBCONFIG_ENABLE_VIEW: int
-SQLITE_DBCONFIG_LEGACY_ALTER_TABLE: int
-SQLITE_DBCONFIG_LEGACY_FILE_FORMAT: int
-SQLITE_DBCONFIG_LOOKASIDE: int
-SQLITE_DBCONFIG_MAINDBNAME: int
-SQLITE_DBCONFIG_MAX: int
-SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE: int
-SQLITE_DBCONFIG_RESET_DATABASE: int
-SQLITE_DBCONFIG_TRIGGER_EQP: int
-SQLITE_DBCONFIG_TRUSTED_SCHEMA: int
-SQLITE_DBCONFIG_WRITABLE_SCHEMA: int
-SQLITE_DBSTATUS_CACHE_HIT: int
-SQLITE_DBSTATUS_CACHE_MISS: int
-SQLITE_DBSTATUS_CACHE_SPILL: int
-SQLITE_DBSTATUS_CACHE_USED: int
-SQLITE_DBSTATUS_CACHE_USED_SHARED: int
-SQLITE_DBSTATUS_CACHE_WRITE: int
-SQLITE_DBSTATUS_DEFERRED_FKS: int
-SQLITE_DBSTATUS_LOOKASIDE_HIT: int
-SQLITE_DBSTATUS_LOOKASIDE_MISS_FULL: int
-SQLITE_DBSTATUS_LOOKASIDE_MISS_SIZE: int
-SQLITE_DBSTATUS_LOOKASIDE_USED: int
-SQLITE_DBSTATUS_MAX: int
-SQLITE_DBSTATUS_SCHEMA_USED: int
-SQLITE_DBSTATUS_STMT_USED: int
-SQLITE_DELETE: int
-SQLITE_DENY: int
-SQLITE_DETACH: int
-SQLITE_DONE: int
-SQLITE_DROP_INDEX: int
-SQLITE_DROP_TABLE: int
-SQLITE_DROP_TEMP_INDEX: int
-SQLITE_DROP_TEMP_TABLE: int
-SQLITE_DROP_TEMP_TRIGGER: int
-SQLITE_DROP_TEMP_VIEW: int
-SQLITE_DROP_TRIGGER: int
-SQLITE_DROP_VIEW: int
-SQLITE_DROP_VTABLE: int
-SQLITE_EMPTY: int
-SQLITE_ERROR: int
-SQLITE_ERROR_MISSING_COLLSEQ: int
-SQLITE_ERROR_RETRY: int
-SQLITE_ERROR_SNAPSHOT: int
-SQLITE_FAIL: int
-SQLITE_FCNTL_BEGIN_ATOMIC_WRITE: int
-SQLITE_FCNTL_BUSYHANDLER: int
-SQLITE_FCNTL_CHUNK_SIZE: int
-SQLITE_FCNTL_CKPT_DONE: int
-SQLITE_FCNTL_CKPT_START: int
-SQLITE_FCNTL_CKSM_FILE: int
-SQLITE_FCNTL_COMMIT_ATOMIC_WRITE: int
-SQLITE_FCNTL_COMMIT_PHASETWO: int
-SQLITE_FCNTL_DATA_VERSION: int
-SQLITE_FCNTL_EXTERNAL_READER: int
-SQLITE_FCNTL_FILE_POINTER: int
-SQLITE_FCNTL_GET_LOCKPROXYFILE: int
-SQLITE_FCNTL_HAS_MOVED: int
-SQLITE_FCNTL_JOURNAL_POINTER: int
-SQLITE_FCNTL_LAST_ERRNO: int
-SQLITE_FCNTL_LOCKSTATE: int
-SQLITE_FCNTL_LOCK_TIMEOUT: int
-SQLITE_FCNTL_MMAP_SIZE: int
-SQLITE_FCNTL_OVERWRITE: int
-SQLITE_FCNTL_PDB: int
-SQLITE_FCNTL_PERSIST_WAL: int
-SQLITE_FCNTL_POWERSAFE_OVERWRITE: int
-SQLITE_FCNTL_PRAGMA: int
-SQLITE_FCNTL_RBU: int
-SQLITE_FCNTL_RESERVE_BYTES: int
-SQLITE_FCNTL_ROLLBACK_ATOMIC_WRITE: int
-SQLITE_FCNTL_SET_LOCKPROXYFILE: int
-SQLITE_FCNTL_SIZE_HINT: int
-SQLITE_FCNTL_SIZE_LIMIT: int
-SQLITE_FCNTL_SYNC: int
-SQLITE_FCNTL_SYNC_OMITTED: int
-SQLITE_FCNTL_TEMPFILENAME: int
-SQLITE_FCNTL_TRACE: int
-SQLITE_FCNTL_VFSNAME: int
-SQLITE_FCNTL_VFS_POINTER: int
-SQLITE_FCNTL_WAL_BLOCK: int
-SQLITE_FCNTL_WIN32_AV_RETRY: int
-SQLITE_FCNTL_WIN32_GET_HANDLE: int
-SQLITE_FCNTL_WIN32_SET_HANDLE: int
-SQLITE_FCNTL_ZIPVFS: int
-SQLITE_FORMAT: int
-SQLITE_FULL: int
-SQLITE_FUNCTION: int
-SQLITE_IGNORE: int
-SQLITE_INDEX_CONSTRAINT_EQ: int
-SQLITE_INDEX_CONSTRAINT_FUNCTION: int
-SQLITE_INDEX_CONSTRAINT_GE: int
-SQLITE_INDEX_CONSTRAINT_GLOB: int
-SQLITE_INDEX_CONSTRAINT_GT: int
-SQLITE_INDEX_CONSTRAINT_IS: int
-SQLITE_INDEX_CONSTRAINT_ISNOT: int
-SQLITE_INDEX_CONSTRAINT_ISNOTNULL: int
-SQLITE_INDEX_CONSTRAINT_ISNULL: int
-SQLITE_INDEX_CONSTRAINT_LE: int
-SQLITE_INDEX_CONSTRAINT_LIKE: int
-SQLITE_INDEX_CONSTRAINT_LIMIT: int
-SQLITE_INDEX_CONSTRAINT_LT: int
-SQLITE_INDEX_CONSTRAINT_MATCH: int
-SQLITE_INDEX_CONSTRAINT_NE: int
-SQLITE_INDEX_CONSTRAINT_OFFSET: int
-SQLITE_INDEX_CONSTRAINT_REGEXP: int
-SQLITE_INDEX_SCAN_UNIQUE: int
-SQLITE_INSERT: int
-SQLITE_INTERNAL: int
-SQLITE_INTERRUPT: int
-SQLITE_IOCAP_ATOMIC: int
-SQLITE_IOCAP_ATOMIC16K: int
-SQLITE_IOCAP_ATOMIC1K: int
-SQLITE_IOCAP_ATOMIC2K: int
-SQLITE_IOCAP_ATOMIC32K: int
-SQLITE_IOCAP_ATOMIC4K: int
-SQLITE_IOCAP_ATOMIC512: int
-SQLITE_IOCAP_ATOMIC64K: int
-SQLITE_IOCAP_ATOMIC8K: int
-SQLITE_IOCAP_BATCH_ATOMIC: int
-SQLITE_IOCAP_IMMUTABLE: int
-SQLITE_IOCAP_POWERSAFE_OVERWRITE: int
-SQLITE_IOCAP_SAFE_APPEND: int
-SQLITE_IOCAP_SEQUENTIAL: int
-SQLITE_IOCAP_UNDELETABLE_WHEN_OPEN: int
-SQLITE_IOERR: int
-SQLITE_IOERR_ACCESS: int
-SQLITE_IOERR_AUTH: int
-SQLITE_IOERR_BEGIN_ATOMIC: int
-SQLITE_IOERR_BLOCKED: int
-SQLITE_IOERR_CHECKRESERVEDLOCK: int
-SQLITE_IOERR_CLOSE: int
-SQLITE_IOERR_COMMIT_ATOMIC: int
-SQLITE_IOERR_CONVPATH: int
-SQLITE_IOERR_CORRUPTFS: int
-SQLITE_IOERR_DATA: int
-SQLITE_IOERR_DELETE: int
-SQLITE_IOERR_DELETE_NOENT: int
-SQLITE_IOERR_DIR_CLOSE: int
-SQLITE_IOERR_DIR_FSYNC: int
-SQLITE_IOERR_FSTAT: int
-SQLITE_IOERR_FSYNC: int
-SQLITE_IOERR_GETTEMPPATH: int
-SQLITE_IOERR_LOCK: int
-SQLITE_IOERR_MMAP: int
-SQLITE_IOERR_NOMEM: int
-SQLITE_IOERR_RDLOCK: int
-SQLITE_IOERR_READ: int
-SQLITE_IOERR_ROLLBACK_ATOMIC: int
-SQLITE_IOERR_SEEK: int
-SQLITE_IOERR_SHMLOCK: int
-SQLITE_IOERR_SHMMAP: int
-SQLITE_IOERR_SHMOPEN: int
-SQLITE_IOERR_SHMSIZE: int
-SQLITE_IOERR_SHORT_READ: int
-SQLITE_IOERR_TRUNCATE: int
-SQLITE_IOERR_UNLOCK: int
-SQLITE_IOERR_VNODE: int
-SQLITE_IOERR_WRITE: int
-SQLITE_LIMIT_ATTACHED: int
-SQLITE_LIMIT_COLUMN: int
-SQLITE_LIMIT_COMPOUND_SELECT: int
-SQLITE_LIMIT_EXPR_DEPTH: int
-SQLITE_LIMIT_FUNCTION_ARG: int
-SQLITE_LIMIT_LENGTH: int
-SQLITE_LIMIT_LIKE_PATTERN_LENGTH: int
-SQLITE_LIMIT_SQL_LENGTH: int
-SQLITE_LIMIT_TRIGGER_DEPTH: int
-SQLITE_LIMIT_VARIABLE_NUMBER: int
-SQLITE_LIMIT_VDBE_OP: int
-SQLITE_LIMIT_WORKER_THREADS: int
-SQLITE_LOCKED: int
-SQLITE_LOCKED_SHAREDCACHE: int
-SQLITE_LOCKED_VTAB: int
-SQLITE_LOCK_EXCLUSIVE: int
-SQLITE_LOCK_NONE: int
-SQLITE_LOCK_PENDING: int
-SQLITE_LOCK_RESERVED: int
-SQLITE_LOCK_SHARED: int
-SQLITE_MISMATCH: int
-SQLITE_MISUSE: int
-SQLITE_NOLFS: int
-SQLITE_NOMEM: int
-SQLITE_NOTADB: int
-SQLITE_NOTFOUND: int
-SQLITE_NOTICE: int
-SQLITE_NOTICE_RECOVER_ROLLBACK: int
-SQLITE_NOTICE_RECOVER_WAL: int
-SQLITE_OK: int
-SQLITE_OK_LOAD_PERMANENTLY: int
-SQLITE_OK_SYMLINK: int
-SQLITE_OPEN_AUTOPROXY: int
-SQLITE_OPEN_CREATE: int
-SQLITE_OPEN_DELETEONCLOSE: int
-SQLITE_OPEN_EXCLUSIVE: int
-SQLITE_OPEN_EXRESCODE: int
-SQLITE_OPEN_FULLMUTEX: int
-SQLITE_OPEN_MAIN_DB: int
-SQLITE_OPEN_MAIN_JOURNAL: int
-SQLITE_OPEN_MEMORY: int
-SQLITE_OPEN_NOFOLLOW: int
-SQLITE_OPEN_NOMUTEX: int
-SQLITE_OPEN_PRIVATECACHE: int
-SQLITE_OPEN_READONLY: int
-SQLITE_OPEN_READWRITE: int
-SQLITE_OPEN_SHAREDCACHE: int
-SQLITE_OPEN_SUBJOURNAL: int
-SQLITE_OPEN_SUPER_JOURNAL: int
-SQLITE_OPEN_TEMP_DB: int
-SQLITE_OPEN_TEMP_JOURNAL: int
-SQLITE_OPEN_TRANSIENT_DB: int
-SQLITE_OPEN_URI: int
-SQLITE_OPEN_WAL: int
-SQLITE_PERM: int
-SQLITE_PRAGMA: int
-SQLITE_PREPARE_NORMALIZE: int
-SQLITE_PREPARE_NO_VTAB: int
-SQLITE_PREPARE_PERSISTENT: int
-SQLITE_PROTOCOL: int
-SQLITE_RANGE: int
-SQLITE_READ: int
-SQLITE_READONLY: int
-SQLITE_READONLY_CANTINIT: int
-SQLITE_READONLY_CANTLOCK: int
-SQLITE_READONLY_DBMOVED: int
-SQLITE_READONLY_DIRECTORY: int
-SQLITE_READONLY_RECOVERY: int
-SQLITE_READONLY_ROLLBACK: int
-SQLITE_RECURSIVE: int
-SQLITE_REINDEX: int
-SQLITE_REPLACE: int
-SQLITE_ROLLBACK: int
-SQLITE_ROW: int
-SQLITE_SAVEPOINT: int
-SQLITE_SCHEMA: int
-SQLITE_SELECT: int
-SQLITE_SHM_EXCLUSIVE: int
-SQLITE_SHM_LOCK: int
-SQLITE_SHM_SHARED: int
-SQLITE_SHM_UNLOCK: int
-SQLITE_STATUS_MALLOC_COUNT: int
-SQLITE_STATUS_MALLOC_SIZE: int
-SQLITE_STATUS_MEMORY_USED: int
-SQLITE_STATUS_PAGECACHE_OVERFLOW: int
-SQLITE_STATUS_PAGECACHE_SIZE: int
-SQLITE_STATUS_PAGECACHE_USED: int
-SQLITE_STATUS_PARSER_STACK: int
-SQLITE_STATUS_SCRATCH_OVERFLOW: int
-SQLITE_STATUS_SCRATCH_SIZE: int
-SQLITE_STATUS_SCRATCH_USED: int
-SQLITE_SYNC_DATAONLY: int
-SQLITE_SYNC_FULL: int
-SQLITE_SYNC_NORMAL: int
-SQLITE_TOOBIG: int
-SQLITE_TRANSACTION: int
-SQLITE_TXN_NONE: int
-SQLITE_TXN_READ: int
-SQLITE_TXN_WRITE: int
-SQLITE_UPDATE: int
-SQLITE_VTAB_CONSTRAINT_SUPPORT: int
-SQLITE_VTAB_DIRECTONLY: int
-SQLITE_VTAB_INNOCUOUS: int
-SQLITE_WARNING: int
-SQLITE_WARNING_AUTOINDEX: int
+SQLITE_ABORT: int = 4
+"""For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_ABORT_ROLLBACK: int = 516
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_ACCESS_EXISTS: int = 0
+"""For `Flags for the xAccess VFS method <https://sqlite.org/c3ref/c_access_exists.html>'__"""
+SQLITE_ACCESS_READ: int = 2
+"""For `Flags for the xAccess VFS method <https://sqlite.org/c3ref/c_access_exists.html>'__"""
+SQLITE_ACCESS_READWRITE: int = 1
+"""For `Flags for the xAccess VFS method <https://sqlite.org/c3ref/c_access_exists.html>'__"""
+SQLITE_ALTER_TABLE: int = 26
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_ANALYZE: int = 28
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_ATTACH: int = 24
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_AUTH: int = 23
+"""For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_AUTH_USER: int = 279
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_BUSY: int = 5
+"""For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_BUSY_RECOVERY: int = 261
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_BUSY_SNAPSHOT: int = 517
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_BUSY_TIMEOUT: int = 773
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_CANTOPEN: int = 14
+"""For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_CANTOPEN_CONVPATH: int = 1038
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_CANTOPEN_DIRTYWAL: int = 1294
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_CANTOPEN_FULLPATH: int = 782
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_CANTOPEN_ISDIR: int = 526
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_CANTOPEN_NOTEMPDIR: int = 270
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_CANTOPEN_SYMLINK: int = 1550
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_CHECKPOINT_FULL: int = 1
+"""For `Checkpoint Mode Values <https://sqlite.org/c3ref/c_checkpoint_full.html>'__"""
+SQLITE_CHECKPOINT_PASSIVE: int = 0
+"""For `Checkpoint Mode Values <https://sqlite.org/c3ref/c_checkpoint_full.html>'__"""
+SQLITE_CHECKPOINT_RESTART: int = 2
+"""For `Checkpoint Mode Values <https://sqlite.org/c3ref/c_checkpoint_full.html>'__"""
+SQLITE_CHECKPOINT_TRUNCATE: int = 3
+"""For `Checkpoint Mode Values <https://sqlite.org/c3ref/c_checkpoint_full.html>'__"""
+SQLITE_CONFIG_COVERING_INDEX_SCAN: int = 20
+"""For `Configuration Options <https://sqlite.org/c3ref/c_config_covering_index_scan.html>'__"""
+SQLITE_CONFIG_GETMALLOC: int = 5
+"""For `Configuration Options <https://sqlite.org/c3ref/c_config_covering_index_scan.html>'__"""
+SQLITE_CONFIG_GETMUTEX: int = 11
+"""For `Configuration Options <https://sqlite.org/c3ref/c_config_covering_index_scan.html>'__"""
+SQLITE_CONFIG_GETPCACHE: int = 15
+"""For `Configuration Options <https://sqlite.org/c3ref/c_config_covering_index_scan.html>'__"""
+SQLITE_CONFIG_GETPCACHE2: int = 19
+"""For `Configuration Options <https://sqlite.org/c3ref/c_config_covering_index_scan.html>'__"""
+SQLITE_CONFIG_HEAP: int = 8
+"""For `Configuration Options <https://sqlite.org/c3ref/c_config_covering_index_scan.html>'__"""
+SQLITE_CONFIG_LOG: int = 16
+"""For `Configuration Options <https://sqlite.org/c3ref/c_config_covering_index_scan.html>'__"""
+SQLITE_CONFIG_LOOKASIDE: int = 13
+"""For `Configuration Options <https://sqlite.org/c3ref/c_config_covering_index_scan.html>'__"""
+SQLITE_CONFIG_MALLOC: int = 4
+"""For `Configuration Options <https://sqlite.org/c3ref/c_config_covering_index_scan.html>'__"""
+SQLITE_CONFIG_MEMDB_MAXSIZE: int = 29
+"""For `Configuration Options <https://sqlite.org/c3ref/c_config_covering_index_scan.html>'__"""
+SQLITE_CONFIG_MEMSTATUS: int = 9
+"""For `Configuration Options <https://sqlite.org/c3ref/c_config_covering_index_scan.html>'__"""
+SQLITE_CONFIG_MMAP_SIZE: int = 22
+"""For `Configuration Options <https://sqlite.org/c3ref/c_config_covering_index_scan.html>'__"""
+SQLITE_CONFIG_MULTITHREAD: int = 2
+"""For `Configuration Options <https://sqlite.org/c3ref/c_config_covering_index_scan.html>'__"""
+SQLITE_CONFIG_MUTEX: int = 10
+"""For `Configuration Options <https://sqlite.org/c3ref/c_config_covering_index_scan.html>'__"""
+SQLITE_CONFIG_PAGECACHE: int = 7
+"""For `Configuration Options <https://sqlite.org/c3ref/c_config_covering_index_scan.html>'__"""
+SQLITE_CONFIG_PCACHE: int = 14
+"""For `Configuration Options <https://sqlite.org/c3ref/c_config_covering_index_scan.html>'__"""
+SQLITE_CONFIG_PCACHE2: int = 18
+"""For `Configuration Options <https://sqlite.org/c3ref/c_config_covering_index_scan.html>'__"""
+SQLITE_CONFIG_PCACHE_HDRSZ: int = 24
+"""For `Configuration Options <https://sqlite.org/c3ref/c_config_covering_index_scan.html>'__"""
+SQLITE_CONFIG_PMASZ: int = 25
+"""For `Configuration Options <https://sqlite.org/c3ref/c_config_covering_index_scan.html>'__"""
+SQLITE_CONFIG_SCRATCH: int = 6
+"""For `Configuration Options <https://sqlite.org/c3ref/c_config_covering_index_scan.html>'__"""
+SQLITE_CONFIG_SERIALIZED: int = 3
+"""For `Configuration Options <https://sqlite.org/c3ref/c_config_covering_index_scan.html>'__"""
+SQLITE_CONFIG_SINGLETHREAD: int = 1
+"""For `Configuration Options <https://sqlite.org/c3ref/c_config_covering_index_scan.html>'__"""
+SQLITE_CONFIG_SMALL_MALLOC: int = 27
+"""For `Configuration Options <https://sqlite.org/c3ref/c_config_covering_index_scan.html>'__"""
+SQLITE_CONFIG_SORTERREF_SIZE: int = 28
+"""For `Configuration Options <https://sqlite.org/c3ref/c_config_covering_index_scan.html>'__"""
+SQLITE_CONFIG_SQLLOG: int = 21
+"""For `Configuration Options <https://sqlite.org/c3ref/c_config_covering_index_scan.html>'__"""
+SQLITE_CONFIG_STMTJRNL_SPILL: int = 26
+"""For `Configuration Options <https://sqlite.org/c3ref/c_config_covering_index_scan.html>'__"""
+SQLITE_CONFIG_URI: int = 17
+"""For `Configuration Options <https://sqlite.org/c3ref/c_config_covering_index_scan.html>'__"""
+SQLITE_CONFIG_WIN32_HEAPSIZE: int = 23
+"""For `Configuration Options <https://sqlite.org/c3ref/c_config_covering_index_scan.html>'__"""
+SQLITE_CONSTRAINT: int = 19
+"""For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_CONSTRAINT_CHECK: int = 275
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_CONSTRAINT_COMMITHOOK: int = 531
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_CONSTRAINT_DATATYPE: int = 3091
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_CONSTRAINT_FOREIGNKEY: int = 787
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_CONSTRAINT_FUNCTION: int = 1043
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_CONSTRAINT_NOTNULL: int = 1299
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_CONSTRAINT_PINNED: int = 2835
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_CONSTRAINT_PRIMARYKEY: int = 1555
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_CONSTRAINT_ROWID: int = 2579
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_CONSTRAINT_TRIGGER: int = 1811
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_CONSTRAINT_UNIQUE: int = 2067
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_CONSTRAINT_VTAB: int = 2323
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_COPY: int = 0
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_CORRUPT: int = 11
+"""For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_CORRUPT_INDEX: int = 779
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_CORRUPT_SEQUENCE: int = 523
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_CORRUPT_VTAB: int = 267
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_CREATE_INDEX: int = 1
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_CREATE_TABLE: int = 2
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_CREATE_TEMP_INDEX: int = 3
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_CREATE_TEMP_TABLE: int = 4
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_CREATE_TEMP_TRIGGER: int = 5
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_CREATE_TEMP_VIEW: int = 6
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_CREATE_TRIGGER: int = 7
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_CREATE_VIEW: int = 8
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_CREATE_VTABLE: int = 29
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_DBCONFIG_DEFENSIVE: int = 1010
+"""For `Database Connection Configuration Options <https://sqlite.org/c3ref/c_dbconfig_defensive.html>'__"""
+SQLITE_DBCONFIG_DQS_DDL: int = 1014
+"""For `Database Connection Configuration Options <https://sqlite.org/c3ref/c_dbconfig_defensive.html>'__"""
+SQLITE_DBCONFIG_DQS_DML: int = 1013
+"""For `Database Connection Configuration Options <https://sqlite.org/c3ref/c_dbconfig_defensive.html>'__"""
+SQLITE_DBCONFIG_ENABLE_FKEY: int = 1002
+"""For `Database Connection Configuration Options <https://sqlite.org/c3ref/c_dbconfig_defensive.html>'__"""
+SQLITE_DBCONFIG_ENABLE_FTS3_TOKENIZER: int = 1004
+"""For `Database Connection Configuration Options <https://sqlite.org/c3ref/c_dbconfig_defensive.html>'__"""
+SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION: int = 1005
+"""For `Database Connection Configuration Options <https://sqlite.org/c3ref/c_dbconfig_defensive.html>'__"""
+SQLITE_DBCONFIG_ENABLE_QPSG: int = 1007
+"""For `Database Connection Configuration Options <https://sqlite.org/c3ref/c_dbconfig_defensive.html>'__"""
+SQLITE_DBCONFIG_ENABLE_TRIGGER: int = 1003
+"""For `Database Connection Configuration Options <https://sqlite.org/c3ref/c_dbconfig_defensive.html>'__"""
+SQLITE_DBCONFIG_ENABLE_VIEW: int = 1015
+"""For `Database Connection Configuration Options <https://sqlite.org/c3ref/c_dbconfig_defensive.html>'__"""
+SQLITE_DBCONFIG_LEGACY_ALTER_TABLE: int = 1012
+"""For `Database Connection Configuration Options <https://sqlite.org/c3ref/c_dbconfig_defensive.html>'__"""
+SQLITE_DBCONFIG_LEGACY_FILE_FORMAT: int = 1016
+"""For `Database Connection Configuration Options <https://sqlite.org/c3ref/c_dbconfig_defensive.html>'__"""
+SQLITE_DBCONFIG_LOOKASIDE: int = 1001
+"""For `Database Connection Configuration Options <https://sqlite.org/c3ref/c_dbconfig_defensive.html>'__"""
+SQLITE_DBCONFIG_MAINDBNAME: int = 1000
+"""For `Database Connection Configuration Options <https://sqlite.org/c3ref/c_dbconfig_defensive.html>'__"""
+SQLITE_DBCONFIG_MAX: int = 1017
+"""For `Database Connection Configuration Options <https://sqlite.org/c3ref/c_dbconfig_defensive.html>'__"""
+SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE: int = 1006
+"""For `Database Connection Configuration Options <https://sqlite.org/c3ref/c_dbconfig_defensive.html>'__"""
+SQLITE_DBCONFIG_RESET_DATABASE: int = 1009
+"""For `Database Connection Configuration Options <https://sqlite.org/c3ref/c_dbconfig_defensive.html>'__"""
+SQLITE_DBCONFIG_TRIGGER_EQP: int = 1008
+"""For `Database Connection Configuration Options <https://sqlite.org/c3ref/c_dbconfig_defensive.html>'__"""
+SQLITE_DBCONFIG_TRUSTED_SCHEMA: int = 1017
+"""For `Database Connection Configuration Options <https://sqlite.org/c3ref/c_dbconfig_defensive.html>'__"""
+SQLITE_DBCONFIG_WRITABLE_SCHEMA: int = 1011
+"""For `Database Connection Configuration Options <https://sqlite.org/c3ref/c_dbconfig_defensive.html>'__"""
+SQLITE_DBSTATUS_CACHE_HIT: int = 7
+"""For `Status Parameters for database connections <https://sqlite.org/c3ref/c_dbstatus_options.html>'__"""
+SQLITE_DBSTATUS_CACHE_MISS: int = 8
+"""For `Status Parameters for database connections <https://sqlite.org/c3ref/c_dbstatus_options.html>'__"""
+SQLITE_DBSTATUS_CACHE_SPILL: int = 12
+"""For `Status Parameters for database connections <https://sqlite.org/c3ref/c_dbstatus_options.html>'__"""
+SQLITE_DBSTATUS_CACHE_USED: int = 1
+"""For `Status Parameters for database connections <https://sqlite.org/c3ref/c_dbstatus_options.html>'__"""
+SQLITE_DBSTATUS_CACHE_USED_SHARED: int = 11
+"""For `Status Parameters for database connections <https://sqlite.org/c3ref/c_dbstatus_options.html>'__"""
+SQLITE_DBSTATUS_CACHE_WRITE: int = 9
+"""For `Status Parameters for database connections <https://sqlite.org/c3ref/c_dbstatus_options.html>'__"""
+SQLITE_DBSTATUS_DEFERRED_FKS: int = 10
+"""For `Status Parameters for database connections <https://sqlite.org/c3ref/c_dbstatus_options.html>'__"""
+SQLITE_DBSTATUS_LOOKASIDE_HIT: int = 4
+"""For `Status Parameters for database connections <https://sqlite.org/c3ref/c_dbstatus_options.html>'__"""
+SQLITE_DBSTATUS_LOOKASIDE_MISS_FULL: int = 6
+"""For `Status Parameters for database connections <https://sqlite.org/c3ref/c_dbstatus_options.html>'__"""
+SQLITE_DBSTATUS_LOOKASIDE_MISS_SIZE: int = 5
+"""For `Status Parameters for database connections <https://sqlite.org/c3ref/c_dbstatus_options.html>'__"""
+SQLITE_DBSTATUS_LOOKASIDE_USED: int = 0
+"""For `Status Parameters for database connections <https://sqlite.org/c3ref/c_dbstatus_options.html>'__"""
+SQLITE_DBSTATUS_MAX: int = 12
+"""For `Status Parameters for database connections <https://sqlite.org/c3ref/c_dbstatus_options.html>'__"""
+SQLITE_DBSTATUS_SCHEMA_USED: int = 2
+"""For `Status Parameters for database connections <https://sqlite.org/c3ref/c_dbstatus_options.html>'__"""
+SQLITE_DBSTATUS_STMT_USED: int = 3
+"""For `Status Parameters for database connections <https://sqlite.org/c3ref/c_dbstatus_options.html>'__"""
+SQLITE_DELETE: int = 9
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_DENY: int = 1
+"""For `Authorizer Return Codes <https://sqlite.org/c3ref/c_deny.html>'__"""
+SQLITE_DETACH: int = 25
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_DONE: int = 101
+"""For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_DROP_INDEX: int = 10
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_DROP_TABLE: int = 11
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_DROP_TEMP_INDEX: int = 12
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_DROP_TEMP_TABLE: int = 13
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_DROP_TEMP_TRIGGER: int = 14
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_DROP_TEMP_VIEW: int = 15
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_DROP_TRIGGER: int = 16
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_DROP_VIEW: int = 17
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_DROP_VTABLE: int = 30
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_EMPTY: int = 16
+"""For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_ERROR: int = 1
+"""For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_ERROR_MISSING_COLLSEQ: int = 257
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_ERROR_RETRY: int = 513
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_ERROR_SNAPSHOT: int = 769
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_FAIL: int = 3
+"""For `Conflict resolution modes <https://sqlite.org/c3ref/c_fail.html>'__"""
+SQLITE_FCNTL_BEGIN_ATOMIC_WRITE: int = 31
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_BUSYHANDLER: int = 15
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_CHUNK_SIZE: int = 6
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_CKPT_DONE: int = 37
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_CKPT_START: int = 39
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_CKSM_FILE: int = 41
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_COMMIT_ATOMIC_WRITE: int = 32
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_COMMIT_PHASETWO: int = 22
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_DATA_VERSION: int = 35
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_EXTERNAL_READER: int = 40
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_FILE_POINTER: int = 7
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_GET_LOCKPROXYFILE: int = 2
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_HAS_MOVED: int = 20
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_JOURNAL_POINTER: int = 28
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_LAST_ERRNO: int = 4
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_LOCKSTATE: int = 1
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_LOCK_TIMEOUT: int = 34
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_MMAP_SIZE: int = 18
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_OVERWRITE: int = 11
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_PDB: int = 30
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_PERSIST_WAL: int = 10
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_POWERSAFE_OVERWRITE: int = 13
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_PRAGMA: int = 14
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_RBU: int = 26
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_RESERVE_BYTES: int = 38
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_ROLLBACK_ATOMIC_WRITE: int = 33
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_SET_LOCKPROXYFILE: int = 3
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_SIZE_HINT: int = 5
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_SIZE_LIMIT: int = 36
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_SYNC: int = 21
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_SYNC_OMITTED: int = 8
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_TEMPFILENAME: int = 16
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_TRACE: int = 19
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_VFSNAME: int = 12
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_VFS_POINTER: int = 27
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_WAL_BLOCK: int = 24
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_WIN32_AV_RETRY: int = 9
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_WIN32_GET_HANDLE: int = 29
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_WIN32_SET_HANDLE: int = 23
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FCNTL_ZIPVFS: int = 25
+"""For `Standard File Control Opcodes <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>'__"""
+SQLITE_FORMAT: int = 24
+"""For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_FULL: int = 13
+"""For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_FUNCTION: int = 31
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_IGNORE: int = 2
+"""For `Authorizer Return Codes <https://sqlite.org/c3ref/c_deny.html>'__"""
+SQLITE_INDEX_CONSTRAINT_EQ: int = 2
+"""For `Virtual Table Constraint Operator Codes <https://sqlite.org/c3ref/c_index_constraint_eq.html>'__"""
+SQLITE_INDEX_CONSTRAINT_FUNCTION: int = 150
+"""For `Virtual Table Constraint Operator Codes <https://sqlite.org/c3ref/c_index_constraint_eq.html>'__"""
+SQLITE_INDEX_CONSTRAINT_GE: int = 32
+"""For `Virtual Table Constraint Operator Codes <https://sqlite.org/c3ref/c_index_constraint_eq.html>'__"""
+SQLITE_INDEX_CONSTRAINT_GLOB: int = 66
+"""For `Virtual Table Constraint Operator Codes <https://sqlite.org/c3ref/c_index_constraint_eq.html>'__"""
+SQLITE_INDEX_CONSTRAINT_GT: int = 4
+"""For `Virtual Table Constraint Operator Codes <https://sqlite.org/c3ref/c_index_constraint_eq.html>'__"""
+SQLITE_INDEX_CONSTRAINT_IS: int = 72
+"""For `Virtual Table Constraint Operator Codes <https://sqlite.org/c3ref/c_index_constraint_eq.html>'__"""
+SQLITE_INDEX_CONSTRAINT_ISNOT: int = 69
+"""For `Virtual Table Constraint Operator Codes <https://sqlite.org/c3ref/c_index_constraint_eq.html>'__"""
+SQLITE_INDEX_CONSTRAINT_ISNOTNULL: int = 70
+"""For `Virtual Table Constraint Operator Codes <https://sqlite.org/c3ref/c_index_constraint_eq.html>'__"""
+SQLITE_INDEX_CONSTRAINT_ISNULL: int = 71
+"""For `Virtual Table Constraint Operator Codes <https://sqlite.org/c3ref/c_index_constraint_eq.html>'__"""
+SQLITE_INDEX_CONSTRAINT_LE: int = 8
+"""For `Virtual Table Constraint Operator Codes <https://sqlite.org/c3ref/c_index_constraint_eq.html>'__"""
+SQLITE_INDEX_CONSTRAINT_LIKE: int = 65
+"""For `Virtual Table Constraint Operator Codes <https://sqlite.org/c3ref/c_index_constraint_eq.html>'__"""
+SQLITE_INDEX_CONSTRAINT_LIMIT: int = 73
+"""For `Virtual Table Constraint Operator Codes <https://sqlite.org/c3ref/c_index_constraint_eq.html>'__"""
+SQLITE_INDEX_CONSTRAINT_LT: int = 16
+"""For `Virtual Table Constraint Operator Codes <https://sqlite.org/c3ref/c_index_constraint_eq.html>'__"""
+SQLITE_INDEX_CONSTRAINT_MATCH: int = 64
+"""For `Virtual Table Constraint Operator Codes <https://sqlite.org/c3ref/c_index_constraint_eq.html>'__"""
+SQLITE_INDEX_CONSTRAINT_NE: int = 68
+"""For `Virtual Table Constraint Operator Codes <https://sqlite.org/c3ref/c_index_constraint_eq.html>'__"""
+SQLITE_INDEX_CONSTRAINT_OFFSET: int = 74
+"""For `Virtual Table Constraint Operator Codes <https://sqlite.org/c3ref/c_index_constraint_eq.html>'__"""
+SQLITE_INDEX_CONSTRAINT_REGEXP: int = 67
+"""For `Virtual Table Constraint Operator Codes <https://sqlite.org/c3ref/c_index_constraint_eq.html>'__"""
+SQLITE_INDEX_SCAN_UNIQUE: int = 1
+"""For `Virtual Table Scan Flags <https://sqlite.org/c3ref/c_index_scan_unique.html>'__"""
+SQLITE_INSERT: int = 18
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_INTERNAL: int = 2
+"""For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_INTERRUPT: int = 9
+"""For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOCAP_ATOMIC: int = 1
+"""For `Device Characteristics <https://sqlite.org/c3ref/c_iocap_atomic.html>'__"""
+SQLITE_IOCAP_ATOMIC16K: int = 64
+"""For `Device Characteristics <https://sqlite.org/c3ref/c_iocap_atomic.html>'__"""
+SQLITE_IOCAP_ATOMIC1K: int = 4
+"""For `Device Characteristics <https://sqlite.org/c3ref/c_iocap_atomic.html>'__"""
+SQLITE_IOCAP_ATOMIC2K: int = 8
+"""For `Device Characteristics <https://sqlite.org/c3ref/c_iocap_atomic.html>'__"""
+SQLITE_IOCAP_ATOMIC32K: int = 128
+"""For `Device Characteristics <https://sqlite.org/c3ref/c_iocap_atomic.html>'__"""
+SQLITE_IOCAP_ATOMIC4K: int = 16
+"""For `Device Characteristics <https://sqlite.org/c3ref/c_iocap_atomic.html>'__"""
+SQLITE_IOCAP_ATOMIC512: int = 2
+"""For `Device Characteristics <https://sqlite.org/c3ref/c_iocap_atomic.html>'__"""
+SQLITE_IOCAP_ATOMIC64K: int = 256
+"""For `Device Characteristics <https://sqlite.org/c3ref/c_iocap_atomic.html>'__"""
+SQLITE_IOCAP_ATOMIC8K: int = 32
+"""For `Device Characteristics <https://sqlite.org/c3ref/c_iocap_atomic.html>'__"""
+SQLITE_IOCAP_BATCH_ATOMIC: int = 16384
+"""For `Device Characteristics <https://sqlite.org/c3ref/c_iocap_atomic.html>'__"""
+SQLITE_IOCAP_IMMUTABLE: int = 8192
+"""For `Device Characteristics <https://sqlite.org/c3ref/c_iocap_atomic.html>'__"""
+SQLITE_IOCAP_POWERSAFE_OVERWRITE: int = 4096
+"""For `Device Characteristics <https://sqlite.org/c3ref/c_iocap_atomic.html>'__"""
+SQLITE_IOCAP_SAFE_APPEND: int = 512
+"""For `Device Characteristics <https://sqlite.org/c3ref/c_iocap_atomic.html>'__"""
+SQLITE_IOCAP_SEQUENTIAL: int = 1024
+"""For `Device Characteristics <https://sqlite.org/c3ref/c_iocap_atomic.html>'__"""
+SQLITE_IOCAP_UNDELETABLE_WHEN_OPEN: int = 2048
+"""For `Device Characteristics <https://sqlite.org/c3ref/c_iocap_atomic.html>'__"""
+SQLITE_IOERR: int = 10
+"""For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_ACCESS: int = 3338
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_AUTH: int = 7178
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_BEGIN_ATOMIC: int = 7434
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_BLOCKED: int = 2826
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_CHECKRESERVEDLOCK: int = 3594
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_CLOSE: int = 4106
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_COMMIT_ATOMIC: int = 7690
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_CONVPATH: int = 6666
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_CORRUPTFS: int = 8458
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_DATA: int = 8202
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_DELETE: int = 2570
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_DELETE_NOENT: int = 5898
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_DIR_CLOSE: int = 4362
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_DIR_FSYNC: int = 1290
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_FSTAT: int = 1802
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_FSYNC: int = 1034
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_GETTEMPPATH: int = 6410
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_LOCK: int = 3850
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_MMAP: int = 6154
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_NOMEM: int = 3082
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_RDLOCK: int = 2314
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_READ: int = 266
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_ROLLBACK_ATOMIC: int = 7946
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_SEEK: int = 5642
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_SHMLOCK: int = 5130
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_SHMMAP: int = 5386
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_SHMOPEN: int = 4618
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_SHMSIZE: int = 4874
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_SHORT_READ: int = 522
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_TRUNCATE: int = 1546
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_UNLOCK: int = 2058
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_VNODE: int = 6922
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_IOERR_WRITE: int = 778
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_LIMIT_ATTACHED: int = 7
+"""For `Run-Time Limit Categories <https://sqlite.org/c3ref/c_limit_attached.html>'__"""
+SQLITE_LIMIT_COLUMN: int = 2
+"""For `Run-Time Limit Categories <https://sqlite.org/c3ref/c_limit_attached.html>'__"""
+SQLITE_LIMIT_COMPOUND_SELECT: int = 4
+"""For `Run-Time Limit Categories <https://sqlite.org/c3ref/c_limit_attached.html>'__"""
+SQLITE_LIMIT_EXPR_DEPTH: int = 3
+"""For `Run-Time Limit Categories <https://sqlite.org/c3ref/c_limit_attached.html>'__"""
+SQLITE_LIMIT_FUNCTION_ARG: int = 6
+"""For `Run-Time Limit Categories <https://sqlite.org/c3ref/c_limit_attached.html>'__"""
+SQLITE_LIMIT_LENGTH: int = 0
+"""For `Run-Time Limit Categories <https://sqlite.org/c3ref/c_limit_attached.html>'__"""
+SQLITE_LIMIT_LIKE_PATTERN_LENGTH: int = 8
+"""For `Run-Time Limit Categories <https://sqlite.org/c3ref/c_limit_attached.html>'__"""
+SQLITE_LIMIT_SQL_LENGTH: int = 1
+"""For `Run-Time Limit Categories <https://sqlite.org/c3ref/c_limit_attached.html>'__"""
+SQLITE_LIMIT_TRIGGER_DEPTH: int = 10
+"""For `Run-Time Limit Categories <https://sqlite.org/c3ref/c_limit_attached.html>'__"""
+SQLITE_LIMIT_VARIABLE_NUMBER: int = 9
+"""For `Run-Time Limit Categories <https://sqlite.org/c3ref/c_limit_attached.html>'__"""
+SQLITE_LIMIT_VDBE_OP: int = 5
+"""For `Run-Time Limit Categories <https://sqlite.org/c3ref/c_limit_attached.html>'__"""
+SQLITE_LIMIT_WORKER_THREADS: int = 11
+"""For `Run-Time Limit Categories <https://sqlite.org/c3ref/c_limit_attached.html>'__"""
+SQLITE_LOCKED: int = 6
+"""For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_LOCKED_SHAREDCACHE: int = 262
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_LOCKED_VTAB: int = 518
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_LOCK_EXCLUSIVE: int = 4
+"""For `File Locking Levels <https://sqlite.org/c3ref/c_lock_exclusive.html>'__"""
+SQLITE_LOCK_NONE: int = 0
+"""For `File Locking Levels <https://sqlite.org/c3ref/c_lock_exclusive.html>'__"""
+SQLITE_LOCK_PENDING: int = 3
+"""For `File Locking Levels <https://sqlite.org/c3ref/c_lock_exclusive.html>'__"""
+SQLITE_LOCK_RESERVED: int = 2
+"""For `File Locking Levels <https://sqlite.org/c3ref/c_lock_exclusive.html>'__"""
+SQLITE_LOCK_SHARED: int = 1
+"""For `File Locking Levels <https://sqlite.org/c3ref/c_lock_exclusive.html>'__"""
+SQLITE_MISMATCH: int = 20
+"""For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_MISUSE: int = 21
+"""For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_NOLFS: int = 22
+"""For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_NOMEM: int = 7
+"""For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_NOTADB: int = 26
+"""For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_NOTFOUND: int = 12
+"""For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_NOTICE: int = 27
+"""For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_NOTICE_RECOVER_ROLLBACK: int = 539
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_NOTICE_RECOVER_WAL: int = 283
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_OK: int = 0
+"""For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_OK_LOAD_PERMANENTLY: int = 256
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_OK_SYMLINK: int = 512
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_OPEN_AUTOPROXY: int = 32
+"""For `Flags For File Open Operations <https://sqlite.org/c3ref/c_open_autoproxy.html>'__"""
+SQLITE_OPEN_CREATE: int = 4
+"""For `Flags For File Open Operations <https://sqlite.org/c3ref/c_open_autoproxy.html>'__"""
+SQLITE_OPEN_DELETEONCLOSE: int = 8
+"""For `Flags For File Open Operations <https://sqlite.org/c3ref/c_open_autoproxy.html>'__"""
+SQLITE_OPEN_EXCLUSIVE: int = 16
+"""For `Flags For File Open Operations <https://sqlite.org/c3ref/c_open_autoproxy.html>'__"""
+SQLITE_OPEN_EXRESCODE: int = 33554432
+"""For `Flags For File Open Operations <https://sqlite.org/c3ref/c_open_autoproxy.html>'__"""
+SQLITE_OPEN_FULLMUTEX: int = 65536
+"""For `Flags For File Open Operations <https://sqlite.org/c3ref/c_open_autoproxy.html>'__"""
+SQLITE_OPEN_MAIN_DB: int = 256
+"""For `Flags For File Open Operations <https://sqlite.org/c3ref/c_open_autoproxy.html>'__"""
+SQLITE_OPEN_MAIN_JOURNAL: int = 2048
+"""For `Flags For File Open Operations <https://sqlite.org/c3ref/c_open_autoproxy.html>'__"""
+SQLITE_OPEN_MEMORY: int = 128
+"""For `Flags For File Open Operations <https://sqlite.org/c3ref/c_open_autoproxy.html>'__"""
+SQLITE_OPEN_NOFOLLOW: int = 16777216
+"""For `Flags For File Open Operations <https://sqlite.org/c3ref/c_open_autoproxy.html>'__"""
+SQLITE_OPEN_NOMUTEX: int = 32768
+"""For `Flags For File Open Operations <https://sqlite.org/c3ref/c_open_autoproxy.html>'__"""
+SQLITE_OPEN_PRIVATECACHE: int = 262144
+"""For `Flags For File Open Operations <https://sqlite.org/c3ref/c_open_autoproxy.html>'__"""
+SQLITE_OPEN_READONLY: int = 1
+"""For `Flags For File Open Operations <https://sqlite.org/c3ref/c_open_autoproxy.html>'__"""
+SQLITE_OPEN_READWRITE: int = 2
+"""For `Flags For File Open Operations <https://sqlite.org/c3ref/c_open_autoproxy.html>'__"""
+SQLITE_OPEN_SHAREDCACHE: int = 131072
+"""For `Flags For File Open Operations <https://sqlite.org/c3ref/c_open_autoproxy.html>'__"""
+SQLITE_OPEN_SUBJOURNAL: int = 8192
+"""For `Flags For File Open Operations <https://sqlite.org/c3ref/c_open_autoproxy.html>'__"""
+SQLITE_OPEN_SUPER_JOURNAL: int = 16384
+"""For `Flags For File Open Operations <https://sqlite.org/c3ref/c_open_autoproxy.html>'__"""
+SQLITE_OPEN_TEMP_DB: int = 512
+"""For `Flags For File Open Operations <https://sqlite.org/c3ref/c_open_autoproxy.html>'__"""
+SQLITE_OPEN_TEMP_JOURNAL: int = 4096
+"""For `Flags For File Open Operations <https://sqlite.org/c3ref/c_open_autoproxy.html>'__"""
+SQLITE_OPEN_TRANSIENT_DB: int = 1024
+"""For `Flags For File Open Operations <https://sqlite.org/c3ref/c_open_autoproxy.html>'__"""
+SQLITE_OPEN_URI: int = 64
+"""For `Flags For File Open Operations <https://sqlite.org/c3ref/c_open_autoproxy.html>'__"""
+SQLITE_OPEN_WAL: int = 524288
+"""For `Flags For File Open Operations <https://sqlite.org/c3ref/c_open_autoproxy.html>'__"""
+SQLITE_PERM: int = 3
+"""For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_PRAGMA: int = 19
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_PREPARE_NORMALIZE: int = 2
+"""For `Prepare Flags <https://sqlite.org/c3ref/c_prepare_normalize.html>'__"""
+SQLITE_PREPARE_NO_VTAB: int = 4
+"""For `Prepare Flags <https://sqlite.org/c3ref/c_prepare_normalize.html>'__"""
+SQLITE_PREPARE_PERSISTENT: int = 1
+"""For `Prepare Flags <https://sqlite.org/c3ref/c_prepare_normalize.html>'__"""
+SQLITE_PROTOCOL: int = 15
+"""For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_RANGE: int = 25
+"""For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_READ: int = 20
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_READONLY: int = 8
+"""For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_READONLY_CANTINIT: int = 1288
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_READONLY_CANTLOCK: int = 520
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_READONLY_DBMOVED: int = 1032
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_READONLY_DIRECTORY: int = 1544
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_READONLY_RECOVERY: int = 264
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_READONLY_ROLLBACK: int = 776
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_RECURSIVE: int = 33
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_REINDEX: int = 27
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_REPLACE: int = 5
+"""For `Conflict resolution modes <https://sqlite.org/c3ref/c_fail.html>'__"""
+SQLITE_ROLLBACK: int = 1
+"""For `Conflict resolution modes <https://sqlite.org/c3ref/c_fail.html>'__"""
+SQLITE_ROW: int = 100
+"""For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_SAVEPOINT: int = 32
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_SCHEMA: int = 17
+"""For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_SELECT: int = 21
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_SHM_EXCLUSIVE: int = 8
+"""For `Flags for the xShmLock VFS method <https://sqlite.org/c3ref/c_shm_exclusive.html>'__"""
+SQLITE_SHM_LOCK: int = 2
+"""For `Flags for the xShmLock VFS method <https://sqlite.org/c3ref/c_shm_exclusive.html>'__"""
+SQLITE_SHM_SHARED: int = 4
+"""For `Flags for the xShmLock VFS method <https://sqlite.org/c3ref/c_shm_exclusive.html>'__"""
+SQLITE_SHM_UNLOCK: int = 1
+"""For `Flags for the xShmLock VFS method <https://sqlite.org/c3ref/c_shm_exclusive.html>'__"""
+SQLITE_STATUS_MALLOC_COUNT: int = 9
+"""For `Status Parameters <https://sqlite.org/c3ref/c_status_malloc_count.html>'__"""
+SQLITE_STATUS_MALLOC_SIZE: int = 5
+"""For `Status Parameters <https://sqlite.org/c3ref/c_status_malloc_count.html>'__"""
+SQLITE_STATUS_MEMORY_USED: int = 0
+"""For `Status Parameters <https://sqlite.org/c3ref/c_status_malloc_count.html>'__"""
+SQLITE_STATUS_PAGECACHE_OVERFLOW: int = 2
+"""For `Status Parameters <https://sqlite.org/c3ref/c_status_malloc_count.html>'__"""
+SQLITE_STATUS_PAGECACHE_SIZE: int = 7
+"""For `Status Parameters <https://sqlite.org/c3ref/c_status_malloc_count.html>'__"""
+SQLITE_STATUS_PAGECACHE_USED: int = 1
+"""For `Status Parameters <https://sqlite.org/c3ref/c_status_malloc_count.html>'__"""
+SQLITE_STATUS_PARSER_STACK: int = 6
+"""For `Status Parameters <https://sqlite.org/c3ref/c_status_malloc_count.html>'__"""
+SQLITE_STATUS_SCRATCH_OVERFLOW: int = 4
+"""For `Status Parameters <https://sqlite.org/c3ref/c_status_malloc_count.html>'__"""
+SQLITE_STATUS_SCRATCH_SIZE: int = 8
+"""For `Status Parameters <https://sqlite.org/c3ref/c_status_malloc_count.html>'__"""
+SQLITE_STATUS_SCRATCH_USED: int = 3
+"""For `Status Parameters <https://sqlite.org/c3ref/c_status_malloc_count.html>'__"""
+SQLITE_SYNC_DATAONLY: int = 16
+"""For `Synchronization Type Flags <https://sqlite.org/c3ref/c_sync_dataonly.html>'__"""
+SQLITE_SYNC_FULL: int = 3
+"""For `Synchronization Type Flags <https://sqlite.org/c3ref/c_sync_dataonly.html>'__"""
+SQLITE_SYNC_NORMAL: int = 2
+"""For `Synchronization Type Flags <https://sqlite.org/c3ref/c_sync_dataonly.html>'__"""
+SQLITE_TOOBIG: int = 18
+"""For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_TRANSACTION: int = 22
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_TXN_NONE: int = 0
+"""For `Allowed return values from [sqlite3_txn_state()] <https://sqlite.org/c3ref/c_txn_none.html>'__"""
+SQLITE_TXN_READ: int = 1
+"""For `Allowed return values from [sqlite3_txn_state()] <https://sqlite.org/c3ref/c_txn_none.html>'__"""
+SQLITE_TXN_WRITE: int = 2
+"""For `Allowed return values from [sqlite3_txn_state()] <https://sqlite.org/c3ref/c_txn_none.html>'__"""
+SQLITE_UPDATE: int = 23
+"""For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
+SQLITE_VTAB_CONSTRAINT_SUPPORT: int = 1
+"""For `Virtual Table Configuration Options <https://sqlite.org/c3ref/c_vtab_constraint_support.html>'__"""
+SQLITE_VTAB_DIRECTONLY: int = 3
+"""For `Virtual Table Configuration Options <https://sqlite.org/c3ref/c_vtab_constraint_support.html>'__"""
+SQLITE_VTAB_INNOCUOUS: int = 2
+"""For `Virtual Table Configuration Options <https://sqlite.org/c3ref/c_vtab_constraint_support.html>'__"""
+SQLITE_WARNING: int = 28
+"""For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_WARNING_AUTOINDEX: int = 284
+"""For `Extended Result Codes <https://sqlite.org/rescode.html>'__"""
 
 
 mapping_access: Dict[Union[str,int],Union[int,str]]
+"""Flags for the xAccess VFS method mapping names to int and int to names.
+Doc at https://sqlite.org/c3ref/c_access_exists.html
+
+SQLITE_ACCESS_EXISTS SQLITE_ACCESS_READ SQLITE_ACCESS_READWRITE"""
+
 mapping_authorizer_function: Dict[Union[str,int],Union[int,str]]
+"""Authorizer Action Codes mapping names to int and int to names.
+Doc at https://sqlite.org/c3ref/c_alter_table.html
+
+SQLITE_ALTER_TABLE SQLITE_ANALYZE SQLITE_ATTACH SQLITE_COPY
+SQLITE_CREATE_INDEX SQLITE_CREATE_TABLE SQLITE_CREATE_TEMP_INDEX
+SQLITE_CREATE_TEMP_TABLE SQLITE_CREATE_TEMP_TRIGGER
+SQLITE_CREATE_TEMP_VIEW SQLITE_CREATE_TRIGGER SQLITE_CREATE_VIEW
+SQLITE_CREATE_VTABLE SQLITE_DELETE SQLITE_DETACH SQLITE_DROP_INDEX
+SQLITE_DROP_TABLE SQLITE_DROP_TEMP_INDEX SQLITE_DROP_TEMP_TABLE
+SQLITE_DROP_TEMP_TRIGGER SQLITE_DROP_TEMP_VIEW SQLITE_DROP_TRIGGER
+SQLITE_DROP_VIEW SQLITE_DROP_VTABLE SQLITE_FUNCTION SQLITE_INSERT
+SQLITE_PRAGMA SQLITE_READ SQLITE_RECURSIVE SQLITE_REINDEX
+SQLITE_SAVEPOINT SQLITE_SELECT SQLITE_TRANSACTION SQLITE_UPDATE"""
+
 mapping_authorizer_return: Dict[Union[str,int],Union[int,str]]
+"""Authorizer Return Codes mapping names to int and int to names.
+Doc at https://sqlite.org/c3ref/c_deny.html
+
+SQLITE_DENY SQLITE_IGNORE"""
+
 mapping_bestindex_constraints: Dict[Union[str,int],Union[int,str]]
+"""Virtual Table Constraint Operator Codes mapping names to int and int to names.
+Doc at https://sqlite.org/c3ref/c_index_constraint_eq.html
+
+SQLITE_INDEX_CONSTRAINT_EQ SQLITE_INDEX_CONSTRAINT_FUNCTION
+SQLITE_INDEX_CONSTRAINT_GE SQLITE_INDEX_CONSTRAINT_GLOB
+SQLITE_INDEX_CONSTRAINT_GT SQLITE_INDEX_CONSTRAINT_IS
+SQLITE_INDEX_CONSTRAINT_ISNOT SQLITE_INDEX_CONSTRAINT_ISNOTNULL
+SQLITE_INDEX_CONSTRAINT_ISNULL SQLITE_INDEX_CONSTRAINT_LE
+SQLITE_INDEX_CONSTRAINT_LIKE SQLITE_INDEX_CONSTRAINT_LIMIT
+SQLITE_INDEX_CONSTRAINT_LT SQLITE_INDEX_CONSTRAINT_MATCH
+SQLITE_INDEX_CONSTRAINT_NE SQLITE_INDEX_CONSTRAINT_OFFSET
+SQLITE_INDEX_CONSTRAINT_REGEXP"""
+
 mapping_config: Dict[Union[str,int],Union[int,str]]
+"""Configuration Options mapping names to int and int to names.
+Doc at https://sqlite.org/c3ref/c_config_covering_index_scan.html
+
+SQLITE_CONFIG_COVERING_INDEX_SCAN SQLITE_CONFIG_GETMALLOC
+SQLITE_CONFIG_GETMUTEX SQLITE_CONFIG_GETPCACHE
+SQLITE_CONFIG_GETPCACHE2 SQLITE_CONFIG_HEAP SQLITE_CONFIG_LOG
+SQLITE_CONFIG_LOOKASIDE SQLITE_CONFIG_MALLOC
+SQLITE_CONFIG_MEMDB_MAXSIZE SQLITE_CONFIG_MEMSTATUS
+SQLITE_CONFIG_MMAP_SIZE SQLITE_CONFIG_MULTITHREAD SQLITE_CONFIG_MUTEX
+SQLITE_CONFIG_PAGECACHE SQLITE_CONFIG_PCACHE SQLITE_CONFIG_PCACHE2
+SQLITE_CONFIG_PCACHE_HDRSZ SQLITE_CONFIG_PMASZ SQLITE_CONFIG_SCRATCH
+SQLITE_CONFIG_SERIALIZED SQLITE_CONFIG_SINGLETHREAD
+SQLITE_CONFIG_SMALL_MALLOC SQLITE_CONFIG_SORTERREF_SIZE
+SQLITE_CONFIG_SQLLOG SQLITE_CONFIG_STMTJRNL_SPILL SQLITE_CONFIG_URI
+SQLITE_CONFIG_WIN32_HEAPSIZE"""
+
 mapping_conflict_resolution_modes: Dict[Union[str,int],Union[int,str]]
+"""Conflict resolution modes mapping names to int and int to names.
+Doc at https://sqlite.org/c3ref/c_fail.html
+
+SQLITE_FAIL SQLITE_REPLACE SQLITE_ROLLBACK"""
+
 mapping_db_config: Dict[Union[str,int],Union[int,str]]
+"""Database Connection Configuration Options mapping names to int and int to names.
+Doc at https://sqlite.org/c3ref/c_dbconfig_defensive.html
+
+SQLITE_DBCONFIG_DEFENSIVE SQLITE_DBCONFIG_DQS_DDL
+SQLITE_DBCONFIG_DQS_DML SQLITE_DBCONFIG_ENABLE_FKEY
+SQLITE_DBCONFIG_ENABLE_FTS3_TOKENIZER
+SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION SQLITE_DBCONFIG_ENABLE_QPSG
+SQLITE_DBCONFIG_ENABLE_TRIGGER SQLITE_DBCONFIG_ENABLE_VIEW
+SQLITE_DBCONFIG_LEGACY_ALTER_TABLE SQLITE_DBCONFIG_LEGACY_FILE_FORMAT
+SQLITE_DBCONFIG_LOOKASIDE SQLITE_DBCONFIG_MAINDBNAME
+SQLITE_DBCONFIG_MAX SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE
+SQLITE_DBCONFIG_RESET_DATABASE SQLITE_DBCONFIG_TRIGGER_EQP
+SQLITE_DBCONFIG_TRUSTED_SCHEMA SQLITE_DBCONFIG_WRITABLE_SCHEMA"""
+
 mapping_db_status: Dict[Union[str,int],Union[int,str]]
+"""Status Parameters for database connections mapping names to int and int to names.
+Doc at https://sqlite.org/c3ref/c_dbstatus_options.html
+
+SQLITE_DBSTATUS_CACHE_HIT SQLITE_DBSTATUS_CACHE_MISS
+SQLITE_DBSTATUS_CACHE_SPILL SQLITE_DBSTATUS_CACHE_USED
+SQLITE_DBSTATUS_CACHE_USED_SHARED SQLITE_DBSTATUS_CACHE_WRITE
+SQLITE_DBSTATUS_DEFERRED_FKS SQLITE_DBSTATUS_LOOKASIDE_HIT
+SQLITE_DBSTATUS_LOOKASIDE_MISS_FULL
+SQLITE_DBSTATUS_LOOKASIDE_MISS_SIZE SQLITE_DBSTATUS_LOOKASIDE_USED
+SQLITE_DBSTATUS_MAX SQLITE_DBSTATUS_SCHEMA_USED
+SQLITE_DBSTATUS_STMT_USED"""
+
 mapping_device_characteristics: Dict[Union[str,int],Union[int,str]]
+"""Device Characteristics mapping names to int and int to names.
+Doc at https://sqlite.org/c3ref/c_iocap_atomic.html
+
+SQLITE_IOCAP_ATOMIC SQLITE_IOCAP_ATOMIC16K SQLITE_IOCAP_ATOMIC1K
+SQLITE_IOCAP_ATOMIC2K SQLITE_IOCAP_ATOMIC32K SQLITE_IOCAP_ATOMIC4K
+SQLITE_IOCAP_ATOMIC512 SQLITE_IOCAP_ATOMIC64K SQLITE_IOCAP_ATOMIC8K
+SQLITE_IOCAP_BATCH_ATOMIC SQLITE_IOCAP_IMMUTABLE
+SQLITE_IOCAP_POWERSAFE_OVERWRITE SQLITE_IOCAP_SAFE_APPEND
+SQLITE_IOCAP_SEQUENTIAL SQLITE_IOCAP_UNDELETABLE_WHEN_OPEN"""
+
 mapping_extended_result_codes: Dict[Union[str,int],Union[int,str]]
+"""Extended Result Codes mapping names to int and int to names.
+Doc at https://sqlite.org/rescode.html
+
+SQLITE_ABORT_ROLLBACK SQLITE_AUTH_USER SQLITE_BUSY_RECOVERY
+SQLITE_BUSY_SNAPSHOT SQLITE_BUSY_TIMEOUT SQLITE_CANTOPEN_CONVPATH
+SQLITE_CANTOPEN_DIRTYWAL SQLITE_CANTOPEN_FULLPATH
+SQLITE_CANTOPEN_ISDIR SQLITE_CANTOPEN_NOTEMPDIR
+SQLITE_CANTOPEN_SYMLINK SQLITE_CONSTRAINT_CHECK
+SQLITE_CONSTRAINT_COMMITHOOK SQLITE_CONSTRAINT_DATATYPE
+SQLITE_CONSTRAINT_FOREIGNKEY SQLITE_CONSTRAINT_FUNCTION
+SQLITE_CONSTRAINT_NOTNULL SQLITE_CONSTRAINT_PINNED
+SQLITE_CONSTRAINT_PRIMARYKEY SQLITE_CONSTRAINT_ROWID
+SQLITE_CONSTRAINT_TRIGGER SQLITE_CONSTRAINT_UNIQUE
+SQLITE_CONSTRAINT_VTAB SQLITE_CORRUPT_INDEX SQLITE_CORRUPT_SEQUENCE
+SQLITE_CORRUPT_VTAB SQLITE_ERROR_MISSING_COLLSEQ SQLITE_ERROR_RETRY
+SQLITE_ERROR_SNAPSHOT SQLITE_IOERR_ACCESS SQLITE_IOERR_AUTH
+SQLITE_IOERR_BEGIN_ATOMIC SQLITE_IOERR_BLOCKED
+SQLITE_IOERR_CHECKRESERVEDLOCK SQLITE_IOERR_CLOSE
+SQLITE_IOERR_COMMIT_ATOMIC SQLITE_IOERR_CONVPATH
+SQLITE_IOERR_CORRUPTFS SQLITE_IOERR_DATA SQLITE_IOERR_DELETE
+SQLITE_IOERR_DELETE_NOENT SQLITE_IOERR_DIR_CLOSE
+SQLITE_IOERR_DIR_FSYNC SQLITE_IOERR_FSTAT SQLITE_IOERR_FSYNC
+SQLITE_IOERR_GETTEMPPATH SQLITE_IOERR_LOCK SQLITE_IOERR_MMAP
+SQLITE_IOERR_NOMEM SQLITE_IOERR_RDLOCK SQLITE_IOERR_READ
+SQLITE_IOERR_ROLLBACK_ATOMIC SQLITE_IOERR_SEEK SQLITE_IOERR_SHMLOCK
+SQLITE_IOERR_SHMMAP SQLITE_IOERR_SHMOPEN SQLITE_IOERR_SHMSIZE
+SQLITE_IOERR_SHORT_READ SQLITE_IOERR_TRUNCATE SQLITE_IOERR_UNLOCK
+SQLITE_IOERR_VNODE SQLITE_IOERR_WRITE SQLITE_LOCKED_SHAREDCACHE
+SQLITE_LOCKED_VTAB SQLITE_NOTICE_RECOVER_ROLLBACK
+SQLITE_NOTICE_RECOVER_WAL SQLITE_OK_LOAD_PERMANENTLY SQLITE_OK_SYMLINK
+SQLITE_READONLY_CANTINIT SQLITE_READONLY_CANTLOCK
+SQLITE_READONLY_DBMOVED SQLITE_READONLY_DIRECTORY
+SQLITE_READONLY_RECOVERY SQLITE_READONLY_ROLLBACK
+SQLITE_WARNING_AUTOINDEX"""
+
 mapping_file_control: Dict[Union[str,int],Union[int,str]]
+"""Standard File Control Opcodes mapping names to int and int to names.
+Doc at https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html
+
+SQLITE_FCNTL_BEGIN_ATOMIC_WRITE SQLITE_FCNTL_BUSYHANDLER
+SQLITE_FCNTL_CHUNK_SIZE SQLITE_FCNTL_CKPT_DONE SQLITE_FCNTL_CKPT_START
+SQLITE_FCNTL_CKSM_FILE SQLITE_FCNTL_COMMIT_ATOMIC_WRITE
+SQLITE_FCNTL_COMMIT_PHASETWO SQLITE_FCNTL_DATA_VERSION
+SQLITE_FCNTL_EXTERNAL_READER SQLITE_FCNTL_FILE_POINTER
+SQLITE_FCNTL_GET_LOCKPROXYFILE SQLITE_FCNTL_HAS_MOVED
+SQLITE_FCNTL_JOURNAL_POINTER SQLITE_FCNTL_LAST_ERRNO
+SQLITE_FCNTL_LOCKSTATE SQLITE_FCNTL_LOCK_TIMEOUT
+SQLITE_FCNTL_MMAP_SIZE SQLITE_FCNTL_OVERWRITE SQLITE_FCNTL_PDB
+SQLITE_FCNTL_PERSIST_WAL SQLITE_FCNTL_POWERSAFE_OVERWRITE
+SQLITE_FCNTL_PRAGMA SQLITE_FCNTL_RBU SQLITE_FCNTL_RESERVE_BYTES
+SQLITE_FCNTL_ROLLBACK_ATOMIC_WRITE SQLITE_FCNTL_SET_LOCKPROXYFILE
+SQLITE_FCNTL_SIZE_HINT SQLITE_FCNTL_SIZE_LIMIT SQLITE_FCNTL_SYNC
+SQLITE_FCNTL_SYNC_OMITTED SQLITE_FCNTL_TEMPFILENAME SQLITE_FCNTL_TRACE
+SQLITE_FCNTL_VFSNAME SQLITE_FCNTL_VFS_POINTER SQLITE_FCNTL_WAL_BLOCK
+SQLITE_FCNTL_WIN32_AV_RETRY SQLITE_FCNTL_WIN32_GET_HANDLE
+SQLITE_FCNTL_WIN32_SET_HANDLE SQLITE_FCNTL_ZIPVFS"""
+
 mapping_limits: Dict[Union[str,int],Union[int,str]]
+"""Run-Time Limit Categories mapping names to int and int to names.
+Doc at https://sqlite.org/c3ref/c_limit_attached.html
+
+SQLITE_LIMIT_ATTACHED SQLITE_LIMIT_COLUMN SQLITE_LIMIT_COMPOUND_SELECT
+SQLITE_LIMIT_EXPR_DEPTH SQLITE_LIMIT_FUNCTION_ARG SQLITE_LIMIT_LENGTH
+SQLITE_LIMIT_LIKE_PATTERN_LENGTH SQLITE_LIMIT_SQL_LENGTH
+SQLITE_LIMIT_TRIGGER_DEPTH SQLITE_LIMIT_VARIABLE_NUMBER
+SQLITE_LIMIT_VDBE_OP SQLITE_LIMIT_WORKER_THREADS"""
+
 mapping_locking_level: Dict[Union[str,int],Union[int,str]]
+"""File Locking Levels mapping names to int and int to names.
+Doc at https://sqlite.org/c3ref/c_lock_exclusive.html
+
+SQLITE_LOCK_EXCLUSIVE SQLITE_LOCK_NONE SQLITE_LOCK_PENDING
+SQLITE_LOCK_RESERVED SQLITE_LOCK_SHARED"""
+
 mapping_open_flags: Dict[Union[str,int],Union[int,str]]
+"""Flags For File Open Operations mapping names to int and int to names.
+Doc at https://sqlite.org/c3ref/c_open_autoproxy.html
+
+SQLITE_OPEN_AUTOPROXY SQLITE_OPEN_CREATE SQLITE_OPEN_DELETEONCLOSE
+SQLITE_OPEN_EXCLUSIVE SQLITE_OPEN_EXRESCODE SQLITE_OPEN_FULLMUTEX
+SQLITE_OPEN_MAIN_DB SQLITE_OPEN_MAIN_JOURNAL SQLITE_OPEN_MEMORY
+SQLITE_OPEN_NOFOLLOW SQLITE_OPEN_NOMUTEX SQLITE_OPEN_PRIVATECACHE
+SQLITE_OPEN_READONLY SQLITE_OPEN_READWRITE SQLITE_OPEN_SHAREDCACHE
+SQLITE_OPEN_SUBJOURNAL SQLITE_OPEN_SUPER_JOURNAL SQLITE_OPEN_TEMP_DB
+SQLITE_OPEN_TEMP_JOURNAL SQLITE_OPEN_TRANSIENT_DB SQLITE_OPEN_URI
+SQLITE_OPEN_WAL"""
+
 mapping_prepare_flags: Dict[Union[str,int],Union[int,str]]
+"""Prepare Flags mapping names to int and int to names.
+Doc at https://sqlite.org/c3ref/c_prepare_normalize.html
+
+SQLITE_PREPARE_NORMALIZE SQLITE_PREPARE_NO_VTAB
+SQLITE_PREPARE_PERSISTENT"""
+
 mapping_result_codes: Dict[Union[str,int],Union[int,str]]
+"""Result Codes mapping names to int and int to names.
+Doc at https://sqlite.org/rescode.html
+
+SQLITE_ABORT SQLITE_AUTH SQLITE_BUSY SQLITE_CANTOPEN SQLITE_CONSTRAINT
+SQLITE_CORRUPT SQLITE_DONE SQLITE_EMPTY SQLITE_ERROR SQLITE_FORMAT
+SQLITE_FULL SQLITE_INTERNAL SQLITE_INTERRUPT SQLITE_IOERR
+SQLITE_LOCKED SQLITE_MISMATCH SQLITE_MISUSE SQLITE_NOLFS SQLITE_NOMEM
+SQLITE_NOTADB SQLITE_NOTFOUND SQLITE_NOTICE SQLITE_OK SQLITE_PERM
+SQLITE_PROTOCOL SQLITE_RANGE SQLITE_READONLY SQLITE_ROW SQLITE_SCHEMA
+SQLITE_TOOBIG SQLITE_WARNING"""
+
 mapping_status: Dict[Union[str,int],Union[int,str]]
+"""Status Parameters mapping names to int and int to names.
+Doc at https://sqlite.org/c3ref/c_status_malloc_count.html
+
+SQLITE_STATUS_MALLOC_COUNT SQLITE_STATUS_MALLOC_SIZE
+SQLITE_STATUS_MEMORY_USED SQLITE_STATUS_PAGECACHE_OVERFLOW
+SQLITE_STATUS_PAGECACHE_SIZE SQLITE_STATUS_PAGECACHE_USED
+SQLITE_STATUS_PARSER_STACK SQLITE_STATUS_SCRATCH_OVERFLOW
+SQLITE_STATUS_SCRATCH_SIZE SQLITE_STATUS_SCRATCH_USED"""
+
 mapping_sync: Dict[Union[str,int],Union[int,str]]
+"""Synchronization Type Flags mapping names to int and int to names.
+Doc at https://sqlite.org/c3ref/c_sync_dataonly.html
+
+SQLITE_SYNC_DATAONLY SQLITE_SYNC_FULL SQLITE_SYNC_NORMAL"""
+
 mapping_txn_state: Dict[Union[str,int],Union[int,str]]
+"""Allowed return values from [sqlite3_txn_state()] mapping names to int and int to names.
+Doc at https://sqlite.org/c3ref/c_txn_none.html
+
+SQLITE_TXN_NONE SQLITE_TXN_READ SQLITE_TXN_WRITE"""
+
 mapping_virtual_table_configuration_options: Dict[Union[str,int],Union[int,str]]
+"""Virtual Table Configuration Options mapping names to int and int to names.
+Doc at https://sqlite.org/c3ref/c_vtab_constraint_support.html
+
+SQLITE_VTAB_CONSTRAINT_SUPPORT SQLITE_VTAB_DIRECTONLY
+SQLITE_VTAB_INNOCUOUS"""
+
 mapping_virtual_table_scan_flags: Dict[Union[str,int],Union[int,str]]
+"""Virtual Table Scan Flags mapping names to int and int to names.
+Doc at https://sqlite.org/c3ref/c_index_scan_unique.html
+
+SQLITE_INDEX_SCAN_UNIQUE"""
+
 mapping_wal_checkpoint: Dict[Union[str,int],Union[int,str]]
+"""Checkpoint Mode Values mapping names to int and int to names.
+Doc at https://sqlite.org/c3ref/c_checkpoint_full.html
+
+SQLITE_CHECKPOINT_FULL SQLITE_CHECKPOINT_PASSIVE
+SQLITE_CHECKPOINT_RESTART SQLITE_CHECKPOINT_TRUNCATE"""
+
 mapping_xshmlock_flags: Dict[Union[str,int],Union[int,str]]
+"""Flags for the xShmLock VFS method mapping names to int and int to names.
+Doc at https://sqlite.org/c3ref/c_shm_exclusive.html
+
+SQLITE_SHM_EXCLUSIVE SQLITE_SHM_LOCK SQLITE_SHM_SHARED
+SQLITE_SHM_UNLOCK"""
 
 
-class Error(Exception): ...
-class AbortError(Error): ...
-class AuthError(Error): ...
-class BindingsError(Error): ...
-class BusyError(Error): ...
-class CantOpenError(Error): ...
-class ConnectionClosedError(Error): ...
-class ConnectionNotClosedError(Error): ...
-class ConstraintError(Error): ...
-class CorruptError(Error): ...
-class CursorClosedError(Error): ...
-class EmptyError(Error): ...
-class ExecTraceAbort(Error): ...
-class ExecutionCompleteError(Error): ...
-class ExtensionLoadingError(Error): ...
-class ForkingViolationError(Error): ...
-class FormatError(Error): ...
-class FullError(Error): ...
-class IOError(Error): ...
-class IncompleteExecutionError(Error): ...
-class InternalError(Error): ...
-class InterruptError(Error): ...
-class LockedError(Error): ...
-class MismatchError(Error): ...
-class MisuseError(Error): ...
-class NoLFSError(Error): ...
-class NoMemError(Error): ...
-class NotADBError(Error): ...
-class NotFoundError(Error): ...
-class PermissionsError(Error): ...
-class ProtocolError(Error): ...
-class RangeError(Error): ...
-class ReadOnlyError(Error): ...
-class SQLError(Error): ...
-class SchemaChangeError(Error): ...
-class ThreadingViolationError(Error): ...
-class TooBigError(Error): ...
-class VFSFileClosedError(Error): ...
-class VFSNotImplementedError(Error): ...
+
+class Error(Exception):
+    """This is the base for APSW exceptions."""
+
+class AbortError(Error):
+    """:const:`SQLITE_ABORT`. Callback routine requested an abort."""
+
+class AuthError(Error):
+    """:const:`SQLITE_AUTH`.  :attr:`Authorization <Connection.authorizer>` denied."""
+
+class BindingsError(Error):
+    """There are several causes for this exception.  When using tuples, an incorrect number of bindings where supplied::
+
+       cursor.execute("select ?,?,?", (1,2))     # too few bindings
+       cursor.execute("select ?,?,?", (1,2,3,4)) # too many bindings
+
+    You are using named bindings, but not all bindings are named.  You should either use entirely the
+    named style or entirely numeric (unnamed) style::
+
+       cursor.execute("select * from foo where x=:name and y=?")
+
+    .. note::
+
+       It is not considered an error to have missing keys in a dictionary. For example this is perfectly valid::
+
+            cursor.execute("insert into foo values($a,:b,$c)", {'a': 1})
+
+       *b* and *c* are not in the dict.  For missing keys, None/NULL
+       will be used. This is so you don't have to add lots of spurious
+       values to the supplied dict. If your schema requires every column
+       have a value, then SQLite will generate an error due to some
+       values being None/NULL so that case will be caught."""
+
+class BusyError(Error):
+    """:const:`SQLITE_BUSY`.  The database file is locked.  Use
+    :meth:`Connection.setbusytimeout` to change how long SQLite waits
+    for the database to be unlocked or :meth:`Connection.setbusyhandler`
+    to use your own handler."""
+
+class CantOpenError(Error):
+    """:const:`SQLITE_CANTOPEN`.  Unable to open the database file."""
+
+class ConnectionClosedError(Error):
+    """You have called :meth:`Connection.close` and then continued to use
+    the :class:`Connection` or associated :class:`cursors <Cursor>`."""
+
+class ConnectionNotClosedError(Error):
+    """This exception is no longer generated.  It was required in earlier
+    releases due to constraints in threading usage with SQLite."""
+
+class ConstraintError(Error):
+    """:const:`SQLITE_CONSTRAINT`. Abort due to `constraint
+    <https://sqlite.org/lang_createtable.html>`_ violation.  This
+    would happen if the schema required a column to be within a specific
+    range.  If you have multiple constraints, you `can't tell
+    <https://sqlite.org/src/tktview/23b212820161c6599cbf414aa99bf8a5bfa5e7a3>`__
+    which one was the cause."""
+
+class CorruptError(Error):
+    """:const:`SQLITE_CORRUPT`.  The database disk image appears to be a
+    SQLite database but the values inside are inconsistent."""
+
+class CursorClosedError(Error):
+    """You have called :meth:`Cursor.close` and then tried to use the cursor."""
+
+class EmptyError(Error):
+    """:const:`SQLITE_EMPTY`. Database is completely empty."""
+
+class ExecTraceAbort(Error):
+    """The :ref:`execution tracer <executiontracer>` returned False so
+    execution was aborted."""
+
+class ExecutionCompleteError(Error):
+    """A statement is complete but you try to run it more anyway!"""
+
+class ExtensionLoadingError(Error):
+    """An error happened loading an `extension
+    <https://sqlite.org/cvstrac/wiki/wiki?p=LoadableExtensions>`_."""
+
+class ForkingViolationError(Error):
+    """See :meth:`apsw.fork_checker`."""
+
+class FormatError(Error):
+    """:const:`SQLITE_FORMAT`. (No longer used) `Auxiliary database <https://sqlite.org/lang_attach.html>`_ format error."""
+
+class FullError(Error):
+    """:const:`SQLITE_FULL`.  The disk appears to be full."""
+
+class IOError(Error):
+    """:const:`SQLITE_IOERR`.  Some kind of disk I/O error occurred.  The
+    :ref:`extended error code <exceptions>` will give more detail."""
+
+class IncompleteExecutionError(Error):
+    """You have tried to start a new SQL execute call before executing all
+    the previous ones. See the :ref:`execution model <executionmodel>`
+    for more details."""
+
+class InternalError(Error):
+    """:const:`SQLITE_INTERNAL`. (No longer used) Internal logic error in SQLite."""
+
+class InterruptError(Error):
+    """:const:`SQLITE_INTERRUPT`.  Operation terminated by
+    `sqlite3_interrupt <https://sqlite.org/c3ref/interrupt.html>`_ -
+    use :meth:`Connection.interrupt`."""
+
+class LockedError(Error):
+    """:const:`SQLITE_LOCKED`.  A table in the database is locked."""
+
+class MismatchError(Error):
+    """:const:`SQLITE_MISMATCH`. Data type mismatch.  For example a rowid
+    or integer primary key must be an integer."""
+
+class MisuseError(Error):
+    """:const:`SQLITE_MISUSE`.  SQLite library used incorrectly - typically similar to ValueError in Python.  Examples include not
+    having enough flags when opening a connection (eg not including a READ or WRITE flag), or out of spec such as registering
+    a function with more than 127 parameters."""
+
+class NoLFSError(Error):
+    """:const:`SQLITE_NOLFS`.  SQLite has attempted to use a feature not
+    supported by the operating system such as `large file support
+    <http://en.wikipedia.org/wiki/Large_file_support>`_."""
+
+class NoMemError(Error):
+    """:const:`SQLITE_NOMEM`.  A memory allocation failed."""
+
+class NotADBError(Error):
+    """:const:`SQLITE_NOTADB`.  File opened that is not a database file.
+    SQLite has a header on database files to verify they are indeed
+    SQLite databases."""
+
+class NotFoundError(Error):
+    """:const:`SQLITE_NOTFOUND`. Returned when various internal items were
+    not found such as requests for non-existent system calls or file
+    controls."""
+
+class PermissionsError(Error):
+    """:const:`SQLITE_PERM`. Access permission denied by the operating system, or parts of the database are readonly such as a cursor."""
+
+class ProtocolError(Error):
+    """:const:`SQLITE_PROTOCOL`. (No longer used) Database lock protocol error."""
+
+class RangeError(Error):
+    """:const:`SQLITE_RANGE`.  (Cannot be generated using APSW).  2nd parameter to `sqlite3_bind <https://sqlite.org/c3ref/bind_blob.html>`_ out of range"""
+
+class ReadOnlyError(Error):
+    """:const:`SQLITE_READONLY`. Attempt to write to a readonly database."""
+
+class SQLError(Error):
+    """:const:`SQLITE_ERROR`.  This error is documented as a bad SQL query
+    or missing database, but is also returned for a lot of other
+    situations.  It is the default error code unless there is a more
+    specific one."""
+
+class SchemaChangeError(Error):
+    """:const:`SQLITE_SCHEMA`.  The database schema changed.  A
+    :meth:`prepared statement <Cursor.execute>` becomes invalid
+    if the database schema was changed.  Behind the scenes SQLite
+    reprepares the statement.  Another or the same :class:`Connection`
+    may change the schema again before the statement runs.  SQLite will
+    attempt up to 5 times before giving up and returning this error."""
+
+class ThreadingViolationError(Error):
+    """You have used an object concurrently in two threads. For example you
+    may try to use the same cursor in two different threads at the same
+    time, or tried to close the same connection in two threads at the
+    same time.
+
+    You can also get this exception by using a cursor as an argument to
+    itself (eg as the input data for :meth:`Cursor.executemany`).
+    Cursors can only be used for one thing at a time."""
+
+class TooBigError(Error):
+    """:const:`SQLITE_TOOBIG`.  String or BLOB exceeds size limit.  You can
+    change the limits using :meth:`Connection.limit`."""
+
+class VFSFileClosedError(Error):
+    """The VFS file is closed so the operation cannot be performed."""
+
+class VFSNotImplementedError(Error):
+    """A call cannot be made to an inherited :ref:`VFS` method as the VFS
+    does not implement the method."""
+

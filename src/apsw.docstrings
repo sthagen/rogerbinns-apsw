@@ -174,6 +174,7 @@
 ".. seealso::\n" \
 "  :meth:`status`\n" \
 "\n" \
+"\n" \
 "Calls: `sqlite3_memory_used <https://sqlite.org/c3ref/memory_highwater.html>`__\n" 
 
 #define  Apsw_randomness_DOC "randomness($self,amount)\n--\n\napsw.randomness(amount: int)  -> bytes\n\n" \
@@ -264,6 +265,8 @@
 "Returns a list of the currently installed :ref:`vfs <vfs>`.  The first\n" \
 "item in the list is the default vfs.\n" 
 
+#define  Backup_class_DOC "You create a backup instance by calling :meth:`Connection.backup`.\n" 
+
 #define  Backup_close_DOC "close($self,force=False)\n--\n\nBackup.close(force: bool = False) -> None\n\n" \
 "Does the same thing as :meth:`~backup.finish`.  This extra api is\n" \
 "provided to give the same api as other APSW objects such as\n" \
@@ -313,9 +316,6 @@
 "\n" \
 "Calls: `sqlite3_backup_finish <https://sqlite.org/c3ref/backup_finish.html#sqlite3backupfinish>`__\n" 
 
-#define  Backup_init_DOC "__init__($self)\n--\n\nBackup.__init__() -> None\n\n" \
-"You create a backup instance by calling :meth:`Connection.backup`.\n" 
-
 #define  Backup_pagecount_DOC ":type: int\n" \
 "\n" \
 "Read only. How many pages were in the source database after the last\n" \
@@ -360,6 +360,20 @@
   assert(npages == (-1)); \
 } while(0)
 
+
+#define  Blob_class_DOC "This object is created by :meth:`Connection.blobopen` and provides\n" \
+"access to a blob in the database.  It behaves like a Python file.\n" \
+"At the C level it wraps a `sqlite3_blob\n" \
+"<https://sqlite.org/c3ref/blob.html>`_.\n" \
+"\n" \
+".. note::\n" \
+"\n" \
+"  You cannot change the size of a blob using this object. You should\n" \
+"  create it with the correct size in advance either by using\n" \
+"  :class:`zeroblob` or the `zeroblob()\n" \
+"  <https://sqlite.org/lang_corefunc.html>`_ function.\n" \
+"\n" \
+"See the :ref:`example <example-blobio>`.\n" 
 
 #define  Blob_close_DOC "close($self,force=False)\n--\n\nBlob.close(force: bool = False) -> None\n\n" \
 "Closes the blob.  Note that even if an error occurs the blob is\n" \
@@ -406,21 +420,6 @@
 "Implements context manager in conjunction with\n" \
 ":meth:`~blob.__enter__`.  Any exception that happened in the\n" \
 "*with* block is raised after closing the blob.\n" 
-
-#define  Blob_init_DOC "__init__($self)\n--\n\nBlob.__init__() -> None\n\n" \
-"This object is created by :meth:`Connection.blobopen` and provides\n" \
-"access to a blob in the database.  It behaves like a Python file.\n" \
-"At the C level it wraps a `sqlite3_blob\n" \
-"<https://sqlite.org/c3ref/blob.html>`_.\n" \
-"\n" \
-".. note::\n" \
-"\n" \
-"  You cannot change the size of a blob using this object. You should\n" \
-"  create it with the correct size in advance either by using\n" \
-"  :class:`zeroblob` or the `zeroblob()\n" \
-"  <https://sqlite.org/lang_corefunc.html>`_ function.\n" \
-"\n" \
-"See the :ref:`example <example-blobio>`.\n" 
 
 #define  Blob_length_DOC "length($self)\n--\n\nBlob.length() -> int\n\n" \
 "Returns the size of the blob in bytes.\n" \
@@ -641,7 +640,63 @@
 
 
 #define  Connection_cache_stats_DOC "cache_stats($self,include_entries=False)\n--\n\nConnection.cache_stats(include_entries: bool = False) -> Dict[str, int]\n\n" \
-"Returns information about the statement cache as dict.\n" 
+"Returns information about the statement cache as dict.\n" \
+"\n" \
+".. note::\n" \
+"\n" \
+"  Calling execute with \"select a; select b; insert into c ...\" will\n" \
+"  result in 3 cache entries corresponding to each of the 3 queries\n" \
+"  present.\n" \
+"\n" \
+"The returned dictionary has the following information.\n" \
+"\n" \
+".. list-table::\n" \
+"  :header-rows: 1\n" \
+"  :widths: auto\n" \
+"\n" \
+"  * - Key\n" \
+"    - Explanation\n" \
+"  * - size\n" \
+"    - Maximum number of entries in the cache\n" \
+"  * - evictions\n" \
+"    - How many entries were removed (expired) to make space for a newer\n" \
+"      entry\n" \
+"  * - no_cache\n" \
+"    - Queries that had can_cache parameter set to False\n" \
+"  * - hits\n" \
+"    - A match was found in the cache\n" \
+"  * - misses\n" \
+"    - No match was found in the cache, or the cache couldn't be used\n" \
+"  * - no_vdbe\n" \
+"    - The statement was empty (eg a comment) or SQLite took action\n" \
+"      during parsing (eg some pragmas).  These are not cached and also\n" \
+"      included in the misses count\n" \
+"  * - too_big\n" \
+"    - UTF8 query size was larger than considered for caching.  These are also included\n" \
+"      in the misses count.\n" \
+"  * - max_cacheable_bytes\n" \
+"    - Maximum size of query (in bytes of utf8) that will be considered for caching\n" \
+"  * - entries\n" \
+"    - (Only present if `include_entries` is True) A list of the cache entries\n" \
+"\n" \
+"If `entries` is present, then each list entry is a dict with the following information.\n" \
+"\n" \
+".. list-table::\n" \
+"  :header-rows: 1\n" \
+"  :widths: auto\n" \
+"\n" \
+"  * - Key\n" \
+"    - Explanation\n" \
+"  * - query\n" \
+"    - Text of the query itself (first statement only)\n" \
+"  * - prepare_flags\n" \
+"    - Flags passed to `sqlite3_prepare_v3 <https://sqlite.org/c3ref/prepare.html>`__\n" \
+"      for this query\n" \
+"  * - uses\n" \
+"    - How many times this entry has been (re)used\n" \
+"  * - has_more\n" \
+"    - Boolean indicating if there was more query text than\n" \
+"      the first statement\n" 
 
 #define Connection_cache_stats_USAGE "Connection.cache_stats(include_entries: bool = False) -> Dict[str, int]"
 
@@ -657,6 +712,9 @@
 "statement.\n" \
 "\n" \
 "Calls: `sqlite3_changes64 <https://sqlite.org/c3ref/changes.html>`__\n" 
+
+#define  Connection_class_DOC "This object wraps a `sqlite3 pointer\n" \
+"<https://sqlite.org/c3ref/sqlite3.html>`_.\n" 
 
 #define  Connection_close_DOC "close($self,force=False)\n--\n\nConnection.close(force: bool = False) -> None\n\n" \
 "Closes the database.  If there are any outstanding :class:`cursors\n" \
@@ -939,11 +997,11 @@
 "\n" \
 ":param enable: If True then extension loading is enabled, else it is disabled.\n" \
 "\n" \
+"Calls: `sqlite3_enable_load_extension <https://sqlite.org/c3ref/enable_load_extension.html>`__\n" \
+"\n" \
 ".. seealso::\n" \
 "\n" \
-"  * :meth:`~Connection.loadextension`\n" \
-"\n" \
-"Calls: `sqlite3_enable_load_extension <https://sqlite.org/c3ref/enable_load_extension.html>`__\n" 
+"  * :meth:`~Connection.loadextension`\n" 
 
 #define Connection_enableloadextension_USAGE "Connection.enableloadextension(enable: bool) -> None"
 
@@ -1094,9 +1152,6 @@
 "Calls: `sqlite3_get_autocommit <https://sqlite.org/c3ref/get_autocommit.html>`__\n" 
 
 #define  Connection_init_DOC "__init__($self,filename,flags=SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,vfs=None,statementcachesize=100)\n--\n\nConnection.__init__(filename: str, flags: int = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, vfs: Optional[str] = None, statementcachesize: int = 100)\n\n" \
-"This object wraps a `sqlite3 pointer\n" \
-"<https://sqlite.org/c3ref/sqlite3.html>`_.\n" \
-"\n" \
 "Opens the named database.  You can use ``:memory:`` to get a private temporary\n" \
 "in-memory database that is not shared with any other connections.\n" \
 "\n" \
@@ -1108,13 +1163,13 @@
 "  or a number larger than the total distinct SQL statements you\n" \
 "  execute frequently.\n" \
 "\n" \
+"Calls: `sqlite3_open_v2 <https://sqlite.org/c3ref/open.html>`__\n" \
+"\n" \
 ".. seealso::\n" \
 "\n" \
 "  * :attr:`apsw.connection_hooks`\n" \
 "  * :ref:`statementcache`\n" \
-"  * :ref:`vfs`\n" \
-"\n" \
-"Calls: `sqlite3_open_v2 <https://sqlite.org/c3ref/open.html>`__\n" 
+"  * :ref:`vfs`\n" 
 
 #define Connection_init_USAGE "Connection.__init__(filename: str, flags: int = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, vfs: Optional[str] = None, statementcachesize: int = 100)"
 
@@ -1147,16 +1202,17 @@
 "If called with one parameter then the current limit for that *id* is\n" \
 "returned.  If called with two then the limit is set to *newval*.\n" \
 "\n" \
+"\n" \
 ":param id: One of the `runtime limit ids <https://sqlite.org/c3ref/c_limit_attached.html>`_\n" \
 ":param newval: The new limit.  This is a 32 bit signed integer even on 64 bit platforms.\n" \
 "\n" \
 ":returns: The limit in place on entry to the call.\n" \
 "\n" \
+"Calls: `sqlite3_limit <https://sqlite.org/c3ref/limit.html>`__\n" \
+"\n" \
 ".. seealso::\n" \
 "\n" \
-"  * :ref:`Example <example-limit>`\n" \
-"\n" \
-"Calls: `sqlite3_limit <https://sqlite.org/c3ref/limit.html>`__\n" 
+"  * :ref:`Example <example-limit>`\n" 
 
 #define Connection_limit_USAGE "Connection.limit(id: int, newval: int = -1) -> int"
 
@@ -1179,11 +1235,11 @@
 ":raises ExtensionLoadingError: If the extension could not be\n" \
 "  loaded.  The exception string includes more details.\n" \
 "\n" \
+"Calls: `sqlite3_load_extension <https://sqlite.org/c3ref/load_extension.html>`__\n" \
+"\n" \
 ".. seealso::\n" \
 "\n" \
-"  * :meth:`~Connection.enableloadextension`\n" \
-"\n" \
-"Calls: `sqlite3_load_extension <https://sqlite.org/c3ref/load_extension.html>`__\n" 
+"  * :meth:`~Connection.enableloadextension`\n" 
 
 #define Connection_loadextension_USAGE "Connection.loadextension(filename: str, entrypoint: Optional[str] = None) -> None"
 
@@ -1266,7 +1322,7 @@
 "\n" \
 "   * :meth:`Connection.deserialize`\n" \
 "\n" \
-"Calls: `sqlite3_serialize <https://sqlite.org/c3ref/serialize.html>`__\n" 
+" Calls: `sqlite3_serialize <https://sqlite.org/c3ref/serialize.html>`__\n" 
 
 #define Connection_serialize_USAGE "Connection.serialize(name: str) -> bytes"
 
@@ -1554,8 +1610,8 @@
 #define  Connection_wal_autocheckpoint_DOC "wal_autocheckpoint($self,n)\n--\n\nConnection.wal_autocheckpoint(n: int) -> None\n\n" \
 "Sets how often the :ref:`wal` checkpointing is run.\n" \
 "\n" \
-":param n: A number representing the checkpointing interval or\n" \
-"  zero/negative to disable auto checkpointing.\n" \
+" :param n: A number representing the checkpointing interval or\n" \
+"   zero/negative to disable auto checkpointing.\n" \
 "\n" \
 "Calls: `sqlite3_wal_autocheckpoint <https://sqlite.org/c3ref/wal_autocheckpoint.html>`__\n" 
 
@@ -1569,14 +1625,14 @@
 #define  Connection_wal_checkpoint_DOC "wal_checkpoint($self,dbname=None,mode=apsw.SQLITE_CHECKPOINT_PASSIVE)\n--\n\nConnection.wal_checkpoint(dbname: Optional[str] = None, mode: int = apsw.SQLITE_CHECKPOINT_PASSIVE) -> Tuple[int, int]\n\n" \
 "Does a WAL checkpoint.  Has no effect if the database(s) are not in WAL mode.\n" \
 "\n" \
-":param dbname:  The name of the database or all databases if None\n" \
+"  :param dbname:  The name of the database or all databases if None\n" \
 "\n" \
-":param mode: One of the `checkpoint modes <https://sqlite.org/c3ref/wal_checkpoint_v2.html>`__.\n" \
+"  :param mode: One of the `checkpoint modes <https://sqlite.org/c3ref/wal_checkpoint_v2.html>`__.\n" \
 "\n" \
-":return: A tuple of the size of the WAL log in frames and the\n" \
-"   number of frames checkpointed as described in the\n" \
-"   `documentation\n" \
-"   <https://sqlite.org/c3ref/wal_checkpoint_v2.html>`__.\n" \
+"  :return: A tuple of the size of the WAL log in frames and the\n" \
+"     number of frames checkpointed as described in the\n" \
+"     `documentation\n" \
+"     <https://sqlite.org/c3ref/wal_checkpoint_v2.html>`__.\n" \
 "\n" \
 "Calls: `sqlite3_wal_checkpoint_v2 <https://sqlite.org/c3ref/wal_checkpoint_v2.html>`__\n" 
 
@@ -1589,6 +1645,8 @@
   assert(mode == (SQLITE_CHECKPOINT_PASSIVE)); \
 } while(0)
 
+
+#define  Cursor_class_DOC "You obtain cursors by calling :meth:`Connection.cursor`.\n" 
 
 #define  Cursor_close_DOC "close($self,force=False)\n--\n\nCursor.close(force: bool = False) -> None\n\n" \
 "It is very unlikely you will need to call this method.  It exists\n" \
@@ -1707,11 +1765,6 @@
 ":raises TypeError: The bindings supplied were neither a dict nor a sequence\n" \
 ":raises BindingsError: You supplied too many or too few bindings for the statements\n" \
 ":raises IncompleteExecutionError: There are remaining unexecuted queries from your last execute\n" \
-"\n" \
-".. seealso::\n" \
-"\n" \
-"   * :ref:`executionmodel`\n" \
-"   * :ref:`Example <example-cursor>`\n" \
 "\n" \
 "Calls:\n" \
 "  * `sqlite3_prepare_v3 <https://sqlite.org/c3ref/prepare.html>`__\n" \
@@ -1863,9 +1916,6 @@
 "\n" \
 "  * :ref:`tracing`\n" 
 
-#define  Cursor_init_DOC "__init__($self)\n--\n\nCursor.__init__() -> None\n\n" \
-"You obtain cursors by calling :meth:`Connection.cursor`.\n" 
-
 #define  Cursor_is_explain_DOC ":type: int\n" \
 "\n" \
 "Returns 0 if executing a normal query, 1 if it is an EXPLAIN query,\n" \
@@ -1922,11 +1972,7 @@
 } while(0)
 
 
-#define  URIFilename_filename_DOC "filename($self)\n--\n\nURIFilename.filename() -> str\n\n" \
-"Returns the filename.\n" 
-
-#define  URIFilename_init_DOC "__init__($self)\n--\n\nURIFilename.__init__() -> None\n\n" \
-"SQLite uses a convoluted method of storing `uri parameters\n" \
+#define  URIFilename_class_DOC "SQLite uses a convoluted method of storing `uri parameters\n" \
 "<https://sqlite.org/uri.html>`__ after the filename binding the\n" \
 "C filename representation and parameters together.  This class\n" \
 "encapsulates that binding.  The :ref:`example <example-vfs>` shows\n" \
@@ -1938,6 +1984,9 @@
 "\n" \
 "You can safely pass it on to the :class:`VFSFile` constructor\n" \
 "which knows how to get the name back out.\n" 
+
+#define  URIFilename_filename_DOC "filename($self)\n--\n\nURIFilename.filename() -> str\n\n" \
+"Returns the filename.\n" 
 
 #define  URIFilename_uri_boolean_DOC "uri_boolean($self,name,default)\n--\n\nURIFilename.uri_boolean(name: str, default: bool) -> bool\n\n" \
 "Returns the boolean value for parameter `name` or `default` if not\n" \
@@ -1979,6 +2028,15 @@
 } while(0)
 
 
+#define  VFSFile_class_DOC "Wraps access to a file.  You only need to derive from this class\n" \
+"if you want the file object returned from :meth:`VFS.xOpen` to\n" \
+"inherit from an existing VFS implementation.\n" \
+"\n" \
+".. note::\n" \
+"\n" \
+"   All file sizes and offsets are 64 bit quantities even on 32 bit\n" \
+"   operating systems.\n" 
+
 #define  VFSFile_excepthook_DOC "excepthook($self,etype,evalue,etraceback)\n--\n\nVFSFile.excepthook(etype: type[BaseException], evalue: BaseException, etraceback: Optional[TracebackType]) ->None\n\n" \
 "Called when there has been an exception in a :class:`VFSFile`\n" \
 "routine.  The default implementation calls ``sys.excepthook`` and\n" \
@@ -1991,15 +2049,6 @@
 "  includes all frames all the way up to the thread being started.\n" 
 
 #define  VFSFile_init_DOC "__init__($self,vfs,filename,flags)\n--\n\nVFSFile.__init__(vfs: str, filename: Union[str,URIFilename], flags: List[int])\n\n" \
-"Wraps access to a file.  You only need to derive from this class\n" \
-"if you want the file object returned from :meth:`VFS.xOpen` to\n" \
-"inherit from an existing VFS implementation.\n" \
-"\n" \
-".. note::\n" \
-"\n" \
-"   All file sizes and offsets are 64 bit quantities even on 32 bit\n" \
-"   operating systems.\n" \
-"\n" \
 ":param vfs: The vfs you want to inherit behaviour from.  You can\n" \
 "   use an empty string ``\"\"`` to inherit from the default vfs.\n" \
 ":param name: The name of the file being opened.  May be an instance of :class:`URIFilename`.\n" \
@@ -2174,6 +2223,10 @@
 } while(0)
 
 
+#define  VFS_class_DOC "Provides operating system access.  You can get an overview in the\n" \
+"`SQLite documentation <https://sqlite.org/c3ref/vfs.html>`_.  To\n" \
+"create a VFS your Python class must inherit from :class:`VFS`.\n" 
+
 #define  VFS_excepthook_DOC "excepthook($self,etype,evalue,etraceback)\n--\n\nVFS.excepthook(etype: type[BaseException], evalue: BaseException, etraceback: Optional[TracebackType]) -> Any\n\n" \
 "Called when there has been an exception in a :class:`VFS` routine.\n" \
 "The default implementation passes args to ``sys.excepthook`` and if that\n" \
@@ -2181,10 +2234,6 @@
 "what ``sys.exc_info()`` would return.\n" 
 
 #define  VFS_init_DOC "__init__($self,name,base=None,makedefault=False,maxpathname=1024)\n--\n\nVFS.__init__(name: str, base: Optional[str] = None, makedefault: bool = False, maxpathname: int = 1024)\n\n" \
-"Provides operating system access.  You can get an overview in the\n" \
-"`SQLite documentation <https://sqlite.org/c3ref/vfs.html>`_.  To\n" \
-"create a VFS your Python class must inherit from :class:`VFS`.\n" \
-"\n" \
 ":param name: The name to register this vfs under.  If the name\n" \
 "    already exists then this vfs will replace the prior one of the\n" \
 "    same name.  Use :meth:`apsw.vfsnames` to get a list of\n" \
@@ -2472,8 +2521,7 @@
 } while(0)
 
 
-#define  Zeroblob_init_DOC "__init__($self,size)\n--\n\nzeroblob.__init__(size: int)\n\n" \
-"If you want to insert a blob into a row, you previously needed to\n" \
+#define  Zeroblob_class_DOC "If you want to insert a blob into a row, you previously needed to\n" \
 "supply the entire blob in one go.  To read just one byte also\n" \
 "required retrieving the blob in its entirety. For example to insert\n" \
 "a 100MB file you would have done::\n" \
@@ -2496,6 +2544,9 @@
 "database, you then use the :class:`blob` class to read and write its\n" \
 "contents.\n" 
 
+#define  Zeroblob_init_DOC "__init__($self,size)\n--\n\nzeroblob.__init__(size: int)\n\n" \
+":param size: Number of zeroed bytes to create\n" 
+
 #define Zeroblob_init_USAGE "zeroblob.__init__(size: int)"
 
 #define Zeroblob_init_CHECK do { \
@@ -2505,4 +2556,146 @@
 
 #define  Zeroblob_length_DOC "length($self)\n--\n\nzeroblob.length() -> int\n\n" \
 "Size of zero blob in bytes.\n" 
+
+#define  AbortError_exc_DOC ":const:`SQLITE_ABORT`. Callback routine requested an abort.\n" 
+
+#define  AuthError_exc_DOC ":const:`SQLITE_AUTH`.  :attr:`Authorization <Connection.authorizer>` denied.\n" 
+
+#define  BindingsError_exc_DOC "There are several causes for this exception.  When using tuples, an incorrect number of bindings where supplied::\n" \
+"\n" \
+"   cursor.execute(\"select ?,?,?\", (1,2))     # too few bindings\n" \
+"   cursor.execute(\"select ?,?,?\", (1,2,3,4)) # too many bindings\n" \
+"\n" \
+"You are using named bindings, but not all bindings are named.  You should either use entirely the\n" \
+"named style or entirely numeric (unnamed) style::\n" \
+"\n" \
+"   cursor.execute(\"select * from foo where x=:name and y=?\")\n" \
+"\n" \
+".. note::\n" \
+"\n" \
+"   It is not considered an error to have missing keys in a dictionary. For example this is perfectly valid::\n" \
+"\n" \
+"        cursor.execute(\"insert into foo values($a,:b,$c)\", {'a': 1})\n" \
+"\n" \
+"   *b* and *c* are not in the dict.  For missing keys, None/NULL\n" \
+"   will be used. This is so you don't have to add lots of spurious\n" \
+"   values to the supplied dict. If your schema requires every column\n" \
+"   have a value, then SQLite will generate an error due to some\n" \
+"   values being None/NULL so that case will be caught.\n" 
+
+#define  BusyError_exc_DOC ":const:`SQLITE_BUSY`.  The database file is locked.  Use\n" \
+":meth:`Connection.setbusytimeout` to change how long SQLite waits\n" \
+"for the database to be unlocked or :meth:`Connection.setbusyhandler`\n" \
+"to use your own handler.\n" 
+
+#define  CantOpenError_exc_DOC ":const:`SQLITE_CANTOPEN`.  Unable to open the database file.\n" 
+
+#define  ConnectionClosedError_exc_DOC "You have called :meth:`Connection.close` and then continued to use\n" \
+"the :class:`Connection` or associated :class:`cursors <Cursor>`.\n" 
+
+#define  ConnectionNotClosedError_exc_DOC "This exception is no longer generated.  It was required in earlier\n" \
+"releases due to constraints in threading usage with SQLite.\n" 
+
+#define  ConstraintError_exc_DOC ":const:`SQLITE_CONSTRAINT`. Abort due to `constraint\n" \
+"<https://sqlite.org/lang_createtable.html>`_ violation.  This\n" \
+"would happen if the schema required a column to be within a specific\n" \
+"range.  If you have multiple constraints, you `can't tell\n" \
+"<https://sqlite.org/src/tktview/23b212820161c6599cbf414aa99bf8a5bfa5e7a3>`__\n" \
+"which one was the cause.\n" 
+
+#define  CorruptError_exc_DOC ":const:`SQLITE_CORRUPT`.  The database disk image appears to be a\n" \
+"SQLite database but the values inside are inconsistent.\n" 
+
+#define  CursorClosedError_exc_DOC "You have called :meth:`Cursor.close` and then tried to use the cursor.\n" 
+
+#define  EmptyError_exc_DOC ":const:`SQLITE_EMPTY`. Database is completely empty.\n" 
+
+#define  Error_exc_DOC "This is the base for APSW exceptions.\n" 
+
+#define  ExecTraceAbort_exc_DOC "The :ref:`execution tracer <executiontracer>` returned False so\n" \
+"execution was aborted.\n" 
+
+#define  ExecutionCompleteError_exc_DOC "A statement is complete but you try to run it more anyway!\n" 
+
+#define  ExtensionLoadingError_exc_DOC "An error happened loading an `extension\n" \
+"<https://sqlite.org/cvstrac/wiki/wiki?p=LoadableExtensions>`_.\n" 
+
+#define  ForkingViolationError_exc_DOC "See :meth:`apsw.fork_checker`.\n" 
+
+#define  FormatError_exc_DOC ":const:`SQLITE_FORMAT`. (No longer used) `Auxiliary database <https://sqlite.org/lang_attach.html>`_ format error.\n" 
+
+#define  FullError_exc_DOC ":const:`SQLITE_FULL`.  The disk appears to be full.\n" 
+
+#define  IOError_exc_DOC ":const:`SQLITE_IOERR`.  Some kind of disk I/O error occurred.  The\n" \
+":ref:`extended error code <exceptions>` will give more detail.\n" 
+
+#define  IncompleteExecutionError_exc_DOC "You have tried to start a new SQL execute call before executing all\n" \
+"the previous ones. See the :ref:`execution model <executionmodel>`\n" \
+"for more details.\n" 
+
+#define  InternalError_exc_DOC ":const:`SQLITE_INTERNAL`. (No longer used) Internal logic error in SQLite.\n" 
+
+#define  InterruptError_exc_DOC ":const:`SQLITE_INTERRUPT`.  Operation terminated by\n" \
+"`sqlite3_interrupt <https://sqlite.org/c3ref/interrupt.html>`_ -\n" \
+"use :meth:`Connection.interrupt`.\n" 
+
+#define  LockedError_exc_DOC ":const:`SQLITE_LOCKED`.  A table in the database is locked.\n" 
+
+#define  MismatchError_exc_DOC ":const:`SQLITE_MISMATCH`. Data type mismatch.  For example a rowid\n" \
+"or integer primary key must be an integer.\n" 
+
+#define  MisuseError_exc_DOC ":const:`SQLITE_MISUSE`.  SQLite library used incorrectly - typically similar to ValueError in Python.  Examples include not\n" \
+"having enough flags when opening a connection (eg not including a READ or WRITE flag), or out of spec such as registering\n" \
+"a function with more than 127 parameters.\n" 
+
+#define  NoLFSError_exc_DOC ":const:`SQLITE_NOLFS`.  SQLite has attempted to use a feature not\n" \
+"supported by the operating system such as `large file support\n" \
+"<http://en.wikipedia.org/wiki/Large_file_support>`_.\n" 
+
+#define  NoMemError_exc_DOC ":const:`SQLITE_NOMEM`.  A memory allocation failed.\n" 
+
+#define  NotADBError_exc_DOC ":const:`SQLITE_NOTADB`.  File opened that is not a database file.\n" \
+"SQLite has a header on database files to verify they are indeed\n" \
+"SQLite databases.\n" 
+
+#define  NotFoundError_exc_DOC ":const:`SQLITE_NOTFOUND`. Returned when various internal items were\n" \
+"not found such as requests for non-existent system calls or file\n" \
+"controls.\n" 
+
+#define  PermissionsError_exc_DOC ":const:`SQLITE_PERM`. Access permission denied by the operating system, or parts of the database are readonly such as a cursor.\n" 
+
+#define  ProtocolError_exc_DOC ":const:`SQLITE_PROTOCOL`. (No longer used) Database lock protocol error.\n" 
+
+#define  RangeError_exc_DOC ":const:`SQLITE_RANGE`.  (Cannot be generated using APSW).  2nd parameter to `sqlite3_bind <https://sqlite.org/c3ref/bind_blob.html>`_ out of range\n" 
+
+#define  ReadOnlyError_exc_DOC ":const:`SQLITE_READONLY`. Attempt to write to a readonly database.\n" 
+
+#define  SQLError_exc_DOC ":const:`SQLITE_ERROR`.  This error is documented as a bad SQL query\n" \
+"or missing database, but is also returned for a lot of other\n" \
+"situations.  It is the default error code unless there is a more\n" \
+"specific one.\n" 
+
+#define  SchemaChangeError_exc_DOC ":const:`SQLITE_SCHEMA`.  The database schema changed.  A\n" \
+":meth:`prepared statement <Cursor.execute>` becomes invalid\n" \
+"if the database schema was changed.  Behind the scenes SQLite\n" \
+"reprepares the statement.  Another or the same :class:`Connection`\n" \
+"may change the schema again before the statement runs.  SQLite will\n" \
+"attempt up to 5 times before giving up and returning this error.\n" 
+
+#define  ThreadingViolationError_exc_DOC "You have used an object concurrently in two threads. For example you\n" \
+"may try to use the same cursor in two different threads at the same\n" \
+"time, or tried to close the same connection in two threads at the\n" \
+"same time.\n" \
+"\n" \
+"You can also get this exception by using a cursor as an argument to\n" \
+"itself (eg as the input data for :meth:`Cursor.executemany`).\n" \
+"Cursors can only be used for one thing at a time.\n" 
+
+#define  TooBigError_exc_DOC ":const:`SQLITE_TOOBIG`.  String or BLOB exceeds size limit.  You can\n" \
+"change the limits using :meth:`Connection.limit`.\n" 
+
+#define  VFSFileClosedError_exc_DOC "The VFS file is closed so the operation cannot be performed.\n" 
+
+#define  VFSNotImplementedError_exc_DOC "A call cannot be made to an inherited :ref:`VFS` method as the VFS\n" \
+"does not implement the method.\n" 
 

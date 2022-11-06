@@ -260,7 +260,7 @@ Connection_close_internal(Connection *self, int force)
 
   If *force* is *True* then any exceptions are ignored.
 
-   -* sqlite3_close
+  -* sqlite3_close
 */
 
 /* Closes cursors and blobs belonging to this connection */
@@ -4081,7 +4081,7 @@ static PyTypeObject ConnectionType =
         0,                                                                                           /*tp_setattro*/
         0,                                                                                           /*tp_as_buffer*/
         Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HAVE_VERSION_TAG | Py_TPFLAGS_HAVE_GC, /*tp_flags*/
-        Connection_init_DOC,                                                                         /* tp_doc */
+        Connection_class_DOC,                                                                        /* tp_doc */
         (traverseproc)Connection_tp_traverse,                                                        /* tp_traverse */
         0,                                                                                           /* tp_clear */
         0,                                                                                           /* tp_richcompare */

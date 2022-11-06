@@ -38,7 +38,7 @@ tagpush:
 
 clean:
 	make PYTHONPATH="`pwd`" VERSION=$(VERSION) -C doc clean
-	rm -rf dist build work/* megatestresults apsw.egg-info __pycache__ apsw/__pycache__ :memory: .mypy_cache .ropeproject htmlcov "System Volume Information"
+	rm -rf dist build work/* megatestresults apsw.egg-info __pycache__ apsw/__pycache__ :memory: .mypy_cache .ropeproject htmlcov "System Volume Information" doc/docdb.json
 	mkdir dist
 	for i in 'vgcore.*' '.coverage' '*.pyc' '*.pyo' '*~' '*.o' '*.so' '*.dll' '*.pyd' '*.gcov' '*.gcda' '*.gcno' '*.orig' '*.tmp' 'testdb*' 'testextension.sqlext' ; do \
 		find . -type f -name "$$i" -print0 | xargs -0t --no-run-if-empty rm -f ; done
@@ -57,6 +57,7 @@ doc/example.rst: example-code.py tools/example2rst.py src/apswversion.h
 	env PYTHONPATH=. $(PYTHON) tools/example2rst.py
 
 doc/typing.rstgen: src/types.py
+	-rm -f doc/typing.rstgen
 	$(PYTHON) tools/types2rst.py
 
 doc/.static:
@@ -64,10 +65,10 @@ doc/.static:
 
 # This is probably gnu make specific but only developers use this makefile
 $(GENDOCS): doc/%.rst: src/%.c tools/code2rst.py
-	env PYTHONPATH=. $(PYTHON) tools/code2rst.py $(SQLITEVERSION) $< $@
+	env PYTHONPATH=. $(PYTHON) tools/code2rst.py $(SQLITEVERSION) doc/docdb.json $< $@
 
-apsw/__init__.pyi src/apsw.docstrings: $(GENDOCS) tools/rst2docstring.py src/types.py
-	env PYTHONPATH=. $(PYTHON) tools/rst2docstring.py src/apsw.docstrings $(GENDOCS)
+apsw/__init__.pyi src/apsw.docstrings: $(GENDOCS) tools/gendocstrings.py src/types.py
+	env PYTHONPATH=. $(PYTHON) tools/gendocstrings.py doc/docdb.json src/apsw.docstrings
 
 build_ext:
 	env $(PYTHON) setup.py fetch --version=$(SQLITEVERSION) --all build_ext -DSQLITE_ENABLE_COLUMN_METADATA --inplace --force --enable-all-extensions

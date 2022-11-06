@@ -4,12 +4,8 @@ from typing import Union, Tuple, List, Optional, Callable, Any, Dict, \
 from collections.abc import Mapping
 from array import array
 from types import TracebackType
-try:
-        from types import NoneType
-except ImportError:
-        NoneType = type(None)
 
-SQLiteValue = Union[NoneType, int, float, bytes, str]
+SQLiteValue = Union[None, int, float, bytes, str]
 """SQLite supports 5 types - None (NULL), 64 bit signed int, 64 bit
 float, bytes, and str (unicode text)"""
 
@@ -67,3 +63,5 @@ ExecTracer = Callable[[Cursor, str, Optional[Bindings]], bool]
 used.  Return False/None to abort execution, or True to continue"""
 
 Authorizer = Callable[[int, Optional[str], Optional[str], Optional[str], Optional[str]], int]
+"""Authorizers are called with an operation code and 4 strings (which could be None) depending
+on the operatation.  Return SQLITE_OK, SQLITE_DENY, or SQLITE_IGNORE"""

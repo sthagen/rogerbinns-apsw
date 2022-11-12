@@ -44,6 +44,16 @@ While SQLite provides a SQL database like many others out there, it is
 also unique in many ways.  Read about the unique features at the
 `SQLite website <https://sqlite.org/different.html>`__.
 
+.. note::
+
+  SQLite 3 has been available for two decades, improving and adding
+  features over time.  Because of strong compatibility guarantees, you
+  may need to opt-in to some like `foreign key enforcement
+  <https://www.sqlite.org/foreignkeys.html>`__.  It is a good idea to
+  review the `pragmas <https://www.sqlite.org/pragma.html#toc>`__ and
+  consider using :attr:`apsw.connection_hooks` to configure each
+  :class:`Connection`.
+
 Transactions
 ============
 
@@ -130,22 +140,6 @@ ways you never even thought possible.
 
 The :ref:`documentation <cursors>` gives many examples of how to use
 various forms of bindings.
-
-Unicode
-=======
-
-SQLite only stores text as Unicode.  However it relies on SQLite API
-users to provide valid UTF-8 and does not double check.  (APSW only
-provides valid UTF-8).  It is possible using other wrappers and tools
-to cause invalid UTF-8 to appear in the database which will then cause
-retrieval errors.  You can work around this by using the SQL *CAST*
-operator.  For example::
-
-  SELECT id, CAST(label AS blob) from table
-
-Then proceed to give the `Joel Unicode article
-<http://www.joelonsoftware.com/articles/Unicode.html>`_ to all people
-involved.
 
 .. _diagnostics_tips:
 

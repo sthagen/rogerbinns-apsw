@@ -56,7 +56,7 @@ doc/example.rst: example-code.py tools/example2rst.py src/apswversion.h
 	rm -f dbfile
 	env PYTHONPATH=. $(PYTHON) tools/example2rst.py
 
-doc/typing.rstgen: src/types.py
+doc/typing.rstgen: src/types.py tools/types2rst.py
 	-rm -f doc/typing.rstgen
 	$(PYTHON) tools/types2rst.py
 
@@ -112,7 +112,9 @@ header:
 	echo "#define APSW_VERSION \"$(VERSION)\"" > src/apswversion.h
 
 stubtest: build_ext
-	env PYTHONPATH=. $(PYTHON) -m mypy.stubtest --allowlist tools/stubtest.allowlist apsw
+	$(PYTHON) -m mypy.stubtest --allowlist tools/stubtest.allowlist apsw
+	$(PYTHON) -m mypy example-code.py
+	$(PYTHON) -m mypy --strict example-code.py
 
 # the funky test stuff is to exit successfully when grep has rc==1 since that means no lines found.
 showsymbols:

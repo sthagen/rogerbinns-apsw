@@ -1,8 +1,8 @@
 
-SQLITEVERSION=3.39.4
+SQLITEVERSION=3.40.0
 APSWSUFFIX=.0
 
-RELEASEDATE="9 October 2022"
+RELEASEDATE="27 November 2022"
 
 VERSION=$(SQLITEVERSION)$(APSWSUFFIX)
 VERDIR=apsw-$(VERSION)
@@ -54,7 +54,7 @@ docs: build_ext $(GENDOCS) doc/example.rst doc/.static doc/typing.rstgen
 
 doc/example.rst: example-code.py tools/example2rst.py src/apswversion.h
 	rm -f dbfile
-	env PYTHONPATH=. $(PYTHON) tools/example2rst.py
+	env PYTHONPATH=. $(PYTHON) -sS tools/example2rst.py
 
 doc/typing.rstgen: src/types.py tools/types2rst.py
 	-rm -f doc/typing.rstgen

@@ -44,7 +44,7 @@ syntax.  Additionally this is how `SQL injection attacks
   sql="insert into example values(?, ?)"
   cursor.execute(sql, ("string", 8390823904))
 
-  # You can also use dictionaries
+  # You can also use dictionaries (with colon, $, or @ before names)
   sql="insert into example values(:title, :isbn)"
   cursor.execute(sql, {"title": "string", "isbn": 8390823904})
 
@@ -56,10 +56,10 @@ syntax.  Additionally this is how `SQL injection attacks
 Cursors are cheap.  Use as many as you need.  It is safe to use them
 across threads, such as calling :meth:`~Cursor.execute` in one thread,
 passing the cursor to another thread that then calls
-:meth:`Cursor.next`.  The only thing you can't do is call methods at
+`next <https://docs.python.org/3/library/functions.html?highlight=next#next>`__.  The only thing you can't do is call methods at
 exactly the same time on the same cursor in two different threads - eg
 trying to call :meth:`~Cursor.execute` in both at the same time, or
-:meth:`~Cursor.execute` in one and :meth:`Cursor.next` in another.
+:meth:`~Cursor.execute` in one and `next <https://docs.python.org/3/library/functions.html?highlight=next#next>`__ in another.
 (If you do attempt this, it will be detected and
 :exc:`ThreadingViolationError` will be raised.)
 
@@ -76,8 +76,7 @@ separated statements.  For example::
 .. note::
 
   SQLite fetches data as it is needed.  If table *example* had 10
-  million rows it would only get the next row as requested (the for
-  loop effectively calls :meth:`~Cursor.next` to get each row).  This
+  million rows it would only get the next row as requested.  This
   code would not work as expected::
 
     for row in cursor.execute("select * from example"):
@@ -671,8 +670,8 @@ APSWCursor_dobindings(APSWCursor *self)
         return -1;
       }
 
-      assert(*key == ':' || *key == '$');
-      key++; /* first char is a colon or dollar which we skip */
+      assert(*key == ':' || *key == '$' || *key == '@');
+      key++; /* first char is a colon / dollar / at which we skip */
 
       /*
       Here be dragons: PyDict_GetItemString swallows exceptions if
@@ -1018,7 +1017,6 @@ APSWCursor_step(APSWCursor *self)
     .. seealso::
 
        * :ref:`executionmodel`
-       * :ref:`Example <example-cursor>`
 
 */
 static PyObject *
@@ -1506,7 +1504,7 @@ APSWCursor_fetchone(APSWCursor *self)
   each :meth:`~Cursor.execute` or :meth:`~Cursor.executemany` on this
   cursor.
 
-  If *callable* is :const:`None` then any existing execution tracer is
+  If *callable* is *None* then any existing execution tracer is
   unregistered.
 
   .. seealso::
@@ -1557,7 +1555,7 @@ APSWCursor_set_exectrace_attr(APSWCursor *self, PyObject *value)
   change the data that is returned or cause the row to be skipped
   altogether.
 
-  If *callable* is :const:`None` then any existing row tracer is
+  If *callable* is *None* then any existing row tracer is
   unregistered.
 
   .. seealso::

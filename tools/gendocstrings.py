@@ -529,7 +529,7 @@ def do_argparse(item):
                 breakpoint()
                 pass
         elif param["type"] in {
-                "PyObject", "Any", "Optional[type[BaseException]]", "Optional[BaseException]", "Optional[TracebackType]"
+                "PyObject", "Any", "Optional[type[BaseException]]", "Optional[BaseException]", "Optional[types.TracebackType]"
         }:
             type = "PyObject *"
             kind = "O"
@@ -544,7 +544,7 @@ def do_argparse(item):
                 pass
         elif callable_erasure(param["type"]) in {
                 "Optional[Callable]", "Optional[RowTracer]", "Optional[ExecTracer]", "Optional[ScalarProtocol]",
-                "Optional[AggregateFactory]", "Optional[Authorizer]"
+                "Optional[AggregateFactory]", "Optional[Authorizer]", "Optional[CommitHook]"
         }:
             # the above are all callables and we don't check beyond that
             type = "PyObject *"
@@ -836,6 +836,7 @@ if __name__ == '__main__':
                         "VFS.excepthook",
                         "Connection.execute",
                         "Connection.executemany",
+                        "Blob.__exit__",
                 }:
                     missing.append(item["name"])
     for name, doc in sorted(all_exc_doc.items()):

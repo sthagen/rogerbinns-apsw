@@ -5,8 +5,8 @@ import sys
 from typing import Union, Tuple, List, Optional, Callable, Any, Dict, \
         Iterator, Sequence, Literal, Set
 from collections.abc import Mapping
-from array import array
-from types import TracebackType
+import array
+import types
 
 if sys.version_info >= (3, 8):
         from typing import Protocol
@@ -319,6 +319,32 @@ def status(op: int, reset: bool = False) -> Tuple[int, int]:
       * :ref:`Status example <example_status>`
 
     Calls: `sqlite3_status64 <https://sqlite.org/c3ref/status.html>`__"""
+    ...
+
+def strglob(glob: str, string: str) -> int:
+    """Does string GLOB matching.  Note that zero is returned on on a match.
+
+    Calls: `sqlite3_strglob <https://sqlite.org/c3ref/strglob.html>`__"""
+    ...
+
+def stricmp(string1: str, string2: str) -> int:
+    """Does string case-insensitive comparison.  Note that zero is returned
+    on on a match.
+
+    Calls: `sqlite3_stricmp <https://sqlite.org/c3ref/stricmp.html>`__"""
+    ...
+
+def strlike(glob: str, string: str, escape: int = 0) -> int:
+    """Does string LIKE matching.  Note that zero is returned on on a match.
+
+    Calls: `sqlite3_strlike <https://sqlite.org/c3ref/strlike.html>`__"""
+    ...
+
+def strnicmp(string1: str, string2: str, count: int) -> int:
+    """Does string case-insensitive comparison.  Note that zero is returned
+    on on a match.
+
+    Calls: `sqlite3_strnicmp <https://sqlite.org/c3ref/stricmp.html>`__"""
     ...
 
 using_amalgamation: bool
@@ -744,6 +770,25 @@ class Connection:
         Calls: `sqlite3_collation_needed <https://sqlite.org/c3ref/collation_needed.html>`__"""
         ...
 
+    def column_metadata(self, dbname: Optional[str], table_name: str, column_name: str) -> Tuple[str, str, bool, bool, bool]:
+        """`dbname` is the specific database (eg "main", "temp") or None to search
+        all databases.
+
+        The returned :class:`tuple` has these fields:
+
+        0: str - declared data type
+
+        1: str - name of default collation sequence
+
+        2: bool - True if not null constraint
+
+        3: bool - True if part of primary key
+
+        4: bool - True if column is `autoincrement <https://www.sqlite.org/autoinc.html>`__
+
+        Calls: `sqlite3_table_column_metadata <https://sqlite.org/c3ref/table_column_metadata.html>`__"""
+        ...
+
     def config(self, op: int, *args: int) -> int:
         """:param op: A `configuration operation
           <https://sqlite.org/c3ref/c_dbconfig_enable_fkey.html>`__
@@ -821,7 +866,7 @@ class Connection:
         Calls: `sqlite3_create_collation_v2 <https://sqlite.org/c3ref/create_collation.html>`__"""
         ...
 
-    def createmodule(self, name: str, datasource: Any) -> None:
+    def createmodule(self, name: str, datasource: VTModule) -> None:
         """Registers a virtual table.  See :ref:`virtualtables` for details.
 
         .. seealso::
@@ -1038,9 +1083,19 @@ class Connection:
         ...
 
     filename: str
-    """The filename of the  database.
+    """The filename of the database.
 
     Calls: `sqlite3_db_filename <https://sqlite.org/c3ref/db_filename.html>`__"""
+
+    filename_journal: str
+    """The journal filename of the database,
+
+    Calls: `sqlite3_filename_journal <https://sqlite.org/c3ref/filename_database.html>`__"""
+
+    filename_wal: str
+    """The WAL filename of the database,
+
+    Calls: `sqlite3_filename_wal <https://sqlite.org/c3ref/filename_database.html>`__"""
 
     def getautocommit(self) -> bool:
         """Returns if the Connection is in auto commit mode (ie not in a transaction).
@@ -1370,11 +1425,61 @@ class Connection:
         Calls: `sqlite3_db_status <https://sqlite.org/c3ref/db_status.html>`__"""
         ...
 
+    system_errno: int
+    """The underlying system error code for the most recent I/O errors or failing to open files.
+
+    Calls: `sqlite3_system_errno <https://sqlite.org/c3ref/system_errno.html>`__"""
+
+    def table_exists(self, dbname: Optional[str], table_name: str) -> bool:
+        """Returns True if the named table exists, else False.
+
+        `dbname` is the specific database (eg "main", "temp") or None to search
+        all databases
+
+        Calls: `sqlite3_table_column_metadata <https://sqlite.org/c3ref/table_column_metadata.html>`__"""
+        ...
+
     def totalchanges(self) -> int:
         """Returns the total number of database rows that have be modified,
         inserted, or deleted since the database connection was opened.
 
         Calls: `sqlite3_total_changes64 <https://sqlite.org/c3ref/total_changes.html>`__"""
+        ...
+
+    def trace_v2(self, mask: int, callback: Optional[Callable[[dict], None]] = None) -> None:
+        """Registers a trace callback.  The callback is called with a dict of relevant values based
+        on the code.
+
+        .. list-table::
+          :header-rows: 1
+          :widths: auto
+
+          * - Key
+            - Type
+            - Explanation
+          * - code
+            - :class:`int`
+            - One of the `trace event codes <https://www.sqlite.org/c3ref/c_trace.html>`__
+          * - connection
+            - :class:`Connection`
+            - Connection this trace event belongs to
+          * - sql
+            - :class:`str`
+            - SQL text (except SQLITE_TRACE_CLOSE)
+          * - profile
+            - :class:`int`
+            - nanoseconds SQL took to execute (SQLITE_TRACE_PROFILE only)
+          * - stmt_status
+            - :class:`dict`
+            - SQLITE_TRACE_PROFILE only: Keys are names from `status parameters
+              <https://www.sqlite.org/c3ref/c_stmtstatus_counter.html>`__ - eg
+              *"SQLITE_STMTSTATUS_VM_STEP"* and corresponding integer values.
+              The counters are reset each time a statement
+              starts execution.
+
+        Calls:
+          * `sqlite3_trace_v2 <https://sqlite.org/c3ref/trace_v2.html>`__
+          * `sqlite3_stmt_status <https://sqlite.org/c3ref/stmt_status.html>`__"""
         ...
 
     def txn_state(self, schema: Optional[str] = None) -> int:
@@ -3244,6 +3349,24 @@ SQLITE_STATUS_SCRATCH_SIZE: int = 8
 """For `Status Parameters <https://sqlite.org/c3ref/c_status_malloc_count.html>'__"""
 SQLITE_STATUS_SCRATCH_USED: int = 3
 """For `Status Parameters <https://sqlite.org/c3ref/c_status_malloc_count.html>'__"""
+SQLITE_STMTSTATUS_AUTOINDEX: int = 3
+"""For `Status Parameters for prepared statements <https://sqlite.org/c3ref/c_stmtstatus_counter.html>'__"""
+SQLITE_STMTSTATUS_FILTER_HIT: int = 8
+"""For `Status Parameters for prepared statements <https://sqlite.org/c3ref/c_stmtstatus_counter.html>'__"""
+SQLITE_STMTSTATUS_FILTER_MISS: int = 7
+"""For `Status Parameters for prepared statements <https://sqlite.org/c3ref/c_stmtstatus_counter.html>'__"""
+SQLITE_STMTSTATUS_FULLSCAN_STEP: int = 1
+"""For `Status Parameters for prepared statements <https://sqlite.org/c3ref/c_stmtstatus_counter.html>'__"""
+SQLITE_STMTSTATUS_MEMUSED: int = 99
+"""For `Status Parameters for prepared statements <https://sqlite.org/c3ref/c_stmtstatus_counter.html>'__"""
+SQLITE_STMTSTATUS_REPREPARE: int = 5
+"""For `Status Parameters for prepared statements <https://sqlite.org/c3ref/c_stmtstatus_counter.html>'__"""
+SQLITE_STMTSTATUS_RUN: int = 6
+"""For `Status Parameters for prepared statements <https://sqlite.org/c3ref/c_stmtstatus_counter.html>'__"""
+SQLITE_STMTSTATUS_SORT: int = 2
+"""For `Status Parameters for prepared statements <https://sqlite.org/c3ref/c_stmtstatus_counter.html>'__"""
+SQLITE_STMTSTATUS_VM_STEP: int = 4
+"""For `Status Parameters for prepared statements <https://sqlite.org/c3ref/c_stmtstatus_counter.html>'__"""
 SQLITE_SYNC_DATAONLY: int = 16
 """For `Synchronization Type Flags <https://sqlite.org/c3ref/c_sync_dataonly.html>'__"""
 SQLITE_SYNC_FULL: int = 3
@@ -3252,6 +3375,14 @@ SQLITE_SYNC_NORMAL: int = 2
 """For `Synchronization Type Flags <https://sqlite.org/c3ref/c_sync_dataonly.html>'__"""
 SQLITE_TOOBIG: int = 18
 """For `Result Codes <https://sqlite.org/rescode.html>'__"""
+SQLITE_TRACE_CLOSE: int = 8
+"""For `SQL Trace Event Codes <https://sqlite.org/c3ref/c_trace.html>'__"""
+SQLITE_TRACE_PROFILE: int = 2
+"""For `SQL Trace Event Codes <https://sqlite.org/c3ref/c_trace.html>'__"""
+SQLITE_TRACE_ROW: int = 4
+"""For `SQL Trace Event Codes <https://sqlite.org/c3ref/c_trace.html>'__"""
+SQLITE_TRACE_STMT: int = 1
+"""For `SQL Trace Event Codes <https://sqlite.org/c3ref/c_trace.html>'__"""
 SQLITE_TRANSACTION: int = 22
 """For `Authorizer Action Codes <https://sqlite.org/c3ref/c_alter_table.html>'__"""
 SQLITE_TXN_NONE: int = 0
@@ -3484,6 +3615,15 @@ SQLITE_NOTADB SQLITE_NOTFOUND SQLITE_NOTICE SQLITE_OK SQLITE_PERM
 SQLITE_PROTOCOL SQLITE_RANGE SQLITE_READONLY SQLITE_ROW SQLITE_SCHEMA
 SQLITE_TOOBIG SQLITE_WARNING"""
 
+mapping_statement_status: Dict[Union[str,int],Union[int,str]]
+"""Status Parameters for prepared statements mapping names to int and int to names.
+Doc at https://sqlite.org/c3ref/c_stmtstatus_counter.html
+
+SQLITE_STMTSTATUS_AUTOINDEX SQLITE_STMTSTATUS_FILTER_HIT
+SQLITE_STMTSTATUS_FILTER_MISS SQLITE_STMTSTATUS_FULLSCAN_STEP
+SQLITE_STMTSTATUS_MEMUSED SQLITE_STMTSTATUS_REPREPARE
+SQLITE_STMTSTATUS_RUN SQLITE_STMTSTATUS_SORT SQLITE_STMTSTATUS_VM_STEP"""
+
 mapping_status: Dict[Union[str,int],Union[int,str]]
 """Status Parameters mapping names to int and int to names.
 Doc at https://sqlite.org/c3ref/c_status_malloc_count.html
@@ -3499,6 +3639,13 @@ mapping_sync: Dict[Union[str,int],Union[int,str]]
 Doc at https://sqlite.org/c3ref/c_sync_dataonly.html
 
 SQLITE_SYNC_DATAONLY SQLITE_SYNC_FULL SQLITE_SYNC_NORMAL"""
+
+mapping_trace_codes: Dict[Union[str,int],Union[int,str]]
+"""SQL Trace Event Codes mapping names to int and int to names.
+Doc at https://sqlite.org/c3ref/c_trace.html
+
+SQLITE_TRACE SQLITE_TRACE_CLOSE SQLITE_TRACE_PROFILE SQLITE_TRACE_ROW
+SQLITE_TRACE_STMT"""
 
 mapping_txn_state: Dict[Union[str,int],Union[int,str]]
 """Allowed return values from [sqlite3_txn_state()] mapping names to int and int to names.
@@ -3536,7 +3683,25 @@ SQLITE_SHM_UNLOCK"""
 
 
 class Error(Exception):
-    """This is the base for APSW exceptions."""
+    """  This is the base for APSW exceptions.
+
+    .. attribute:: Error.result
+
+             For exceptions corresponding to `SQLite error codes
+             <https://sqlite.org/c3ref/c_abort.html>`_ codes this attribute
+             is the numeric error code.
+
+    .. attribute:: Error.extendedresult
+
+             APSW runs with `extended result codes
+             <https://sqlite.org/rescode.html>`_ turned on.
+             This attribute includes the detailed code.
+
+    .. attribute:: Error.error_offset
+
+            The location of the error in the SQL when encoded in UTF-8.
+            The value is from `sqlite3_error_offset
+            <https://www.sqlite.org/c3ref/errcode.html>`__."""
 
 class AbortError(Error):
     """*SQLITE_ABORT*. Callback routine requested an abort."""

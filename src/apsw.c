@@ -132,6 +132,9 @@ static int APSW_Should_Fault(const char *);
 /* The module object */
 static PyObject *apswmodule;
 
+/* root exception class */
+static PyObject *APSWException;
+
 /* Argument parsing helpers */
 #include "argparse.c"
 
@@ -141,11 +144,11 @@ static PyObject *apswmodule;
 /* Make various versions of Python code compatible with each other */
 #include "pyutil.c"
 
-/* Exceptions we can raise */
-#include "exceptions.c"
-
 /* various utility functions and macros */
 #include "util.c"
+
+/* Exceptions we can raise */
+#include "exceptions.c"
 
 /* The statement cache */
 #include "statementcache.c"
@@ -706,7 +709,6 @@ apswcomplete(PyObject *Py_UNUSED(self), PyObject *args, PyObject *kwds)
   Py_RETURN_FALSE;
 }
 
-
 #ifdef APSW_TESTFIXTURES
 static PyObject *
 apsw_fini(PyObject *Py_UNUSED(self))
@@ -1252,6 +1254,105 @@ apsw_log(PyObject *Py_UNUSED(self), PyObject *args, PyObject *kwds)
   Py_RETURN_NONE;
 }
 
+/** .. method:: strlike(glob: str, string: str, escape: int = 0) -> int
+
+  Does string LIKE matching.  Note that zero is returned on on a match.
+
+  -* sqlite3_strlike
+*/
+static PyObject *
+apsw_strlike(PyObject *Py_UNUSED(self), PyObject *args, PyObject *kwds)
+{
+  const char *glob = NULL, *string = NULL;
+  int escape = 0;
+  int res;
+
+  {
+    static char *kwlist[] = {"glob", "string", "escape", NULL};
+    Apsw_strlike_CHECK;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "ss|i:" Apsw_strlike_USAGE, kwlist, &glob, &string, &escape))
+      return NULL;
+  }
+
+  res = sqlite3_strlike(glob, string, escape); /* PYSQLITE_CALL not needed */
+
+  return PyLong_FromLong(res);
+}
+
+/** .. method:: strglob(glob: str, string: str) -> int
+
+  Does string GLOB matching.  Note that zero is returned on on a match.
+
+  -* sqlite3_strglob
+*/
+static PyObject *
+apsw_strglob(PyObject *Py_UNUSED(self), PyObject *args, PyObject *kwds)
+{
+  const char *glob = NULL, *string = NULL;
+  int res;
+
+  {
+    static char *kwlist[] = {"glob", "string", NULL};
+    Apsw_strglob_CHECK;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "ss:" Apsw_strglob_USAGE, kwlist, &glob, &string))
+      return NULL;
+  }
+
+  res = sqlite3_strglob(glob, string); /* PYSQLITE_CALL not needed */
+
+  return PyLong_FromLong(res);
+}
+
+/** .. method:: stricmp(string1: str, string2: str) -> int
+
+  Does string case-insensitive comparison.  Note that zero is returned
+  on on a match.
+
+  -* sqlite3_stricmp
+*/
+static PyObject *
+apsw_stricmp(PyObject *Py_UNUSED(self), PyObject *args, PyObject *kwds)
+{
+  const char *string1 = NULL, *string2 = NULL;
+  int res;
+
+  {
+    static char *kwlist[] = {"string1", "string2", NULL};
+    Apsw_stricmp_CHECK;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "ss:" Apsw_stricmp_USAGE, kwlist, &string1, &string2))
+      return NULL;
+  }
+
+  res = sqlite3_stricmp(string1, string2); /* PYSQLITE_CALL not needed */
+
+  return PyLong_FromLong(res);
+}
+
+/** .. method:: strnicmp(string1: str, string2: str, count: int) -> int
+
+  Does string case-insensitive comparison.  Note that zero is returned
+  on on a match.
+
+  -* sqlite3_strnicmp
+*/
+static PyObject *
+apsw_strnicmp(PyObject *Py_UNUSED(self), PyObject *args, PyObject *kwds)
+{
+  const char *string1 = NULL, *string2 = NULL;
+  int count, res;
+
+  {
+    static char *kwlist[] = {"string1", "string2", "count", NULL};
+    Apsw_strnicmp_CHECK;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "ssi:" Apsw_strnicmp_USAGE, kwlist, &string1, &string2, &count))
+      return NULL;
+  }
+
+  res = sqlite3_strnicmp(string1, string2, count); /* PYSQLITE_CALL not needed */
+
+  return PyLong_FromLong(res);
+}
+
 static PyObject *
 apsw_getattr(PyObject *module, PyObject *name)
 {
@@ -1305,6 +1406,10 @@ static PyMethodDef module_methods[] = {
      Apsw_exceptionfor_DOC},
     {"complete", (PyCFunction)apswcomplete, METH_VARARGS | METH_KEYWORDS,
      Apsw_complete_DOC},
+    {"strlike", (PyCFunction)apsw_strlike, METH_VARARGS | METH_KEYWORDS, Apsw_strlike_DOC},
+    {"strglob", (PyCFunction)apsw_strglob, METH_VARARGS | METH_KEYWORDS, Apsw_strglob_DOC},
+    {"stricmp", (PyCFunction)apsw_stricmp, METH_VARARGS | METH_KEYWORDS, Apsw_stricmp_DOC},
+    {"strnicmp", (PyCFunction)apsw_strnicmp, METH_VARARGS | METH_KEYWORDS, Apsw_strnicmp_DOC},
 #ifdef APSW_TESTFIXTURES
     {"_fini", (PyCFunction)apsw_fini, METH_NOARGS,
      "Frees all caches and recycle lists"},
@@ -1314,7 +1419,7 @@ static PyMethodDef module_methods[] = {
      Apsw_fork_checker_DOC},
 #endif
     {"__getattr__", (PyCFunction)apsw_getattr, METH_O, "foo"},
-    {  0, 0, 0, 0} /* Sentinel */
+    {0, 0, 0, 0} /* Sentinel */
 };
 
 static struct PyModuleDef apswmoduledef = {
@@ -1916,9 +2021,28 @@ modules etc. For example::
         ADDINT(SQLITE_PREPARE_PERSISTENT),
         ADDINT(SQLITE_PREPARE_NORMALIZE),
         ADDINT(SQLITE_PREPARE_NO_VTAB),
+        END,
+
+        DICT("mapping_trace_codes"),
+        ADDINT(SQLITE_TRACE_STMT),
+        ADDINT(SQLITE_TRACE_PROFILE),
+        ADDINT(SQLITE_TRACE_ROW),
+        ADDINT(SQLITE_TRACE_CLOSE),
+        END,
+
+        DICT("mapping_statement_status"),
+        ADDINT(SQLITE_STMTSTATUS_FULLSCAN_STEP),
+        ADDINT(SQLITE_STMTSTATUS_SORT),
+        ADDINT(SQLITE_STMTSTATUS_AUTOINDEX),
+        ADDINT(SQLITE_STMTSTATUS_VM_STEP),
+        ADDINT(SQLITE_STMTSTATUS_REPREPARE),
+        ADDINT(SQLITE_STMTSTATUS_RUN),
+        ADDINT(SQLITE_STMTSTATUS_FILTER_MISS),
+        ADDINT(SQLITE_STMTSTATUS_FILTER_HIT),
+        ADDINT(SQLITE_STMTSTATUS_MEMUSED),
         END
 
-        };
+    };
 
     for (i = 0; i < sizeof(integers) / sizeof(integers[0]); i++)
     {
@@ -1965,7 +2089,7 @@ modules etc. For example::
 
   {
     PyObject *mod = PyImport_ImportModule("collections.abc");
-    if(mod)
+    if (mod)
     {
       collections_abc_Mapping = PyObject_GetAttrString(mod, "Mapping");
       Py_DECREF(mod);

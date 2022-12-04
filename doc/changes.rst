@@ -6,6 +6,18 @@ Change History
 next
 ====
 
+Added :attr:`Connection.system_errno`, :meth:`apsw.strlike`,
+:meth:`apsw.strglob`, :meth:`apsw.stricmp`, :meth:`apsw.strnicmp`,
+:attr:`Connection.filename_wal`, :attr:`Connection.filename_journal`,
+:meth:`Connection.table_exists`, :meth:`Connection.column_metadata`,
+:attr:`Error.error_offset` (:issue:`382`)
+
+Added :meth:`Connection.trace_v2` with :attr:`apsw.mapping_trace_codes`
+and :attr:`apsw.mapping_statement_status` (:issue:`383`)
+
+3.40.0.0
+========
+
 Fixed regression in statement cache update (version 3.38.1-r1) where
 trailing whitespace in queries would be incorrectly treated as
 incomplete execution (:issue:`376`)

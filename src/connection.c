@@ -64,6 +64,8 @@ struct Connection
   PyObject *collationneeded;
   PyObject *exectrace;
   PyObject *rowtrace;
+  PyObject *tracehook;
+  int tracemask;
 
   /* if we are using one of our VFS since sqlite doesn't reference count them */
   PyObject *vfs;
@@ -139,6 +141,7 @@ Connection_internal_cleanup(Connection *self)
   Py_CLEAR(self->collationneeded);
   Py_CLEAR(self->exectrace);
   Py_CLEAR(self->rowtrace);
+  Py_CLEAR(self->tracehook);
   Py_CLEAR(self->vfs);
   Py_CLEAR(self->open_flags);
   Py_CLEAR(self->open_vfs);
@@ -327,6 +330,8 @@ Connection_new(PyTypeObject *type, PyObject *Py_UNUSED(args), PyObject *Py_UNUSE
     self->collationneeded = 0;
     self->exectrace = 0;
     self->rowtrace = 0;
+    self->tracehook = 0;
+    self->tracemask = 0;
     self->vfs = 0;
     self->savepointlevel = 0;
     self->open_flags = 0;
@@ -1180,6 +1185,180 @@ Connection_setprofile(Connection *self, PyObject *args, PyObject *kwds)
 }
 
 static int
+tracehook_cb(unsigned code, void *vconnection, void *one, void *two)
+{
+  PyGILState_STATE gilstate;
+  Connection *connection = (Connection *)vconnection;
+  PyObject *param = NULL, *res = NULL;
+  sqlite3_stmt *stmt = NULL;
+  sqlite3_int64 *nanoseconds = NULL;
+
+  gilstate = PyGILState_Ensure();
+  if (PyErr_Occurred())
+    goto finally;
+
+  switch (code)
+  {
+
+  case SQLITE_TRACE_STMT:
+#define V(x) sqlite3_stmt_status(stmt, x, 1)
+
+    stmt = (sqlite3_stmt *)one;
+    V(SQLITE_STMTSTATUS_FULLSCAN_STEP);
+    V(SQLITE_STMTSTATUS_SORT);
+    V(SQLITE_STMTSTATUS_AUTOINDEX);
+    V(SQLITE_STMTSTATUS_VM_STEP);
+    V(SQLITE_STMTSTATUS_REPREPARE);
+    V(SQLITE_STMTSTATUS_RUN);
+    V(SQLITE_STMTSTATUS_FILTER_MISS);
+    V(SQLITE_STMTSTATUS_FILTER_HIT);
+    if (connection->tracemask & SQLITE_TRACE_STMT)
+      param = Py_BuildValue("{s: i, s: s, s: O}",
+                            "code", code, "sql", sqlite3_sql(stmt), "connection", connection);
+    break;
+#undef V
+
+  case SQLITE_TRACE_ROW:
+    stmt = (sqlite3_stmt *)one;
+    if (connection->tracemask & SQLITE_TRACE_ROW)
+      param = Py_BuildValue("{s: i, s: s, s: O}",
+                            "code", code, "sql", sqlite3_sql(stmt), "connection", connection);
+    break;
+
+  case SQLITE_TRACE_CLOSE:
+    if (connection->tracemask & SQLITE_TRACE_CLOSE)
+      param = Py_BuildValue("{s: i, s: O}",
+                            "code", code, "connection", connection);
+    break;
+
+  case SQLITE_TRACE_PROFILE:
+#define K "s: i,"
+#define V(x) #x, sqlite3_stmt_status(stmt, x, 0)
+
+    stmt = (sqlite3_stmt *)one;
+    nanoseconds = (sqlite3_int64 *)two;
+
+    if (connection->tracemask & SQLITE_TRACE_PROFILE)
+    {
+      /* only SQLITE_STMTSTATUS_MEMUSED actually needs mutex */
+      sqlite3_mutex_enter(sqlite3_db_mutex(connection->db));
+      param = Py_BuildValue("{s: i, s: O, s: s, s: L, s: {" K K K K K K K K "s: i}}",
+                            "code", code, "connection", connection, "sql", sqlite3_sql(stmt),
+                            "nanoseconds", *nanoseconds, "stmt_status",
+                            V(SQLITE_STMTSTATUS_FULLSCAN_STEP),
+                            V(SQLITE_STMTSTATUS_SORT),
+                            V(SQLITE_STMTSTATUS_AUTOINDEX),
+                            V(SQLITE_STMTSTATUS_VM_STEP),
+                            V(SQLITE_STMTSTATUS_REPREPARE),
+                            V(SQLITE_STMTSTATUS_RUN),
+                            V(SQLITE_STMTSTATUS_FILTER_MISS),
+                            V(SQLITE_STMTSTATUS_FILTER_HIT),
+                            V(SQLITE_STMTSTATUS_MEMUSED));
+      sqlite3_mutex_leave(sqlite3_db_mutex(connection->db));
+    }
+    break;
+#undef K
+#undef V
+
+  default:
+    fprintf(stderr, "unexpected trace code %u vconnection %p one %p two %p\n", code, vconnection, one, two);
+    assert(0);
+  }
+
+  if (param)
+  {
+    res = PyObject_CallFunctionObjArgs(connection->tracehook, param, NULL);
+    if (!res)
+      apsw_write_unraiseable(NULL);
+  }
+finally:
+  Py_XDECREF(res);
+  Py_XDECREF(param);
+  PyGILState_Release(gilstate);
+  return 0;
+}
+
+/** .. method:: trace_v2(mask: int, callback: Optional[Callable[[dict], None]] = None) -> None
+
+  Registers a trace callback.  The callback is called with a dict of relevant values based
+  on the code.
+
+  .. list-table::
+    :header-rows: 1
+    :widths: auto
+
+    * - Key
+      - Type
+      - Explanation
+    * - code
+      - :class:`int`
+      - One of the `trace event codes <https://www.sqlite.org/c3ref/c_trace.html>`__
+    * - connection
+      - :class:`Connection`
+      - Connection this trace event belongs to
+    * - sql
+      - :class:`str`
+      - SQL text (except SQLITE_TRACE_CLOSE)
+    * - profile
+      - :class:`int`
+      - nanoseconds SQL took to execute (SQLITE_TRACE_PROFILE only)
+    * - stmt_status
+      - :class:`dict`
+      - SQLITE_TRACE_PROFILE only: Keys are names from `status parameters
+        <https://www.sqlite.org/c3ref/c_stmtstatus_counter.html>`__ - eg
+        *"SQLITE_STMTSTATUS_VM_STEP"* and corresponding integer values.
+        The counters are reset each time a statement
+        starts execution.
+
+  -* sqlite3_trace_v2 sqlite3_stmt_status
+*/
+static PyObject *
+Connection_trace_v2(Connection *self, PyObject *args, PyObject *kwds)
+{
+  int mask = 0, res = 0;
+  PyObject *callback = NULL;
+
+  CHECK_USE(NULL);
+  CHECK_CLOSED(self, NULL);
+
+  {
+    static char *kwlist[] = {"mask", "callback", NULL};
+    Connection_trace_v2_CHECK;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "i|O&:" Connection_trace_v2_USAGE, kwlist, &mask, argcheck_Optional_Callable, &callback))
+      return NULL;
+  }
+
+  if (mask && !callback)
+    return PyErr_Format(PyExc_ValueError, "Non-zero mask but no callback provided");
+  if (mask == 0 && callback)
+    return PyErr_Format(PyExc_ValueError, "mask selects no events, but callback provided");
+
+  /* SQLite doesn't */
+  if (mask & ~(SQLITE_TRACE_STMT | SQLITE_TRACE_PROFILE | SQLITE_TRACE_ROW | SQLITE_TRACE_CLOSE))
+    return PyErr_Format(PyExc_ValueError, "mask includes unknown trace values");
+
+  /* what was actually requested */
+  self->tracemask = mask;
+
+  /* if profiling, we always want statement start to reset counters */
+  if (mask | SQLITE_TRACE_PROFILE)
+    mask |= SQLITE_TRACE_STMT;
+
+  Py_CLEAR(self->tracehook);
+  Py_XINCREF(callback);
+  self->tracehook = callback;
+
+  PYSQLITE_CON_CALL(res = sqlite3_trace_v2(self->db, mask, tracehook_cb, self));
+  if (res != SQLITE_OK)
+  {
+    SET_EXC(res, self->db);
+    return NULL;
+  }
+
+  Py_RETURN_NONE;
+}
+
+static int
 commithookcb(void *context)
 {
   /* The hook returns 0 for commit to go ahead and non-zero to abort
@@ -1536,7 +1715,7 @@ Connection_setauthorizer(Connection *self, PyObject *args, PyObject *kwds)
       return NULL;
   }
 
-  if(Connection_internal_set_authorizer(self, callable))
+  if (Connection_internal_set_authorizer(self, callable))
     return NULL;
   Py_RETURN_NONE;
 }
@@ -2968,7 +3147,7 @@ Connection_wal_checkpoint(Connection *self, PyObject *args, PyObject *kwds)
 static struct sqlite3_module apsw_vtable_module;
 static void apswvtabFree(void *context);
 
-/** .. method:: createmodule(name: str, datasource: Any) -> None
+/** .. method:: createmodule(name: str, datasource: VTModule) -> None
 
     Registers a virtual table.  See :ref:`virtualtables` for details.
 
@@ -3669,10 +3848,88 @@ Connection_cache_stats(Connection *self, PyObject *args, PyObject *kwds)
   return statementcache_stats(self->stmtcache, include_entries);
 }
 
+/** .. method:: table_exists(dbname: Optional[str], table_name: str) -> bool
+
+  Returns True if the named table exists, else False.
+
+  `dbname` is the specific database (eg "main", "temp") or None to search
+  all databases
+
+  -* sqlite3_table_column_metadata
+*/
+static PyObject *
+Connection_table_exists(Connection *self, PyObject *args, PyObject *kwds)
+{
+  const char *dbname = NULL, *table_name = NULL;
+  int res;
+
+  CHECK_USE(NULL);
+  CHECK_CLOSED(self, NULL);
+
+  {
+    static char *kwlist[] = {"dbname", "table_name", NULL};
+    Connection_table_exists_CHECK;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "zs:" Connection_table_exists_USAGE, kwlist, &dbname, &table_name))
+      return NULL;
+  }
+
+  PYSQLITE_VOID_CALL(res = sqlite3_table_column_metadata(self->db, dbname, table_name, NULL, NULL, NULL, NULL, NULL, NULL));
+
+  if (res == SQLITE_OK)
+    Py_RETURN_TRUE;
+  Py_RETURN_FALSE;
+}
+
+/** .. method:: column_metadata(dbname: Optional[str], table_name: str, column_name: str) -> Tuple[str, str, bool, bool, bool]
+
+  `dbname` is the specific database (eg "main", "temp") or None to search
+  all databases.
+
+  The returned :class:`tuple` has these fields:
+
+  0: str - declared data type
+
+  1: str - name of default collation sequence
+
+  2: bool - True if not null constraint
+
+  3: bool - True if part of primary key
+
+  4: bool - True if column is `autoincrement <https://www.sqlite.org/autoinc.html>`__
+
+  -* sqlite3_table_column_metadata
+*/
+static PyObject *
+Connection_column_metadata(Connection *self, PyObject *args, PyObject *kwds)
+{
+  const char *dbname = NULL, *table_name = NULL, *column_name = NULL;
+  int res;
+
+  const char *datatype = NULL, *collseq = NULL;
+  int notnull = 0, primarykey = 0, autoinc = 0;
+
+  CHECK_USE(NULL);
+  CHECK_CLOSED(self, NULL);
+
+  {
+    static char *kwlist[] = {"dbname", "table_name", "column_name", NULL};
+    Connection_column_metadata_CHECK;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "zss:" Connection_column_metadata_USAGE, kwlist, &dbname, &table_name, &column_name))
+      return NULL;
+  }
+
+  PYSQLITE_CON_CALL(res = sqlite3_table_column_metadata(self->db, dbname, table_name, column_name, &datatype, &collseq, &notnull, &primarykey, &autoinc));
+
+  if (res != SQLITE_OK)
+    return NULL;
+
+  return Py_BuildValue("(ssOOO)", datatype, collseq, notnull ? Py_True : Py_False, primarykey ? Py_True : Py_False, autoinc ? Py_True : Py_False);
+}
+
 /** .. attribute:: filename
   :type: str
 
-  The filename of the  database.
+  The filename of the database.
 
   -* sqlite3_db_filename
 */
@@ -3680,8 +3937,39 @@ Connection_cache_stats(Connection *self, PyObject *args, PyObject *kwds)
 static PyObject *
 Connection_getmainfilename(Connection *self)
 {
+  CHECK_USE(NULL);
   CHECK_CLOSED(self, NULL);
   return convertutf8string(sqlite3_db_filename(self->db, "main"));
+}
+
+/** .. attribute:: filename_journal
+  :type: str
+
+  The journal filename of the database,
+
+  -* sqlite3_filename_journal
+*/
+static PyObject *
+Connection_getjournalfilename(Connection *self)
+{
+  CHECK_USE(NULL);
+  CHECK_CLOSED(self, NULL);
+  return convertutf8string(sqlite3_filename_journal(sqlite3_db_filename(self->db, "main")));
+}
+
+/** .. attribute:: filename_wal
+  :type: str
+
+  The WAL filename of the database,
+
+  -* sqlite3_filename_wal
+*/
+static PyObject *
+Connection_getwalfilename(Connection *self)
+{
+  CHECK_USE(NULL);
+  CHECK_CLOSED(self, NULL);
+  return convertutf8string(sqlite3_filename_wal(sqlite3_db_filename(self->db, "main")));
 }
 
 /** .. attribute:: cursor_factory
@@ -3906,11 +4194,29 @@ Connection_set_authorizer_attr(Connection *self, PyObject *value)
   return Connection_internal_set_authorizer(self, (value != Py_None) ? value : NULL);
 }
 
+/** .. attribute:: system_errno
+ :type: int
+
+ The underlying system error code for the most recent I/O errors or failing to open files.
+
+ -* sqlite3_system_errno
+*/
+static PyObject *
+Connection_get_system_errno(Connection *self)
+{
+  CHECK_USE(NULL);
+  CHECK_CLOSED(self, NULL);
+
+  return PyLong_FromLong(sqlite3_system_errno(self->db)); /* PYSQLITE_CON_CALL not needed - no mutex taken */
+}
+
 static PyGetSetDef Connection_getseters[] = {
     /* name getter setter doc closure */
     {"filename",
      (getter)Connection_getmainfilename, NULL,
      Connection_filename_DOC, NULL},
+    {"filename_journal", (getter)Connection_getjournalfilename, NULL, Connection_filename_journal_DOC, NULL},
+    {"filename_wal", (getter)Connection_getwalfilename, NULL, Connection_filename_wal_DOC, NULL},
     {"cursor_factory", (getter)Connection_get_cursor_factory,
      (setter)Connection_set_cursor_factory, Connection_cursor_factory_DOC, NULL},
     {"in_transaction", (getter)Connection_get_in_transaction,
@@ -3918,6 +4224,7 @@ static PyGetSetDef Connection_getseters[] = {
     {"exectrace", (getter)Connection_get_exectrace_attr, (setter)Connection_set_exectrace_attr, Connection_exectrace_DOC},
     {"rowtrace", (getter)Connection_get_rowtrace_attr, (setter)Connection_set_rowtrace_attr, Connection_rowtrace_DOC},
     {"authorizer", (getter)Connection_get_authorizer_attr, (setter)Connection_set_authorizer_attr, Connection_authorizer_DOC},
+    {"system_errno", (getter)Connection_get_system_errno, NULL, Connection_system_errno_DOC},
     /* Sentinel */
     {
         NULL, NULL, NULL, NULL, NULL}};
@@ -3948,6 +4255,7 @@ Connection_tp_traverse(Connection *self, visitproc visit, void *arg)
   Py_VISIT(self->collationneeded);
   Py_VISIT(self->exectrace);
   Py_VISIT(self->rowtrace);
+  Py_VISIT(self->tracehook);
   Py_VISIT(self->vfs);
   Py_VISIT(self->dependents);
   Py_VISIT(self->cursor_factory);
@@ -4062,6 +4370,9 @@ static PyMethodDef Connection_methods[] = {
     {"executemany", (PyCFunction)Connection_executemany, METH_VARARGS | METH_KEYWORDS,
      Connection_executemany_DOC},
     {"cache_stats", (PyCFunction)Connection_cache_stats, METH_VARARGS | METH_KEYWORDS, Connection_cache_stats_DOC},
+    {"table_exists", (PyCFunction)Connection_table_exists, METH_VARARGS | METH_KEYWORDS, Connection_table_exists_DOC},
+    {"column_metadata", (PyCFunction)Connection_column_metadata, METH_VARARGS | METH_KEYWORDS, Connection_column_metadata_DOC},
+    {"trace_v2", (PyCFunction)Connection_trace_v2, METH_VARARGS | METH_KEYWORDS, Connection_trace_v2_DOC},
     {0, 0, 0, 0} /* Sentinel */
 };
 

@@ -113,7 +113,7 @@ def get_all_exc_doc() -> None:
             continue
         if capture is not None:
             # look for non-indented line
-            if line.strip() and line.lstrip() == line:
+            if line.strip() and line.lstrip() == line and not line.startswith(".. attribute::"):
                 proc()
                 continue
             capture.append(line.rstrip())
@@ -302,7 +302,7 @@ def analyze_signature(s: str) -> List[dict]:
             after_name = ""
             continue
 
-        if c.isidentifier() or (not name and c in "/*"):
+        if c.isidentifier() or (name and c.isdigit()) or (not name and c in "/*"):
             name += c
 
     if name:
@@ -529,7 +529,7 @@ def do_argparse(item):
                 breakpoint()
                 pass
         elif param["type"] in {
-                "PyObject", "Any", "Optional[type[BaseException]]", "Optional[BaseException]", "Optional[types.TracebackType]"
+                "PyObject", "Any", "Optional[type[BaseException]]", "Optional[BaseException]", "Optional[types.TracebackType]", "VTModule"
         }:
             type = "PyObject *"
             kind = "O"
@@ -551,8 +551,10 @@ def do_argparse(item):
             kind = "O&"
             args = ["argcheck_Optional_Callable"] + args
             if param["default"]:
-                breakpoint()
-                pass
+                if param["default"] == "None":
+                    default_check = f"{ pname } == NULL"
+                else:
+                    breakpoint()
         elif param["type"] == "Optional[Union[str,URIFilename]]":
             type = "PyObject *"
             kind = "O&"

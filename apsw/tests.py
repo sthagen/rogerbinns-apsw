@@ -9,6 +9,7 @@ import os
 import warnings
 import platform
 import typing
+import itertools
 
 
 def print_version_info():
@@ -100,11 +101,11 @@ def next(cursor, *args):
 # py3 has a useless sys.excepthook mainly to avoid allocating any
 # memory as the exception could have been running out of memory.  So
 # we use our own which is also valuable on py2 as it says it is an
-# unraiseable exception (with testcode you sometimes can't tell if it
-# is unittest showing you an exception or the unraiseable).  It is
+# unraisable exception (with testcode you sometimes can't tell if it
+# is unittest showing you an exception or the unraisable).  It is
 # mainly VFS code that needs to raise these.
 def ehook(etype, evalue, etraceback):
-    sys.stderr.write("Unraiseable exception " + str(etype) + ":" + str(evalue) + "\n")
+    sys.stderr.write("Unraisable exception " + str(etype) + ":" + str(evalue) + "\n")
     traceback.print_tb(etraceback)
 
 
@@ -228,10 +229,6 @@ def deletefile(name):
         time.sleep(0.1)
 
 
-# Monkey patching FTW
-if not hasattr(unittest.TestCase, "assertTrue"):
-    unittest.TestCase.assertTrue = unittest.TestCase.assert_
-
 openflags = apsw.SQLITE_OPEN_READWRITE | apsw.SQLITE_OPEN_CREATE | apsw.SQLITE_OPEN_URI
 
 
@@ -343,7 +340,7 @@ class APSW(unittest.TestCase):
         return self.baseAssertRaisesUnraisable(True, exc, func, args, kwargs)
 
     def assertMayRaiseUnraisable(self, exc, func, *args, **kwargs):
-        """Like assertRaisesUnraiseable but no exception may be raised.
+        """Like assertRaisesUnraisable but no exception may be raised.
 
         If one is raised, it must have the expected type.
         """
@@ -382,7 +379,7 @@ class APSW(unittest.TestCase):
                     raise
             finally:
                 if must_raise and len(called) < 1:
-                    self.fail("Call %s(*%s, **%s) did not do any unraiseable" % (func, args, kwargs))
+                    self.fail("Call %s(*%s, **%s) did not do any unraisable" % (func, args, kwargs))
                 if len(called):
                     self.assertEqual(exc, called[0][0])  # check it was the correct type
         finally:
@@ -1019,6 +1016,14 @@ class APSW(unittest.TestCase):
 
     def testTypes(self):
         "Check type information is maintained"
+
+        # zeroblob in functions
+        def func(n: int):
+            return apsw.zeroblob(n)
+        self.db.createscalarfunction("func", func)
+
+        self.assertEqual(self.db.execute("select func(17)").fetchall()[0][0], b"\0" * 17)
+
         c = self.db.cursor()
         c.execute("create table foo(row,x)")
 
@@ -1867,6 +1872,11 @@ class APSW(unittest.TestCase):
         c.execute("begin")
         for i in range(100):
             c.execute("insert into foo values(?)", (i + 1000, ))
+
+        # for coverage
+        self.db.cacheflush()
+        self.db.release_memory()
+
         c.execute("commit")
         self.assertEqual(300, self.db.totalchanges())
         if hasattr(apsw, "faultdict"):
@@ -3933,11 +3943,11 @@ class APSW(unittest.TestCase):
 
         self.assertRaises(apsw.ThreadingViolationError, cur.executemany, "insert into b values(?)", foo())
 
-    def testWriteUnraiseable(self):
-        "Verify writeunraiseable replacement function"
+    def testWriteUnraisable(self):
+        "Verify writeunraisable replacement function"
 
         def unraise():
-            # We cause an unraiseable error to happen by writing to a
+            # We cause an unraisable error to happen by writing to a
             # blob open for reading.  The close method called in the
             # destructor will then also give the error
             db = apsw.Connection(":memory:")
@@ -3973,6 +3983,7 @@ class APSW(unittest.TestCase):
 
     def testStatementCache(self, scsize=17):
         "Verify statement cache integrity"
+        self.db.close()
         self.db = apsw.Connection(TESTFILEPREFIX + "testdb", statementcachesize=scsize)
         cur = self.db.cursor()
         cur.execute("create table foo(x,y)")
@@ -4144,11 +4155,11 @@ class APSW(unittest.TestCase):
            # isn't a problem.
                         'skipcalls': re.compile("^sqlite3_(blob_bytes|column_count|bind_parameter_count|data_count|vfs_.+|changes64|total_changes64"
                                                 "|get_autocommit|last_insert_rowid|complete|interrupt|limit|malloc64|free|threadsafe|value_.+"
-                                                "|libversion|enable_shared_cache|initialize|shutdown|config|memory_.+|soft_heap_limit(64)?"
+                                                "|libversion|enable_shared_cache|initialize|shutdown|config|memory_.+|soft_heap_limit64|hard_heap_limit64"
                                                 "|randomness|db_readonly|db_filename|release_memory|status64|result_.+|user_data|mprintf|aggregate_context"
                                                 "|declare_vtab|backup_remaining|backup_pagecount|mutex_enter|mutex_leave|sourceid|uri_.+"
                                                 "|column_name|column_decltype|column_database_name|column_table_name|column_origin_name"
-                                                "|stmt_isexplain|stmt_readonly|filename_journal|filename_wal|stmt_status|sql)$"),
+                                                "|stmt_isexplain|stmt_readonly|filename_journal|filename_wal|stmt_status|sql|log)$"),
                         # error message
                         'desc': "sqlite3_ calls must wrap with PYSQLITE_CALL",
                         },
@@ -4413,12 +4424,16 @@ class APSW(unittest.TestCase):
         apsw.memoryhighwater(True)
         self.assertEqual(apsw.memoryhighwater(), apsw.memoryused())
         self.assertRaises(TypeError, apsw.softheaplimit, 1, 2)
+        self.assertRaises(TypeError, apsw.hard_heap_limit, 1, 2)
         apsw.softheaplimit(0)
         self.assertRaises(TypeError, apsw.releasememory, 1, 2)
         res = apsw.releasememory(0x7fffffff)
         self.assertTrue(type(res) in (int, ))
         apsw.softheaplimit(0x1234567890abc)
         self.assertEqual(0x1234567890abc, apsw.softheaplimit(0x1234567890abe))
+        apsw.hard_heap_limit(0x1234567890abd)
+        self.assertEqual(0x1234567890abd, apsw.hard_heap_limit(0x1234567890abe))
+
 
     def testRandomness(self):
         "Verify randomness routine"
@@ -4437,31 +4452,16 @@ class APSW(unittest.TestCase):
         self.assertEqual(self.db.sqlite3pointer(), self.db.sqlite3pointer())
         self.assertNotEqual(self.db.sqlite3pointer(), apsw.Connection(":memory:").sqlite3pointer())
 
-    def testPickle(self, module=None):
+    def testPickle(self):
         "Verify data etc can be pickled"
-        if module == None:
-            import pickle
-            self.testPickle(pickle)
-            try:
-                import cPickle
-                self.testPickle(cPickle)
-            except ImportError:
-                pass
-            return
-
         import pickle
         PicklingError = pickle.PicklingError
-        try:
-            import cPickle
-            PicklingError = (PicklingError, cPickle.PicklingError)
-        except ImportError:
-            pass
 
         # work out what protocol versions we can use
         versions = []
         for num in range(-1, 20):
             try:
-                module.dumps(3, num)
+                pickle.dumps(3, num)
                 versions.append(num)
             except ValueError:
                 pass
@@ -4480,7 +4480,7 @@ class APSW(unittest.TestCase):
 
         for ver in versions:
             for row in cursor.execute("select * from t"):
-                self.assertEqual(row, module.loads(module.dumps(row, ver)))
+                self.assertEqual(row, pickle.loads(pickle.dumps(row, ver)))
                 rownum, val = row
                 if type(vals[rownum]) is float:
                     self.assertAlmostEqual(vals[rownum], val)
@@ -4488,7 +4488,7 @@ class APSW(unittest.TestCase):
                     self.assertEqual(vals[rownum], val)
             # can't pickle cursors
             try:
-                module.dumps(cursor, ver)
+                pickle.dumps(cursor, ver)
             except TypeError:
                 pass
             except PicklingError:
@@ -4496,7 +4496,7 @@ class APSW(unittest.TestCase):
             # some versions can pickle the db, but give a zeroed db back
             db = None
             try:
-                db = module.loads(module.dumps(self.db, ver))
+                db = pickle.loads(pickle.dumps(self.db, ver))
             except TypeError:
                 pass
             if db is not None:
@@ -4504,6 +4504,47 @@ class APSW(unittest.TestCase):
                 self.assertRaises(apsw.ConnectionClosedError, db.cursor)
                 self.assertRaises(apsw.ConnectionClosedError, db.getautocommit)
                 self.assertRaises(apsw.ConnectionClosedError, db.in_transaction)
+
+    def testDropModules(self):
+        "Verify dropping virtual table modules"
+        # simplest implementation possible
+        class Source:
+            def Create(self, db, modulename, dbname, tablename, *args):
+                return "create table placeholder(x)", object()
+
+        counter = 0
+        def check_module(name: str, shouldfail: bool) -> None:
+            nonlocal counter
+            counter +=1
+            try:
+                self.db.execute(f"create virtual table ex{ counter } using { name }()")
+            except apsw.SQLError as e:
+                if shouldfail:
+                    self.assertIn(f"no such module: { name }", str(e))
+                else:
+                    raise
+
+        self.db.createmodule("abc", Source())
+        check_module("abc", False)
+        self.db.createmodule("abc", None) # should drop the table
+        check_module("abc", True)
+
+        # we register a whole bunch, and then unregister subsets
+        names = list("".join(x) for x in itertools.permutations("abc"))
+        for n in names:
+            self.db.createmodule(n, Source())
+            check_module(n, False)
+
+        random.shuffle(names)
+        for i in range(len(names), -1, -1):
+            if not names:
+                break
+            keep = random.sample(names, i)
+            self.db.drop_modules(keep)
+            for n in names:
+                check_module(n, n not in keep)
+            check_module("madeup",  True)
+            names = keep
 
     def testStatus(self):
         "Verify status function"
@@ -4544,7 +4585,7 @@ class APSW(unittest.TestCase):
         self.assertRaises(TypeError, apsw.zeroblob)
         self.assertRaises(TypeError, apsw.zeroblob, "foo")
         self.assertRaises(TypeError, apsw.zeroblob, -7)
-        self.assertRaises(OverflowError, apsw.zeroblob, 4000000000)
+        self.assertRaises(apsw.TooBigError, self.db.execute, "select ?", (apsw.zeroblob(4000000000),))
         cur = self.db.cursor()
         cur.execute("create table foo(x)")
         cur.execute("insert into foo values(?)", (apsw.zeroblob(27), ))
@@ -4852,6 +4893,12 @@ class APSW(unittest.TestCase):
         x = results.pop()
         self.assertEqual(apsw.SQLITE_TRACE_CLOSE, x["code"])
         self.assertIs(db2, x["connection"])
+
+        def tracehook(x):
+            1/0
+        self.db.trace_v2(apsw.SQLITE_TRACE_STMT, tracehook)
+        self.assertRaisesUnraisable(ZeroDivisionError, self.db.execute, query)
+        self.assertEqual(0, len(results))
 
     def testURIFilenames(self):
         assertRaises = self.assertRaises
@@ -6447,6 +6494,8 @@ class APSW(unittest.TestCase):
             self.assertEqual(called[0], 1)
 
             def badhandler(code, message, called=called):
+                if message and "apsw_write_unraisable" in message:
+                    return
                 called[0] += 1
                 self.assertEqual(code, apsw.SQLITE_NOMEM)
                 self.assertEqual(message, u"Xa \u1234 unicode ' \ufe54 string \u0089")
@@ -6482,11 +6531,11 @@ class APSW(unittest.TestCase):
         self.assertEqual(self.db.filename, self.db.db_filename("main"))
         self.db.cursor().execute("attach '%s' as foo" % (TESTFILEPREFIX + "testdb2", ))
         self.assertEqual(self.db.filename + "2", self.db.db_filename("foo"))
-        self.assert_(self.db.filename_wal.startswith(self.db.filename))
-        self.assert_(self.db.filename_journal.startswith(self.db.filename))
+        self.assertTrue(self.db.filename_wal.startswith(self.db.filename))
+        self.assertTrue(self.db.filename_journal.startswith(self.db.filename))
         xdb = apsw.Connection("")
         # these all end up empty string
-        self.assert_(xdb.filename == xdb.filename_wal and xdb.filename_wal == xdb.filename_journal)
+        self.assertTrue(xdb.filename == xdb.filename_wal and xdb.filename_wal == xdb.filename_journal)
 
     def testShell(self, shellclass=None):
         "Check Shell functionality"
@@ -8436,7 +8485,7 @@ shell.write(shell.stdout, "hello world\\n")
         apsw.faultdict["VtabCreateBadString"] = True
         try:
             db = apsw.Connection(":memory:")
-            db.createmodule("nonsense", None)
+            db.createmodule("nonsense", Source())
             db.cursor().execute("create virtual table foo using nonsense(3,4)")
             1 / 0
         except MemoryError:
@@ -8869,6 +8918,21 @@ shell.write(shell.stdout, "hello world\\n")
         apsw.faultdict["dbnamesappendfail"] = True
         self.assertRaises(MemoryError, self.db.db_names)
 
+    def testFunctionFlags(self) -> None:
+        "Flags to registered SQLite functions"
+        self.db.createscalarfunction("donotcall", lambda x: x/0, flags = apsw.SQLITE_DIRECTONLY)
+        self.db.execute("""
+            create table foo(y);
+            insert into foo values(7);
+            create view bar(z) as select donotcall(y) from foo;
+        """)
+        try:
+            self.db.execute("select * from bar")
+            1/0 # should not be reached
+        except apsw.SQLError as e:
+            self.assertIn("unsafe use of donotcall",  str(e))
+
+
     def testExtDataClassRowFactory(self) -> None:
         "apsw.ext.DataClassRowFactory"
         import apsw.ext
@@ -9082,7 +9146,7 @@ SELECT group_concat(rtrim(t),x'0a') FROM a;
             # this should work
             teststuff(*getstuff())
 
-            # ignore the unraiseable stuff sent to sys.excepthook
+            # ignore the unraisable stuff sent to sys.excepthook
             def eh(*args):
                 pass
 
@@ -9276,11 +9340,6 @@ def setup():
         print("Not doing LoadExtension test.  You need to compile the extension first\n")
         print("  python3 setup.py build_test_extension")
         del APSW.testLoadExtension
-
-    # coverage testing of the shell
-    if "APSW_PY_COVERAGE" in os.environ:
-        APSW._originaltestShell = APSW.testShell
-        APSW.testShell = APSW._testShellWithCoverage
 
     # python version compatibility
     if not hasattr(APSW, "assertRaisesRegex"):

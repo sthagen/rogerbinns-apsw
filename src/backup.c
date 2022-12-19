@@ -124,7 +124,7 @@ APSWBackup_close_internal(APSWBackup *self, int force)
       PyErr_Fetch(&etype, &eval, &etb);
 
       SET_EXC(res, self->dest->db);
-      apsw_write_unraiseable(NULL);
+      apsw_write_unraisable(NULL);
 
       PyErr_Restore(etype, eval, etb);
       break;
@@ -268,7 +268,8 @@ APSWBackup_close(APSWBackup *self, PyObject *args, PyObject *kwds)
   {
     static char *kwlist[] = {"force", NULL};
     Backup_close_CHECK;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O&:" Backup_close_USAGE, kwlist, argcheck_bool, &force))
+    argcheck_bool_param force_param = {&force, Backup_close_force_MSG};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O&:" Backup_close_USAGE, kwlist, argcheck_bool, &force_param))
       return NULL;
   }
   setexc = APSWBackup_close_internal(self, force);

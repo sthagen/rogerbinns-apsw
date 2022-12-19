@@ -585,12 +585,7 @@ APSWCursor_dobinding(APSWCursor *self, int arg, PyObject *obj)
     APSW_FAULT_INJECT(DoBindingUnicodeConversionFails, strdata = PyUnicode_AsUTF8AndSize(obj, &strbytes), strdata = (const char *)PyErr_NoMemory());
     if (strdata)
     {
-      if (strbytes > APSW_INT32_MAX)
-      {
-        SET_EXC(SQLITE_TOOBIG, NULL);
-      }
-      else
-        PYSQLITE_CUR_CALL(res = sqlite3_bind_text(self->statement->vdbestatement, arg, strdata, strbytes, SQLITE_TRANSIENT));
+        PYSQLITE_CUR_CALL(res = sqlite3_bind_text64(self->statement->vdbestatement, arg, strdata, strbytes, SQLITE_TRANSIENT, SQLITE_UTF8));
     }
     else
     {
@@ -607,18 +602,12 @@ APSWCursor_dobinding(APSWCursor *self, int arg, PyObject *obj)
     if (asrb != 0)
       return -1;
 
-    if (py3buffer.len > APSW_INT32_MAX)
-    {
-      SET_EXC(SQLITE_TOOBIG, NULL);
-      PyBuffer_Release(&py3buffer);
-      return -1;
-    }
-    PYSQLITE_CUR_CALL(res = sqlite3_bind_blob(self->statement->vdbestatement, arg, py3buffer.buf, py3buffer.len, SQLITE_TRANSIENT));
+    PYSQLITE_CUR_CALL(res = sqlite3_bind_blob64(self->statement->vdbestatement, arg, py3buffer.buf, py3buffer.len, SQLITE_TRANSIENT));
     PyBuffer_Release(&py3buffer);
   }
   else if (PyObject_TypeCheck(obj, &ZeroBlobBindType) == 1)
   {
-    PYSQLITE_CUR_CALL(res = sqlite3_bind_zeroblob(self->statement->vdbestatement, arg, ((ZeroBlobBind *)obj)->blobsize));
+    PYSQLITE_CUR_CALL(res = sqlite3_bind_zeroblob64(self->statement->vdbestatement, arg, ((ZeroBlobBind *)obj)->blobsize));
   }
   else
   {
@@ -1012,7 +1001,7 @@ APSWCursor_step(APSWCursor *self)
     :raises BindingsError: You supplied too many or too few bindings for the statements
     :raises IncompleteExecutionError: There are remaining unexecuted queries from your last execute
 
-    -* sqlite3_prepare_v3 sqlite3_step sqlite3_bind_int64 sqlite3_bind_null sqlite3_bind_text sqlite3_bind_double sqlite3_bind_blob sqlite3_bind_zeroblob
+    -* sqlite3_prepare_v3 sqlite3_step sqlite3_bind_int64 sqlite3_bind_null sqlite3_bind_text64 sqlite3_bind_double sqlite3_bind_blob64 sqlite3_bind_zeroblob
 
     .. seealso::
 
@@ -1044,7 +1033,9 @@ APSWCursor_execute(APSWCursor *self, PyObject *args, PyObject *kwds)
   {
     static char *kwlist[] = {"statements", "bindings", "can_cache", "prepare_flags", NULL};
     Cursor_execute_CHECK;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!|O&$O&i:" Cursor_execute_USAGE, kwlist, &PyUnicode_Type, &statements, argcheck_Optional_Bindings, &bindings, argcheck_bool, &can_cache, &prepare_flags))
+    argcheck_Optional_Bindings_param bindings_param = {&bindings, Cursor_execute_bindings_MSG};
+    argcheck_bool_param can_cache_param = {&can_cache, Cursor_execute_can_cache_MSG};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!|O&$O&i:" Cursor_execute_USAGE, kwlist, &PyUnicode_Type, &statements, argcheck_Optional_Bindings, &bindings_param, argcheck_bool, &can_cache_param, &prepare_flags))
       return NULL;
   }
   self->bindings = bindings;
@@ -1157,7 +1148,8 @@ APSWCursor_executemany(APSWCursor *self, PyObject *args, PyObject *kwds)
   {
     static char *kwlist[] = {"statements", "sequenceofbindings", "can_cache", "prepare_flags", NULL};
     Cursor_executemany_CHECK;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O|$O&i:" Cursor_executemany_USAGE, kwlist, &PyUnicode_Type, &statements, &sequenceofbindings, argcheck_bool, &can_cache, &prepare_flags))
+    argcheck_bool_param can_cache_param = {&can_cache, Cursor_executemany_can_cache_MSG};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O|$O&i:" Cursor_executemany_USAGE, kwlist, &PyUnicode_Type, &statements, &sequenceofbindings, argcheck_bool, &can_cache_param, &prepare_flags))
       return NULL;
   }
   self->emiter = PyObject_GetIter(sequenceofbindings);
@@ -1267,7 +1259,8 @@ APSWCursor_close(APSWCursor *self, PyObject *args, PyObject *kwds)
   {
     static char *kwlist[] = {"force", NULL};
     Cursor_close_CHECK;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O&:" Cursor_close_USAGE, kwlist, argcheck_bool, &force))
+    argcheck_bool_param force_param = {&force, Cursor_close_force_MSG};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O&:" Cursor_close_USAGE, kwlist, argcheck_bool, &force_param))
       return NULL;
   }
   APSWCursor_close_internal(self, !!force);
@@ -1368,7 +1361,8 @@ APSWCursor_setexectrace(APSWCursor *self, PyObject *args, PyObject *kwds)
   {
     static char *kwlist[] = {"callable", NULL};
     Cursor_setexectrace_CHECK;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O&:" Cursor_setexectrace_USAGE, kwlist, argcheck_Optional_Callable, &callable))
+    argcheck_Optional_Callable_param callable_param = {&callable, Cursor_setexectrace_callable_MSG};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O&:" Cursor_setexectrace_USAGE, kwlist, argcheck_Optional_Callable, &callable_param))
       return NULL;
   }
 
@@ -1394,7 +1388,8 @@ APSWCursor_setrowtrace(APSWCursor *self, PyObject *args, PyObject *kwds)
   {
     static char *kwlist[] = {"callable", NULL};
     Cursor_setrowtrace_CHECK;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O&:" Cursor_setrowtrace_USAGE, kwlist, argcheck_Optional_Callable, &callable))
+    argcheck_Optional_Callable_param callable_param = {&callable, Cursor_setrowtrace_callable_MSG};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O&:" Cursor_setrowtrace_USAGE, kwlist, argcheck_Optional_Callable, &callable_param))
       return NULL;
   }
 

@@ -28,7 +28,7 @@ GENDOCS = \
 	doc/apsw.rst \
 	doc/backup.rst
 
-.PHONY : all docs doc header linkcheck publish showsymbols compile-win source source_nocheck release tags clean ppa dpkg dpkg-bin coverage valgrind valgrind1 tagpush pydebug test fulltest test_debug
+.PHONY : all docs doc header linkcheck publish showsymbols compile-win source source_nocheck release tags clean ppa dpkg dpkg-bin coverage valgrind valgrind1 tagpush pydebug test fulltest test_debug unwrapped
 
 all: header src/apsw.docstrings apsw/__init__.pyi test docs
 
@@ -56,7 +56,7 @@ doc/example.rst: example-code.py tools/example2rst.py src/apswversion.h
 	rm -f dbfile
 	env PYTHONPATH=. $(PYTHON) -sS tools/example2rst.py
 
-doc/typing.rstgen: src/types.py tools/types2rst.py
+doc/typing.rstgen: src/apswtypes.py tools/types2rst.py
 	-rm -f doc/typing.rstgen
 	$(PYTHON) tools/types2rst.py
 
@@ -67,7 +67,7 @@ doc/.static:
 $(GENDOCS): doc/%.rst: src/%.c tools/code2rst.py
 	env PYTHONPATH=. $(PYTHON) tools/code2rst.py $(SQLITEVERSION) doc/docdb.json $< $@
 
-apsw/__init__.pyi src/apsw.docstrings: $(GENDOCS) tools/gendocstrings.py src/types.py
+apsw/__init__.pyi src/apsw.docstrings: $(GENDOCS) tools/gendocstrings.py src/apswtypes.py
 	env PYTHONPATH=. $(PYTHON) tools/gendocstrings.py doc/docdb.json src/apsw.docstrings
 
 build_ext:
@@ -77,7 +77,7 @@ build_ext_debug:
 	env $(PYTHON) setup.py fetch --version=$(SQLITEVERSION) --all build_ext --inplace --force --enable-all-extensions --debug
 
 coverage:
-	env $(PYTHON) setup.py fetch --version=$(SQLITEVERSION) --all && env APSW_PY_COVERAGE=t tools/coverage.sh
+	env $(PYTHON) setup.py fetch --version=$(SQLITEVERSION) --all && tools/coverage.sh
 
 PYCOVERAGEOPTS=--source apsw --append
 
@@ -92,16 +92,19 @@ pycoverage:
 	$(PYTHON) -m webbrowser -t htmlcov/index.html
 
 test: build_ext
-	env PYTHONHASHSEED=random $(PYTHON) -m apsw.tests
+	env $(PYTHON) -m apsw.tests
 
 test_debug: $(PYDEBUG_DIR)/bin/python3
 	$(MAKE) build_ext_debug PYTHON=$(PYDEBUG_DIR)/bin/python3
-	env PYTHONHASHSEED=random APSWTESTPREFIX=$(PYDEBUG_WORKDIR) $(PYDEBUG_DIR)/bin/python3 -m apsw.tests -v
+	env APSWTESTPREFIX=$(PYDEBUG_WORKDIR) $(PYDEBUG_DIR)/bin/python3 -m apsw.tests -v
 
 fulltest: test test_debug
 
 linkcheck:
 	make RELEASEDATE=$(RELEASEDATE) VERSION=$(VERSION) -C doc linkcheck
+
+unwrapped:
+	env PYTHONPATH=. $(PYTHON) tools/find_unwrapped_apis.py
 
 publish: docs
 	if [ -d ../apsw-publish ] ; then rm -f ../apsw-publish/* ../apsw-publish/_static/* ../apsw-publish/_sources/* ; \
@@ -217,12 +220,12 @@ tags:
 
 # building a python debug interpreter
 
-PYDEBUG_VER=3.10.8
+PYDEBUG_VER=3.11.1
 PYDEBUG_DIR=/space/pydebug
 PYVALGRIND_VER=$(PYDEBUG_VER)
 PYVALGRIND_DIR=/space/pyvalgrind
 # This must end in slash
-PYDEBUG_WORKDIR=/space/apsw/work/
+PYDEBUG_WORKDIR=/space/apsw-test/
 
 # Build a debug python including address sanitizer.  Extensions it builds are also address sanitized
 pydebug:

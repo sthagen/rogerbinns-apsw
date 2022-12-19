@@ -135,6 +135,11 @@ static PyObject *apswmodule;
 /* root exception class */
 static PyObject *APSWException;
 
+typedef struct
+{
+  PyObject_HEAD long long blobsize;
+} ZeroBlobBind;
+
 /* Argument parsing helpers */
 #include "argparse.c"
 
@@ -229,7 +234,8 @@ enablesharedcache(PyObject *Py_UNUSED(self), PyObject *args, PyObject *kwds)
   {
     static char *kwlist[] = {"enable", NULL};
     Apsw_enablesharedcache_CHECK;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O&:" Apsw_enablesharedcache_USAGE, kwlist, argcheck_bool, &enable))
+    argcheck_bool_param enable_param = {&enable, Apsw_enablesharedcache_enable_MSG};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O&:" Apsw_enablesharedcache_USAGE, kwlist, argcheck_bool, &enable_param))
       return NULL;
   }
   APSW_FAULT_INJECT(EnableSharedCacheFail, res = sqlite3_enable_shared_cache(enable), res = SQLITE_NOMEM);
@@ -333,12 +339,12 @@ apsw_logger(void *arg, int errcode, const char *message)
     res = PyObject_CallFunction(arg, "iO", errcode, msgaspystring);
   if (!res)
   {
-    AddTraceBackHere(__FILE__, __LINE__, "Call_Logger",
+    AddTraceBackHere(__FILE__, __LINE__, "apsw_sqlite3_log_receiver",
                      "{s: O, s: i, s: s}",
                      "logger", OBJ(arg),
                      "errcode", errcode,
                      "message", message);
-    apsw_write_unraiseable(NULL);
+    apsw_write_unraisable(NULL);
   }
   else
     Py_DECREF(res);
@@ -477,7 +483,8 @@ memoryhighwater(PyObject *Py_UNUSED(self), PyObject *args, PyObject *kwds)
   {
     static char *kwlist[] = {"reset", NULL};
     Apsw_memoryhighwater_CHECK;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O&:" Apsw_memoryhighwater_USAGE, kwlist, argcheck_bool, &reset))
+    argcheck_bool_param reset_param = {&reset, Apsw_memoryhighwater_reset_MSG};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O&:" Apsw_memoryhighwater_USAGE, kwlist, argcheck_bool, &reset_param))
       return NULL;
   }
   return PyLong_FromLongLong(sqlite3_memory_highwater(reset));
@@ -485,8 +492,12 @@ memoryhighwater(PyObject *Py_UNUSED(self), PyObject *args, PyObject *kwds)
 
 /** .. method:: softheaplimit(limit: int) -> int
 
-  Requests SQLite try to keep memory usage below *amount* bytes and
+  Requests SQLite try to keep memory usage below *limit* bytes and
   returns the previous limit.
+
+  .. seealso::
+
+      :meth:`hard_heap_limit`
 
   -* sqlite3_soft_heap_limit64
 */
@@ -501,6 +512,32 @@ softheaplimit(PyObject *Py_UNUSED(self), PyObject *args, PyObject *kwds)
       return NULL;
   }
   oldlimit = sqlite3_soft_heap_limit64(limit);
+
+  return PyLong_FromLongLong(oldlimit);
+}
+
+/** .. method:: hard_heap_limit(limit: int) -> int
+
+  Enforces SQLite keeping memory usage below *limit* bytes and
+  returns the previous limit.
+
+  .. seealso::
+
+      :meth:`softheaplimit`
+
+  -* sqlite3_hard_heap_limit64
+*/
+static PyObject *
+apsw_hard_heap_limit(PyObject *Py_UNUSED(self), PyObject *args, PyObject *kwds)
+{
+  sqlite3_int64 limit, oldlimit;
+  {
+    static char *kwlist[] = {"limit", NULL};
+    Apsw_hard_heap_limit_CHECK;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "L:" Apsw_hard_heap_limit_USAGE, kwlist, &limit))
+      return NULL;
+  }
+  oldlimit = sqlite3_hard_heap_limit64(limit);
 
   return PyLong_FromLongLong(oldlimit);
 }
@@ -581,7 +618,8 @@ status(PyObject *Py_UNUSED(self), PyObject *args, PyObject *kwds)
   {
     static char *kwlist[] = {"op", "reset", NULL};
     Apsw_status_CHECK;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "i|O&:" Apsw_status_USAGE, kwlist, &op, argcheck_bool, &reset))
+    argcheck_bool_param reset_param = {&reset, Apsw_status_reset_MSG};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "i|O&:" Apsw_status_USAGE, kwlist, &op, argcheck_bool, &reset_param))
       return NULL;
   }
 
@@ -842,7 +880,7 @@ apsw_check_mutex(apsw_mutex *am)
     PyGILState_STATE gilstate;
     gilstate = PyGILState_Ensure();
     PyErr_Format(ExcForkingViolation, "SQLite object allocated in one process is being used in another (across a fork)");
-    apsw_write_unraiseable(NULL);
+    apsw_write_unraisable(NULL);
     PyErr_Format(ExcForkingViolation, "SQLite object allocated in one process is being used in another (across a fork)");
     PyGILState_Release(gilstate);
     return SQLITE_MISUSE;
@@ -1398,6 +1436,8 @@ static PyMethodDef module_methods[] = {
      Apsw_status_DOC},
     {"softheaplimit", (PyCFunction)softheaplimit, METH_VARARGS | METH_KEYWORDS,
      Apsw_softheaplimit_DOC},
+    {"hard_heap_limit", (PyCFunction)apsw_hard_heap_limit, METH_VARARGS | METH_KEYWORDS,
+     Apsw_hard_heap_limit_DOC},
     {"releasememory", (PyCFunction)releasememory, METH_VARARGS | METH_KEYWORDS,
      Apsw_releasememory_DOC},
     {"randomness", (PyCFunction)randomness, METH_VARARGS | METH_KEYWORDS,
@@ -2040,6 +2080,13 @@ modules etc. For example::
         ADDINT(SQLITE_STMTSTATUS_FILTER_MISS),
         ADDINT(SQLITE_STMTSTATUS_FILTER_HIT),
         ADDINT(SQLITE_STMTSTATUS_MEMUSED),
+        END,
+
+        DICT("mapping_function_flags"),
+        ADDINT(SQLITE_DETERMINISTIC),
+        ADDINT(SQLITE_DIRECTONLY),
+        ADDINT(SQLITE_SUBTYPE),
+        ADDINT(SQLITE_INNOCUOUS),
         END
 
     };

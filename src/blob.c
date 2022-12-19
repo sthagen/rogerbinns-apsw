@@ -52,10 +52,7 @@ store the filename in the database.  Doing so loses the `ACID
   contents.
 */
 
-typedef struct
-{
-  PyObject_HEAD int blobsize;
-} ZeroBlobBind;
+/* ZeroBlobBind is defined in apsw.c because of forward references */
 
 static PyObject *
 ZeroBlobBind_new(PyTypeObject *type, PyObject *Py_UNUSED(args), PyObject *Py_UNUSED(kwargs))
@@ -74,12 +71,12 @@ ZeroBlobBind_new(PyTypeObject *type, PyObject *Py_UNUSED(args), PyObject *Py_UNU
 static int
 ZeroBlobBind_init(ZeroBlobBind *self, PyObject *args, PyObject *kwds)
 {
-  int size;
+  long long size;
 
   {
     static char *kwlist[] = {"size", NULL};
     Zeroblob_init_CHECK;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "i:" Zeroblob_init_USAGE, kwlist, &size))
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "L:" Zeroblob_init_USAGE, kwlist, &size))
       return -1;
   }
   if (size < 0)
@@ -229,7 +226,7 @@ APSWBlob_close_internal(APSWBlob *self, int force)
         break;
       case 2:
         SET_EXC(res, self->connection->db);
-        apsw_write_unraiseable(NULL);
+        apsw_write_unraisable(NULL);
       }
     }
     self->pBlob = 0;
@@ -603,7 +600,8 @@ APSWBlob_close(APSWBlob *self, PyObject *args, PyObject *kwds)
   {
     static char *kwlist[] = {"force", NULL};
     Blob_close_CHECK;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O&:" Blob_close_USAGE, kwlist, argcheck_bool, &force))
+    argcheck_bool_param force_param = {&force, Blob_close_force_MSG};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O&:" Blob_close_USAGE, kwlist, argcheck_bool, &force_param))
       return NULL;
   }
   setexc = APSWBlob_close_internal(self, !!force);

@@ -6,14 +6,37 @@ Change History
 next
 ====
 
-Added :attr:`Connection.system_errno`, :meth:`apsw.strlike`,
-:meth:`apsw.strglob`, :meth:`apsw.stricmp`, :meth:`apsw.strnicmp`,
-:attr:`Connection.filename_wal`, :attr:`Connection.filename_journal`,
-:meth:`Connection.table_exists`, :meth:`Connection.column_metadata`,
-:attr:`Error.error_offset` (:issue:`382`)
+`Function flags <https://www.sqlite.org/c3ref/c_deterministic.html>`__
+can be specified to :meth:`Connection.createscalarfunction` and
+:meth:`Connection.createaggregatefunction`. Added
+:attr:`apsw.mapping_function_flags`. (:issue:`384`)
 
 Added :meth:`Connection.trace_v2` with :attr:`apsw.mapping_trace_codes`
 and :attr:`apsw.mapping_statement_status` (:issue:`383`)
+
+Ensure all SQLite APIs are wrapped. :attr:`Connection.system_errno`,
+:meth:`apsw.strlike`, :meth:`apsw.strglob`, :meth:`apsw.stricmp`,
+:meth:`apsw.strnicmp`, :attr:`Connection.filename_wal`,
+:attr:`Connection.filename_journal`, :meth:`Connection.table_exists`,
+:meth:`Connection.column_metadata`, :attr:`Error.error_offset`,
+:meth:`Connection.cacheflush`, :meth:`Connection.release_memory`,
+:meth:`apsw.hard_heap_limit`. :meth:`Connection.drop_modules`
+(:issue:`382`)
+
+When an :ref:`unraisable exception <unraisable>` happens,
+`sqlite3_log <https://www.sqlite.org/c3ref/log.html>`__ is now called
+so you will have context within SQLite's actions.  `sys.unraisablehook
+<https://docs.python.org/3/library/sys.html#sys.unraisablehook>`__ is
+now called first, and if it doesn't exist then `sys.excepthook
+<https://docs.python.org/3/library/sys.html#sys.excepthook>`__ as
+before.  (:issue:`385`)
+
+When the wrong type is given for a function argument, the error
+message now includes the parameter name and function signature.
+(:issue:`358`)
+
+Let SQLite do size checking instead of APSW for strings and blobs.
+(:issue:`387`)
 
 3.40.0.0
 ========

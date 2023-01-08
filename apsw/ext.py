@@ -10,9 +10,14 @@ else:
 
 from dataclasses import dataclass, make_dataclass
 
-from typing import Optional, Tuple, Union, List, Any, Dict, Callable, Sequence
+from typing import Optional, Tuple, Union, List, Any, Dict, Callable, Sequence, TextIO
+import types
+
 import functools
 import abc
+
+import logging
+import traceback
 
 import apsw
 
@@ -264,6 +269,49 @@ class TypesConverterCursorFactory:
                                        self.factory.wrap_sequence_bindings(sequenceofbindings),
                                        can_cache=can_cache,
                                        prepare_flags=prepare_flags)
+
+
+def log_sqlite(*, level: int = logging.ERROR) -> None:
+    """Send SQLite log messages to :mod:`logging`
+
+    :param level: level to log at (default *logging.ERROR*)
+
+    This must be called before doing any operations with SQLite, otherwise a :exc:`apsw.MisuseError`
+    will be raised.  (This is a SQLite limitation, not APSW.)
+    """
+
+    def handler(errcode: int, message: str) -> None:
+        err_str = apsw.mapping_result_codes[errcode & 255]
+        extra = {"sqlite_code": errcode, "sqlite_code_name": err_str, "sqlite_message": message}
+        logging.log(level,
+                    "SQLITE_LOG: %s (%d) %s %s",
+                    message,
+                    errcode,
+                    err_str,
+                    apsw.mapping_extended_result_codes.get(errcode, ""),
+                    extra=extra)
+
+    apsw.config(apsw.SQLITE_CONFIG_LOG, handler)
+
+
+def print_augmented_traceback(exc_type: type[BaseException],
+                              exc_value: BaseException,
+                              exc_traceback: types.TracebackType,
+                              *,
+                              file: Optional[TextIO] = None) -> None:
+    """Prints a standard exception, but also includes the value of variables in each stack frame
+
+    :param exc_type: The exception type
+    :param exc_value: The exception value
+    :param exc_traceback: Traceback for the exception
+    :param file: (default ``sys.stderr``) Where the print goes
+    """
+
+    file = file or sys.stderr
+
+    tbe = traceback.TracebackException(exc_type, exc_value, exc_traceback, capture_locals=True, compact=True)
+    for line in tbe.format():
+        print(line, file=file)
 
 
 def query_info(db: apsw.Connection,

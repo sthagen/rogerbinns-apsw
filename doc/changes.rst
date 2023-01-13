@@ -3,8 +3,12 @@ Change History
 
 .. currentmodule:: apsw
 
-next
-====
+3.40.1.0
+========
+
+Implemented `window functions
+<https://www.sqlite.org/windowfunctions.html#udfwinfunc>`__
+(:issue:`292`)
 
 `Function flags <https://www.sqlite.org/c3ref/c_deterministic.html>`__
 can be specified to :meth:`Connection.createscalarfunction` and
@@ -41,6 +45,11 @@ Let SQLite do size checking instead of APSW for strings and blobs.
 Added :meth:`apsw.ext.log_sqlite` which installs a handler that
 forwards SQLite messages to the `logging module
 <https://docs.python.org/3/library/logging.html>`__.
+
+Added :meth:`set_default_vfs` and :meth:`unregister_vfs` taking vfs
+names.  The test suite also unregisters `ZipVFS
+<https://www.sqlite.org/zipvfs/doc/trunk/www/index.wiki>`__
+(:issue:`394`)
 
 3.40.0.0
 ========

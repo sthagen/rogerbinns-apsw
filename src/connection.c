@@ -44,9 +44,9 @@ typedef struct
 {
   enum
   {
-    OK = 1,
-    UNINIT = 0,
-    ERROR = -1
+    wfcOK = 1,
+    wfcUNINIT = 0,
+    wfcERROR = -1
   } state;
   PyObject *aggvalue;    /* the aggregation value passed as first parameter */
   PyObject *stepfunc;    /* step function */
@@ -2632,6 +2632,7 @@ cbdispatch_final(sqlite3_context *context)
   {
     int ok = set_context_result(context, retval);
     assert(ok || PyErr_Occurred());
+    (void)ok;
     Py_DECREF(retval);
   }
 
@@ -2676,30 +2677,26 @@ clear_window_function_context(windowfunctioncontext *winfc)
     Py_CLEAR(winfc->finalfunc);
     Py_CLEAR(winfc->valuefunc);
     Py_CLEAR(winfc->inversefunc);
-    winfc->state = ERROR;
+    winfc->state = wfcERROR;
   }
 }
 
 static windowfunctioncontext *
-get_window_function_context(sqlite3_context *context)
+get_window_function_context_wrapped(sqlite3_context *context)
 {
-  /* was an error already present? */
-  int has_tb;
   windowfunctioncontext *winfc = sqlite3_aggregate_context(context, sizeof(windowfunctioncontext));
   FunctionCBInfo *cbinfo;
   PyObject *retval = NULL;
   PyObject *sequence = NULL;
 
   /* have we seen it before? */
-  if (winfc->state == OK)
+  if (winfc->state == wfcOK)
     return winfc;
-  if (winfc->state == ERROR)
+  if (winfc->state == wfcERROR)
     return NULL;
-  assert(winfc->state == UNINIT);
+  assert(winfc->state == wfcUNINIT);
 
-  has_tb = !!PyErr_Occurred();
-
-  winfc->state = ERROR;
+  winfc->state = wfcERROR;
 
   cbinfo = (FunctionCBInfo *)sqlite3_user_data(context);
   assert(cbinfo);
@@ -2758,21 +2755,31 @@ get_window_function_context(sqlite3_context *context)
 #undef METH
   }
 
-  winfc->state = OK;
+  winfc->state = wfcOK;
 
 finally:
-  if (!has_tb && PyErr_Occurred())
+  if (PyErr_Occurred())
   {
-    assert(winfc->state != OK);
+    assert(winfc->state != wfcOK);
     AddTraceBackHere(__FILE__, __LINE__, "get_window_function_context", "{s: O, s: O, s: s}", "instance", OBJ(retval),
                      "as_sequence", OBJ(sequence), "name", cbinfo->name);
   }
   Py_XDECREF(retval);
   Py_XDECREF(sequence);
-  if (winfc->state == OK)
+  if (winfc->state == wfcOK)
     return winfc;
   clear_window_function_context(winfc);
   return NULL;
+}
+
+static windowfunctioncontext *
+get_window_function_context(sqlite3_context *context)
+{
+  windowfunctioncontext *res;
+
+  PY_EXC_HANDLE(res = get_window_function_context_wrapped(context), "get_window_function_context", NULL, NULL);
+
+  return res;
 }
 
 /* Used for the create function v2 xDestroy callbacks.  Note this is
@@ -2798,10 +2805,8 @@ cbw_step(sqlite3_context *context, int argc, sqlite3_value **argv)
   PyGILState_STATE gilstate;
   windowfunctioncontext *winfc;
   PyObject *pyargs = NULL, *retval = NULL;
-  int had_tb;
 
   gilstate = PyGILState_Ensure();
-  had_tb = !!PyErr_Occurred();
 
   winfc = get_window_function_context(context);
   if (!winfc)
@@ -2817,10 +2822,10 @@ cbw_step(sqlite3_context *context, int argc, sqlite3_value **argv)
   goto finally;
 
 error:
-  sqlite3_result_error(context, "Python level error", -1);
-  if (!had_tb)
-    AddTraceBackHere(__FILE__, __LINE__, "window-function-step", "{s:O,s:O,s:s}", "pyargs", OBJ(pyargs),
-                     "retval", OBJ(retval), "name", funcname);
+  assert(PyErr_Occurred());
+  sqlite3_result_error(context, "Python exception on window function 'step'", -1);
+  AddTraceBackHere(__FILE__, __LINE__, "window-function-step", "{s:O,s:O,s:s}", "pyargs", OBJ(pyargs),
+                   "retval", OBJ(retval), "name", funcname);
 
 finally:
   Py_XDECREF(pyargs);
@@ -2836,10 +2841,8 @@ cbw_final(sqlite3_context *context)
   windowfunctioncontext *winfc;
   PyObject *retval = NULL, *pyargs = NULL;
   int ok;
-  int had_tb;
 
   gilstate = PyGILState_Ensure();
-  had_tb = !!PyErr_Occurred();
 
   winfc = get_window_function_context(context);
   if (!winfc)
@@ -2849,7 +2852,32 @@ cbw_final(sqlite3_context *context)
   if (!pyargs)
     goto error;
 
-  retval = PyObject_CallObject(winfc->finalfunc, pyargs);
+#if 1
+  PY_EXC_HANDLE(retval = PyObject_CallObject(winfc->finalfunc, pyargs), "window-function-final",
+                "{s:O,s:O,s:s}", "callable", winfc->finalfunc, "args", OBJ(pyargs), "name", funcname);
+#else
+  do
+  {
+    PyObject *e_type = NULL, *e_value = NULL, *e_traceback = NULL;
+    PyErr_Fetch(&e_type, &e_value, &e_traceback);
+
+    retval = PyObject_CallObject(winfc->finalfunc, pyargs);
+    assert(retval || PyErr_Occurred());
+
+    if ((e_type || e_value || e_traceback))
+    {
+      if (PyErr_Occurred())
+      {
+        /* report the new error as unraisable because of the existing error */
+        AddTraceBackHere(__FILE__, __LINE__, "window-function-final",
+                         "{s:O,s:O,s:s}", "callable", winfc->finalfunc, "args", OBJ(pyargs), "name", funcname);
+        apsw_write_unraisable(NULL);
+      }
+      /* put the old error back */
+      PyErr_Restore(e_type, e_value, e_traceback);
+    }
+  } while (0);
+#endif
   if (!retval)
     goto error;
 
@@ -2857,13 +2885,11 @@ cbw_final(sqlite3_context *context)
   if (ok)
     goto finally;
 
-  assert(PyErr_Occurred());
-
 error:
-  sqlite3_result_error(context, "Python level error", -1);
-  if (!had_tb)
-    AddTraceBackHere(__FILE__, __LINE__, "window-function-final", "{s:O,s:s}",
-                     "retval", OBJ(retval), "name", funcname);
+  assert(PyErr_Occurred());
+  sqlite3_result_error(context, "Python exception on window function 'final'", -1);
+  AddTraceBackHere(__FILE__, __LINE__, "window-function-final", "{s:O,s:s}",
+                   "retval", OBJ(retval), "name", funcname);
 
 finally:
   Py_XDECREF(retval);
@@ -2881,10 +2907,8 @@ cbw_value(sqlite3_context *context)
   windowfunctioncontext *winfc;
   PyObject *retval = NULL, *pyargs = NULL;
   int ok;
-  int had_tb;
 
   gilstate = PyGILState_Ensure();
-  had_tb = !!PyErr_Occurred();
 
   winfc = get_window_function_context(context);
   if (!winfc)
@@ -2902,13 +2926,11 @@ cbw_value(sqlite3_context *context)
   if (ok)
     goto finally;
 
-  assert(PyErr_Occurred());
-
 error:
-  sqlite3_result_error(context, "Python level error", -1);
-  if (!had_tb)
-    AddTraceBackHere(__FILE__, __LINE__, "window-function-final", "{s:O,s:s}",
-                     "retval", OBJ(retval), "name", funcname);
+  assert(PyErr_Occurred());
+  sqlite3_result_error(context, "Python exception on window function 'value'", -1);
+  AddTraceBackHere(__FILE__, __LINE__, "window-function-final", "{s:O,s:s}",
+                   "retval", OBJ(retval), "name", funcname);
 finally:
   Py_XDECREF(retval);
   Py_XDECREF(pyargs);
@@ -2922,10 +2944,8 @@ cbw_inverse(sqlite3_context *context, int argc, sqlite3_value **argv)
   PyGILState_STATE gilstate;
   windowfunctioncontext *winfc;
   PyObject *pyargs = NULL, *retval = NULL;
-  int had_tb;
 
   gilstate = PyGILState_Ensure();
-  had_tb = !!PyErr_Occurred();
 
   winfc = get_window_function_context(context);
   if (!winfc)
@@ -2941,10 +2961,10 @@ cbw_inverse(sqlite3_context *context, int argc, sqlite3_value **argv)
   goto finally;
 
 error:
-  sqlite3_result_error(context, "Python level error", -1);
-  if (!had_tb)
-    AddTraceBackHere(__FILE__, __LINE__, "window-function-inverse", "{s:O,s:O,s:s}",
-                     "pyargs", OBJ(pyargs), "retval", OBJ(retval), "name", funcname);
+  assert(PyErr_Occurred());
+  sqlite3_result_error(context, "Python exception on window function 'inverse'", -1);
+  AddTraceBackHere(__FILE__, __LINE__, "window-function-inverse", "{s:O,s:O,s:s}",
+                   "pyargs", OBJ(pyargs), "retval", OBJ(retval), "name", funcname);
 
 finally:
   Py_XDECREF(pyargs);
@@ -2952,6 +2972,8 @@ finally:
 
   PyGILState_Release(gilstate);
 }
+
+#undef funcname
 
 /** .. method:: create_window_function(name:str, factory: Optional[WindowFactory], numargs: int =-1, *, flags: int = 0) -> None
 

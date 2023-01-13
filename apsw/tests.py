@@ -1751,34 +1751,56 @@ class APSW(unittest.TestCase):
 
         # now all the errors
         for factory, exc in (
-            (lambda : 3, AttributeError),
+            (lambda: 3, AttributeError),
             (lambda x: 3, TypeError),
-            (lambda : 1/0, ZeroDivisionError),
-            (lambda : [object,] + [99] * 3, TypeError),
-            (lambda : [object,] + [99] * 5, TypeError),
+            (lambda: 1 / 0, ZeroDivisionError),
+            (lambda: [
+                object,
+            ] + [99] * 3, TypeError),
+            (lambda: [
+                object,
+            ] + [99] * 5, TypeError),
         ):
             self.db.create_window_function("sumint", factory)
             self.assertRaises(exc, self.db.execute, query)
 
-        args=[lambda : 3] * 4
+        args = [lambda: 3] * 4
         names = "step", "final", "value", "inverse"
 
-        for counter, n in enumerate(names):
-            a = args[:]
-            a[counter] = "a string"
-            self.db.create_window_function("sumint", lambda : [object] + a)
-            try:
-                self.db.execute(query)
+        for can_cache in (False, True):
+            for counter, n in enumerate(names):
+                self.db.create_window_function("sumint", None)
+                a = args[:]
+                a[counter] = "a string"
+                self.db.create_window_function("sumint", lambda: [object] + a)
+                try:
+                    self.db.execute(query)
+                    1 / 0
+                except TypeError as e:
+                    self.assertIn(n, str(e))
+                setattr(windowfunc, n + "orig", getattr(windowfunc, n))
+                setattr(windowfunc, n, lambda *args: 1 / 0)
+                self.db.create_window_function("sumint", windowfunc)
+                try:
+                    self.db.execute(query, can_cache=can_cache).fetchall()
+                    raise Exception("should not be reached")
+                except ZeroDivisionError:
+                    pass
+                setattr(windowfunc, n, getattr(windowfunc, n + "orig"))
+
+        # cause final to run while the statement is being closed
+        # https://sqlite.org/forum/forumpost/d72cba6ff7
+        class windowfunc2:
+            def step(*args):
+                return 3
+            inverse = value = step
+
+            def final(*args):
                 1/0
-            except TypeError as e:
-                self.assertIn(n, str(e))
-            setattr(windowfunc, n+"orig", getattr(windowfunc, n))
-            setattr(windowfunc, n, lambda *args: 1/0)
-            self.db.create_window_function("sumint", windowfunc)
-            self.db.execute(query)
-            setattr(windowfunc, n, getattr(windowfunc, n+"orig"))
-
-
+        self.db.create_window_function("sumint", windowfunc2)
+        self.db.execute(query, can_cache=False)
+        self.db.execute(query, can_cache=True)
+        self.db.close()
 
 
     def testCollation(self):
@@ -4004,6 +4026,27 @@ class APSW(unittest.TestCase):
             SelfReferencer()
         gc.collect()
         self.assertEqual(1000, len(cleared))
+
+    def testIssue394(self):
+        "Default vfs manipulation"
+        starting = apsw.vfsnames()
+        if len(starting) > 1:
+            apsw.set_default_vfs(starting[1])
+            self.assertEqual(apsw.vfsnames()[0], starting[1])
+            self.assertNotEqual(starting, apsw.vfsnames())
+            apsw.set_default_vfs(starting[0])
+            # we assume it is safe to remove the last listed vfs for testing
+            apsw.unregister_vfs(starting[-1])
+            self.assertEqual(apsw.vfsnames(), starting[:-1])
+        self.assertRaises(TypeError, apsw.set_default_vfs)
+        self.assertRaises(TypeError, apsw.set_default_vfs, 3)
+        self.assertRaises(TypeError, apsw.set_default_vfs, "3", 3)
+        self.assertRaises(ValueError, apsw.set_default_vfs, "4324324234")
+        self.assertRaises(TypeError, apsw.unregister_vfs)
+        self.assertRaises(TypeError, apsw.unregister_vfs, 3)
+        self.assertRaises(TypeError, apsw.unregister_vfs, "3", 3)
+        self.assertRaises(ValueError, apsw.unregister_vfs, "4342345324")
+
 
     def testPysqliteRecursiveIssue(self):
         "Check an issue that affected pysqlite"
@@ -9423,6 +9466,11 @@ def setup():
         APSW.assertRaisesRegex = APSW.assertRaisesRegexCompat
 
     del memdb
+
+    # zipvfs causes some test failures - issue #394
+    for name in ('zipvfs', 'cksmvfs', 'zipvfsonly', 'multiplex',):
+        if name in apsw.vfsnames():
+            apsw.unregister_vfs(name)
 
 
 test_types_vals = (

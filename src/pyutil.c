@@ -97,6 +97,21 @@ convertutf8string(const char *str)
   return PyUnicode_FromStringAndSize(str, strlen(str));
 }
 
+static int
+PyLong_AsInt(PyObject *val)
+{
+  int ival = -1;
+  long lval = PyLong_AsLong(val);
+  if(!PyErr_Occurred()) {
+    ival = (int)lval;
+    if(lval!=ival) {
+      PyErr_Format(PyExc_OverflowError, "%R overflowed C int", val);
+      ival = -1;
+    }
+  }
+  return ival;
+}
+
 #define GET_BUFFER(faultName, var, src, dest) APSW_FAULT_INJECT(faultName, var = PyObject_GetBuffer(src, dest, PyBUF_SIMPLE), (PyErr_NoMemory(), var = -1))
 
 #define STRING_NEW(faultName, var, size, maxchar) APSW_FAULT_INJECT(faultName, var = PyUnicode_New(size, maxchar), var = PyErr_NoMemory())
@@ -115,6 +130,31 @@ Py_NewRef(PyObject *o)
   Py_INCREF(o);
   return o;
 }
+
+static int
+Py_Is(const PyObject *left, const PyObject *right)
+{
+  return left == right;
+}
+
+static int
+Py_IsTrue(const PyObject *val)
+{
+  return Py_Is(val, Py_True);
+}
+
+static int
+Py_IsFalse(const PyObject *val)
+{
+  return Py_Is(val, Py_False);
+}
+
+static int
+Py_IsNone(const PyObject *val)
+{
+  return Py_Is(val, Py_None);
+}
+
 #endif
 
 #define Py_TypeName(o) ((o) ? (Py_TYPE(o)->tp_name) : "NULL")

@@ -96,6 +96,9 @@ struct Connection
 
   /* weak reference support */
   PyObject *weakreflist;
+
+  /* limit calls to callbacks */
+  CALL_TRACK(xConnect);
 };
 
 typedef struct Connection Connection;
@@ -108,6 +111,7 @@ typedef struct _vtableinfo
   Connection *connection; /* the Connection this is registered against so we don't
              have to have a global table mapping sqlite3_db* to
              Connection* */
+  int bestindex_object;   /* 0: tuples are passed to xBestIndex, 1: object is */
 } vtableinfo;
 
 /* forward declarations */
@@ -356,6 +360,7 @@ Connection_new(PyTypeObject *type, PyObject *Py_UNUSED(args), PyObject *Py_UNUSE
     self->open_flags = 0;
     self->open_vfs = 0;
     self->weakreflist = 0;
+    CALL_TRACK_INIT(xConnect);
   }
 
   return (PyObject *)self;
@@ -1332,6 +1337,10 @@ finally:
         *"SQLITE_STMTSTATUS_VM_STEP"* and corresponding integer values.
         The counters are reset each time a statement
         starts execution.
+
+  .. seealso::
+
+    * :ref:`Example <example_trace_v2>`
 
   -* sqlite3_trace_v2 sqlite3_stmt_status
 */
@@ -3560,7 +3569,7 @@ Connection_wal_checkpoint(Connection *self, PyObject *args, PyObject *kwds)
 static struct sqlite3_module apsw_vtable_module;
 static void apswvtabFree(void *context);
 
-/** .. method:: createmodule(name: str, datasource: Optional[VTModule]) -> None
+/** .. method:: createmodule(name: str, datasource: Optional[VTModule], *, use_bestindex_object: bool = False) -> None
 
     Registers a virtual table, or drops it if *datasource* is *None*.
     See :ref:`virtualtables` for details.
@@ -3578,14 +3587,16 @@ Connection_createmodule(Connection *self, PyObject *args, PyObject *kwds)
   PyObject *datasource = NULL;
   vtableinfo *vti = NULL;
   int res;
+  int use_bestindex_object = 0;
 
   CHECK_USE(NULL);
   CHECK_CLOSED(self, NULL);
 
   {
-    static char *kwlist[] = {"name", "datasource", NULL};
+    static char *kwlist[] = {"name", "datasource", "use_bestindex_object", NULL};
     Connection_createmodule_CHECK;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "sO:" Connection_createmodule_USAGE, kwlist, &name, &datasource))
+    argcheck_bool_param use_bestindex_object_param = {&use_bestindex_object, Connection_createmodule_use_bestindex_object_MSG};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "sO|$O&:" Connection_createmodule_USAGE, kwlist, &name, &datasource, argcheck_bool, &use_bestindex_object_param))
       return NULL;
   }
 
@@ -3595,6 +3606,7 @@ Connection_createmodule(Connection *self, PyObject *args, PyObject *kwds)
     vti = PyMem_Malloc(sizeof(vtableinfo));
     vti->connection = self;
     vti->datasource = datasource;
+    vti->bestindex_object = use_bestindex_object;
   }
 
   /* SQLite is really finnicky.  Note that it calls the destructor on
@@ -3611,6 +3623,48 @@ Connection_createmodule(Connection *self, PyObject *args, PyObject *kwds)
     return NULL;
   }
 
+  Py_RETURN_NONE;
+}
+
+/** .. method:: vtab_config(op: int, val: int = 0) -> None
+
+ Called during virtual table connect/create.
+
+ -* sqlite3_vtab_config
+
+*/
+static PyObject *
+Connection_vtab_config(Connection *self, PyObject *args, PyObject *kwds)
+{
+  int op, val = 0, res;
+
+  CHECK_USE(NULL);
+  CHECK_CLOSED(self, NULL);
+
+  {
+    static char *kwlist[] = {"op", "val", NULL};
+    Connection_vtab_config_CHECK;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "i|i:" Connection_vtab_config_USAGE, kwlist, &op, &val))
+      return NULL;
+  }
+
+  if (!CALL_CHECK(xConnect))
+    return PyErr_Format(PyExc_ValueError, "You can only call vtab_config while in a virtual table Create/Connect call");
+
+  switch (op)
+  {
+  case SQLITE_VTAB_CONSTRAINT_SUPPORT:
+  case SQLITE_VTAB_INNOCUOUS:
+  case SQLITE_VTAB_DIRECTONLY:
+    res = sqlite3_vtab_config(self->db, op, val);
+    break;
+  default:
+    return PyErr_Format(PyExc_ValueError, "Unknown sqlite3_vtab_config op %d", op);
+  }
+
+  SET_EXC(res, self->db);
+  if (res)
+    return NULL;
   Py_RETURN_NONE;
 }
 
@@ -4927,6 +4981,7 @@ static PyMethodDef Connection_methods[] = {
     {"drop_modules", (PyCFunction)Connection_drop_modules, METH_VARARGS | METH_KEYWORDS, Connection_drop_modules_DOC},
     {"create_window_function", (PyCFunction)Connection_create_window_function, METH_VARARGS | METH_KEYWORDS,
      Connection_create_window_function_DOC},
+    {"vtab_config", (PyCFunction)Connection_vtab_config, METH_VARARGS | METH_KEYWORDS, Connection_vtab_config_DOC},
     {0, 0, 0, 0} /* Sentinel */
 };
 

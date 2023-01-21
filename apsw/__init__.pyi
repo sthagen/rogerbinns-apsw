@@ -986,7 +986,7 @@ class Connection:
         Calls: `sqlite3_create_collation_v2 <https://sqlite.org/c3ref/create_collation.html>`__"""
         ...
 
-    def createmodule(self, name: str, datasource: Optional[VTModule]) -> None:
+    def createmodule(self, name: str, datasource: Optional[VTModule], *, use_bestindex_object: bool = False) -> None:
         """Registers a virtual table, or drops it if *datasource* is *None*.
         See :ref:`virtualtables` for details.
 
@@ -1612,6 +1612,10 @@ class Connection:
               The counters are reset each time a statement
               starts execution.
 
+        .. seealso::
+
+          * :ref:`Example <example_trace_v2>`
+
         Calls:
           * `sqlite3_trace_v2 <https://sqlite.org/c3ref/trace_v2.html>`__
           * `sqlite3_stmt_status <https://sqlite.org/c3ref/stmt_status.html>`__"""
@@ -1933,6 +1937,100 @@ class Cursor:
 
     def setrowtrace(self, callable: Optional[RowTracer]) -> None:
         """Sets the :attr:`row tracer <Cursor.rowtrace>`"""
+        ...
+
+
+class IndexInfo:
+    """IndexInfo represents the `sqlite3_index_info
+    <https://www.sqlite.org/c3ref/index_info.html>`__
+    used in the :meth:`VTTable.BestIndexObject` method.
+
+    Naming is identical to the C structure rather than
+    Pythonic.  You can access members directly while needing to
+    use get/set methods for array members.
+
+    You will get :exc:`ValueError` if you use the object
+    outside of an BestIndex method.
+
+    :meth:`apsw.ext.index_info_to_dict` provides a convenient
+    representation of this object as a :class:`dict`."""
+
+    colUsed: set[int]
+    """(Read-only) Columns used by the statement.  Note that a set is returned, not
+    the underlying integer."""
+
+    distinct: int
+    """(Read-only) How the query planner would like output ordered
+
+    Calls: `sqlite3_vtab_distinct <https://sqlite.org/c3ref/vtab_distinct.html>`__"""
+
+    estimatedCost: float
+    """Estimated cost of using this index"""
+
+    def get_aConstraintUsage_argvIndex(self, which: int) -> int:
+        """Returns *argvIndex* for *aConstraintUsage[which]*"""
+        ...
+
+    def get_aConstraintUsage_omit(self, which: int) -> bool:
+        """Returns *omit* for *aConstraintUsage[which]*"""
+        ...
+
+    def get_aConstraint_collation(self, which: int) -> str:
+        """Returns collation name for *aConstraint[which]*
+
+        Calls: `sqlite3_vtab_collation <https://sqlite.org/c3ref/vtab_collation.html>`__"""
+        ...
+
+    def get_aConstraint_iColumn(self, which: int) -> int:
+        """Returns *iColumn* for *aConstraint[which]*"""
+        ...
+
+    def get_aConstraint_op(self, which: int) -> int:
+        """Returns *op* for *aConstraint[which]*"""
+        ...
+
+    def get_aConstraint_rhs(self, which: int) -> SQLiteValue:
+        """Returns right hand side value if known, else None.
+
+        Calls: `sqlite3_vtab_rhs_value <https://sqlite.org/c3ref/vtab_rhs_value.html>`__"""
+        ...
+
+    def get_aConstraint_usable(self, which: int) -> bool:
+        """Returns *usable* for *aConstraint[which]*"""
+        ...
+
+    def get_aOrderBy_desc(self, which: int) -> bool:
+        """Returns *desc* for *aOrderBy[which]*"""
+        ...
+
+    def get_aOrderBy_iColumn(self, which: int) -> int:
+        """Returns *iColumn* for *aOrderBy[which]*"""
+        ...
+
+    idxFlags: int
+    """Mask of :attr:`SQLITE_INDEX_SCAN flags <apsw.mapping_virtual_table_scan_flags>`"""
+
+    idxNum: int
+    """Number used to identify the index"""
+
+    idxStr: Optional[str]
+    """Name used to identify the index"""
+
+    nConstraint: int
+    """(Read-only) Number of constraint entries"""
+
+    nOrderBy: int
+    """(Read-only) Number of order by  entries"""
+
+    orderByConsumed: bool
+    """True if index output is already ordered"""
+
+    def set_aConstraintUsage_argvIndex(self, which: int, argvIndex: int) -> None:
+        """Sets *argvIndex* for *aConstraintUsage[which]*"""
+        ...
+
+    def set_aConstraintUsage_omit(self, which: int, omit: bool) -> None:
+        """Sets *omit* for *aConstraintUsage[which]*"""
         ...
 
 
@@ -2689,6 +2787,20 @@ if sys.version_info >= (3, 8):
               74.99            # constraintarg[1] - price"""
             ...
 
+        def BestIndexObject(self, index_info: IndexInfo) -> bool:
+            """This method is called instead of :meth:`BestIndex` if
+            *use_bestindex_object* was *True* in the call to
+            :meth:`Connection.createmodule`.
+
+            Use the :class:`IndexInfo` to tell SQLite about your indexes, and
+            extract other information.
+
+            Return *True* to indicate all is well.  If you return *False* then
+            `SQLITE_CONSTRAINT
+            <https://www.sqlite.org/vtab.html#return_value>`__ is returned to
+            SQLite."""
+            ...
+
         def Commit(self) -> None:
             """This function is used as part of transactions.  You do not have to
             provide the method."""
@@ -2708,24 +2820,27 @@ if sys.version_info >= (3, 8):
             be called when the table is no longer used."""
             ...
 
-        def FindFunction(self, name: str, nargs: int):
+        def FindFunction(self, name: str, nargs: int) -> Union[None, Callable, Sequence[int, Callable]]:
             """Called to find if the virtual table has its own implementation of a
-            particular scalar function. You should return the function if you
-            have it, else return None. You do not have to provide this method.
-
-            This method is called while SQLite is `preparing
-            <https://sqlite.org/c3ref/prepare.html>`_ a query.  If a query is
-            in the :ref:`statement cache <statementcache>` then *FindFunction*
-            won't be called again.  If you want to return different
-            implementations for the same function over time then you will need
-            to disable the :ref:`statement cache <statementcache>`.
+            particular scalar function. You do not have to provide this method.
 
             :param name: The function name
             :param nargs: How many arguments the function takes
 
+            Return *None* if you don't have the function.  Zero is then returned to SQLite.
+
+            Return a callable if you have one.  One is then returned to SQLite with the function.
+
+            Return a sequence of int, callable.  The int is returned to SQLite with the function.
+            This is useful for *SQLITE_INDEX_CONSTRAINT_FUNCTION* returns.
+
+            It isn't possible to tell SQLite about exceptions in this function, so an
+            :ref:`unraisable exception <unraisable>` is used.
+
             .. seealso::
 
-              * :meth:`Connection.overloadfunction`"""
+              * :meth:`Connection.overloadfunction`
+              * `FindFunction documentation <https://www.sqlite.org/vtab.html#xfindfunction>`__"""
             ...
 
         def Open(self) -> VTCursor:

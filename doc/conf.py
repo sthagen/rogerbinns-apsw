@@ -42,10 +42,6 @@ extlinks={
 intersphinx_mapping = {'python': ('https://docs.python.org/3', None)}
 
 autodoc_type_aliases = {
-    "Optional": "typing.Optional",
-    "Tuple": "typing.Tuple",
-    "Any": "typing.Any",
-    "List": "typing.List",
 }
 
 # Add any paths that contain templates here, relative to this directory.
@@ -59,7 +55,7 @@ master_doc = 'index'
 
 # General substitutions.
 project = u'APSW'
-copyright = u'2004-2022, Roger Binns <rogerb@rogerbinns.com>'
+copyright = u'2004-2023, Roger Binns <rogerb@rogerbinns.com>'
 
 # The default replacements for |version| and |release|, also used in various
 # other places throughout the built documents.

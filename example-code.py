@@ -395,8 +395,8 @@ import apsw.ext
 
 connection.execute("""
     create table books(id, title, author, year);
-    insert into books values(7, "Animal Farm", "George Orwell", 1945);
-    insert into books values(37, "The Picture of Dorian Gray", "Oscar Wilde", 1890);
+    insert into books values(7, 'Animal Farm', 'George Orwell', 1945);
+    insert into books values(37, 'The Picture of Dorian Gray', 'Oscar Wilde', 1890);
     """)
 
 # Normally you use column numbers
@@ -1002,7 +1002,3 @@ for _ in connection.execute(query):
 connection.close()
 #  You can call close multiple times, and also indicate to ignore exceptions
 connection.close(True)
-
-# Deleting the database file. Note that there can be additional files
-# with suffixes like -wal, -shm, and -journal.
-os.remove("dbfile")

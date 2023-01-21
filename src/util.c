@@ -30,11 +30,14 @@
 */
 
 /* call where no error is returned */
-#define _PYSQLITE_CALL_V(x)       \
-  do                              \
-  {                               \
-    Py_BEGIN_ALLOW_THREADS { x; } \
-    Py_END_ALLOW_THREADS;         \
+#define _PYSQLITE_CALL_V(x) \
+  do                        \
+  {                         \
+    Py_BEGIN_ALLOW_THREADS  \
+    {                       \
+      x;                    \
+    }                       \
+    Py_END_ALLOW_THREADS;   \
   } while (0)
 
 /* Calls where error could be set.  We assume that a variable 'res' is set.  Also need the db to take
@@ -344,3 +347,45 @@ static char *apsw_strdup(const char *source)
   }
   return res;
 }
+
+/*
+
+Some SQLite methods can only be called from within callbacks (eg
+sqlite3_vtab_config can only be called when in xCreate/xConnect).
+These macros help implement that.
+
+For example, to use for Connection and xCreate:
+
+- Add CALL_TRACK(xCreate) in struct Connection
+
+- Add CALL_ENTER(xCreate) at the start of the xCreate callback
+
+- Add CALL_EXIT(xCreate) at the end of the xCreate callback
+
+- Use CALL_CHECK(xCreate) where sqlite3_vtab_config could be called
+  to see if we are in an xCreate call
+
+The implementation uses a sentinel on the stack with a magic number on
+it.  That way if the call exits without CALL_LEAVE a later check will
+assert fail or cause a valgrind error.
+
+*/
+
+#define CALL_TRACK(name) \
+  int *in_call##name
+
+#define CALL_TRACK_INIT(name) self->in_call##name = NULL
+
+#define CALL_ENTER(name)                                                        \
+  assert(self->in_call##name == NULL || *(self->in_call##name) == MAGIC_##name); \
+  int *enter_call_save_##name = self->in_call##name;                            \
+  int enter_call_here_##name = MAGIC_##name;                                     \
+  self->in_call##name = &enter_call_here_##name
+
+#define CALL_LEAVE(name) \
+  self->in_call##name = enter_call_save_##name
+
+#define CALL_CHECK(name) (self->in_call##name != NULL)
+
+/* some arbitrary magic numbers for call track */
+#define MAGIC_xConnect 0x008295ab

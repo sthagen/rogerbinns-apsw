@@ -314,6 +314,72 @@ def print_augmented_traceback(exc_type: type[BaseException],
         print(line, file=file)
 
 
+def index_info_to_dict(o: apsw.IndexInfo,
+                       *,
+                       column_names: Optional[List] = None,
+                       rowid_name: str = "__ROWID__") -> dict:
+    """
+    Returns a :class:`apsw.IndexInfo` as a dictionary.
+
+    If *column_names* is supplied then additional keys with column names are present, using *rowid_name* for the rowid.
+    """
+    res = {
+        "nConstraint":
+        o.nConstraint,
+        "aConstraint": [{
+            "iColumn": o.get_aConstraint_iColumn(n),
+            "op": o.get_aConstraint_op(n),
+            "op_str": apsw.mapping_bestindex_constraints.get(o.get_aConstraint_op(n)),
+            "usable": o.get_aConstraint_usable(n),
+            "collation": o.get_aConstraint_collation(n),
+            "rhs": o.get_aConstraint_rhs(n),
+        } for n in range(o.nConstraint)],
+        "nOrderBy":
+        o.nOrderBy,
+        "aOrderBy": [{
+            "iColumn": o.get_aOrderBy_iColumn(n),
+            "desc": o.get_aOrderBy_desc(n),
+        } for n in range(o.nOrderBy)],
+        "aConstraintUsage": [{
+            "argvIndex": o.get_aConstraintUsage_argvIndex(n),
+            "omit": o.get_aConstraintUsage_omit(n),
+        } for n in range(o.nConstraint)],
+        "idxNum":
+        o.idxNum,
+        "idxStr":
+        o.idxStr,
+        "orderByConsumed":
+        o.orderByConsumed,
+        "estimatedCost":
+        o.estimatedCost,
+        "idxFlags":
+        o.idxFlags,
+        "idxFlags_set":
+        set(v for k, v in apsw.mapping_virtual_table_scan_flags.items() if isinstance(k, int) and o.idxFlags & k),
+        "colUsed":
+        o.colUsed,
+        "distinct":
+        o.distinct,
+    }
+
+    for aConstraint in res["aConstraint"]:
+        if aConstraint["op"] >= apsw.SQLITE_INDEX_CONSTRAINT_FUNCTION and aConstraint["op"] <= 255:
+            aConstraint[
+                "op_str"] = f"SQLITE_INDEX_CONSTRAINT_FUNCTION+{ aConstraint['op'] - apsw.SQLITE_INDEX_CONSTRAINT_FUNCTION }"
+
+    if column_names:
+        for aconstraint in res["aConstraint"]:
+            aconstraint["iColumn_name"] = rowid_name if aconstraint["iColumn"] == -1 else column_names[
+                aconstraint["iColumn"]]
+        for aorderby in res["aOrderBy"]:
+            aorderby["iColumn_name"] = rowid_name if aorderby["iColumn"] == -1 else column_names[aorderby["iColumn"]]
+        res["colUsed_names"] = set(column_names[i] for i in o.colUsed)
+        if 63 in o.colUsed: # could be one or more of the rest - we add all
+            res["colUsed_names"].update(column_names[63:])
+
+    return res
+
+
 def query_info(db: apsw.Connection,
                query: str,
                bindings: Optional[apsw.Bindings] = None,

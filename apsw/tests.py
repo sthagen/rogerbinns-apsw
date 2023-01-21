@@ -10,6 +10,8 @@ import warnings
 import platform
 import typing
 import itertools
+import inspect
+import struct
 
 
 def print_version_info():
@@ -26,6 +28,9 @@ iswindows = sys.platform in ('win32', )
 
 # prefix for test files (eg if you want it on tmpfs)
 TESTFILEPREFIX = os.environ.get("APSWTESTPREFIX", "")
+
+# size of C int in bits
+sizeof_c_int = len(struct.pack('i', 0)) * 8
 
 
 def read_whole_file(name, mode, encoding=None):
@@ -291,6 +296,15 @@ class APSW(unittest.TestCase):
         self.deltempfiles()
         self.db = apsw.Connection(TESTFILEPREFIX + "testdb", flags=openflags)
         self.warnings_filters = warnings.filters
+        # zipvfs causes some test failures - issue #394
+        for name in (
+                'zipvfs',
+                'cksmvfs',
+                'zipvfsonly',
+                'multiplex',
+        ):
+            if name in apsw.vfsnames():
+                apsw.unregister_vfs(name)
 
     def tearDown(self):
         if self.db is not None:
@@ -1104,6 +1118,310 @@ class APSW(unittest.TestCase):
         self.assertRaises(TypeError, apsw.format_sql_value, apsw)
         self.assertRaises(TypeError, apsw.format_sql_value)
 
+    def testVTableStuff(self):
+        "Test new stuff added for Virtual tables"
+        if False and sys.version_info < (3, 7):
+            # it works on 3.6 but apsw.ext doesn't because it uses dataclasses
+            return
+        # we use apsw.ext.index_info_to_dict as part of the testing
+        import apsw.ext
+
+        columns = [f"c{ n }" for n in range(30)]
+
+        class Source:
+            indexinfo_saved = None
+            bio_callback = lambda *args: True
+            filter_callback = lambda *args: 0
+            create_callback = lambda : 0
+
+            schema = f"create table ignored({ ','.join(columns) })"
+
+            def Create(self, *args):
+                Source.create_callback()
+                return self.schema, Source.Table()
+
+            Connect = Create
+
+            class Table:
+
+                def BestIndexObject(self, o):
+                    Source.indexinfo_saved = o
+                    return Source.bio_callback(o)
+
+                def Open(self):
+                    return Source.Cursor()
+
+                def Disconnect(self):
+                    pass
+
+                Destroy = Disconnect
+
+            class Cursor:
+
+                def Filter(self, *args):
+                    return Source.filter_callback(*args)
+
+                def Eof(self):
+                    return True
+
+                def Close(self):
+                    return
+
+        self.db.createmodule("foo", Source(), use_bestindex_object=True)
+        self.db.execute("create virtual table bar using foo()")
+
+        def basic(o):
+            odict = apsw.ext.index_info_to_dict(o)
+            self.assertEqual(expected, odict)
+            exercise(o)
+            return True
+
+        # check out of bounds/setting etc
+        def exercise(o):
+            self.assertRaises(IndexError, o.set_aConstraintUsage_argvIndex, -1, 0)
+            self.assertRaises(IndexError, o.set_aConstraintUsage_argvIndex, o.nConstraint, 0)
+            self.assertRaises(OverflowError, o.set_aConstraintUsage_argvIndex, 2**(1 + sizeof_c_int), 0)
+            self.assertRaises(IndexError, o.set_aConstraintUsage_omit, -1, 0)
+            self.assertRaises(IndexError, o.set_aConstraintUsage_omit, o.nConstraint, 0)
+            self.assertRaises(OverflowError, o.set_aConstraintUsage_omit, 2**(1 + sizeof_c_int), 0)
+
+            self.assertRaises(IndexError, o.get_aConstraintUsage_argvIndex, -1)
+            self.assertRaises(IndexError, o.get_aConstraintUsage_argvIndex, o.nConstraint)
+            self.assertRaises(OverflowError, o.get_aConstraintUsage_argvIndex, 2**(1 + sizeof_c_int))
+            self.assertRaises(IndexError, o.get_aConstraintUsage_omit, -1)
+            self.assertRaises(IndexError, o.get_aConstraintUsage_omit, o.nConstraint)
+            self.assertRaises(OverflowError, o.get_aConstraintUsage_omit, 2**(1 + sizeof_c_int))
+
+            for n in dir(o):
+                if n.startswith("_") or n.startswith("get_") or n.startswith("set_"):
+                    continue
+                ro = "(Read-only)" in inspect.getdoc(getattr(apsw.IndexInfo, n))
+                if ro:
+                    try:
+                        setattr(o, n, getattr(o, n))
+                    except AttributeError as e:
+                        self.assertIn("is not writable", str(e))
+                        continue
+                # should be able to set to what it already is
+                v = getattr(o, n)
+                setattr(o, n, v)
+                self.assertEqual(v, getattr(o, n))
+
+                if v in (True, False):
+                    setattr(o, n, not v)
+                    self.assertEqual(getattr(o, n), not v)
+                    self.assertRaises(TypeError, setattr, o, n, "not a bool")
+                    self.assertRaises(TypeError, setattr, o, n, object())
+                elif n == "estimatedCost":
+                    for newval in (v + 1, -v / (v + 1), True):
+                        setattr(o, "estimatedCost", newval)
+                        self.assertEqual(o.estimatedCost, newval)
+                    self.assertRaises(TypeError, setattr, o, "estimatedCost", "not a float")
+                    self.assertRaises(TypeError, setattr, o, "estimatedCost", object())
+                elif n == "idxStr":
+                    self.assertRaises(TypeError, setattr, o, "idxStr", 3)
+                    self.assertRaises(TypeError, setattr, o, "idxStr", b"aabbcc")
+                    self.assertRaises(TypeError, setattr, o, "idxStr", object())
+                    for i in range(50):
+                        if i % 2:
+                            o.idxStr = None
+                            self.assertIsNone(o.idxStr)
+                        t = f"stuff { i }"
+                        o.idxStr = t
+                        self.assertEqual(o.idxStr, t)
+                else:
+                    raise Exception(f"untested attribute { n }")
+
+        Source.bio_callback = basic
+
+        for query, expected in self.index_info_test_patterns:
+            for row in self.db.execute(query, can_cache=False):
+                pass
+
+        # check we get failures outside of bestindex
+        saved = Source.indexinfo_saved
+        for name in dir(saved):
+            if name.startswith("_"):
+                continue
+            if name.startswith("get_") or name.startswith("set_"):
+                try:
+                    getattr(saved, name)(0)
+                    1 / 0
+                except ValueError as e:
+                    self.assertIn("IndexInfo is out of scope", str(e))
+                continue
+            doc = inspect.getdoc(getattr(apsw.IndexInfo, name))
+            try:
+                getattr(saved, name)
+                1 / 0
+            except ValueError as e:
+                self.assertIn("IndexInfo is out of scope", str(e))
+
+            if "(Read-only)" in doc:
+                continue
+            try:
+                setattr(saved, name, 7)
+                1 / 0
+            except ValueError as e:
+                self.assertIn("IndexInfo is out of scope", str(e))
+
+        # error returns
+        def bio1(o):
+            return False
+
+        def bio2(o):
+            raise Exception("bio2 not playing")
+
+        def bio3(o):
+            return "not a bool"
+
+        def bio4(o):
+            return None
+
+        for f in bio1, bio2, bio3, bio4:
+            Source.bio_callback = f
+            try:
+                self.db.execute(self.index_info_test_patterns[0][0], can_cache=False)
+            except Exception as e:
+                if f is bio1:
+                    self.assertIn("no query solution", str(e))
+                elif f is bio2:
+                    self.assertIn("bio2 not playing", str(e))
+                elif f in (bio3, bio4):
+                    self.assertIsInstance(e, TypeError)
+                else:
+                    1 / 0
+
+        # check it actually works
+        def bio(o):
+            # we work on the second query in index_info_test_patterns
+            self.assertEqual(apsw.ext.index_info_to_dict(o), self.index_info_test_patterns[1][1])
+            o.set_aConstraintUsage_argvIndex(0, 1)
+            o.set_aConstraintUsage_omit(0, True)
+            self.assertNotEqual(apsw.ext.index_info_to_dict(o), self.index_info_test_patterns[1][1])
+            o.idxStr = "some text"
+            return True
+
+        def bio_f(*args):
+            self.assertEqual(args, (0, 'some text', ('foo', )))
+
+        Source.bio_callback = bio
+        Source.filter_callback = bio_f
+        self.db.execute(self.index_info_test_patterns[1][0])
+
+        # More than 63 columns affects colUsed
+        manycol_names = [f'c{ n }' for n in range(100)]
+        Source.schema = f"create table ignored({ ','.join(manycol_names) })"
+        self.db.execute("create virtual table manycol using foo()")
+
+        def check(o):
+            d = apsw.ext.index_info_to_dict(o, column_names=manycol_names)
+            self.assertIn("c61", d["colUsed_names"])
+            self.assertNotIn("c62", d["colUsed_names"])
+            for name in manycol_names[63:]:
+                self.assertIn(name, d["colUsed_names"])
+            return True
+
+        Source.bio_callback = check
+        Source.filter_callback = lambda *args: 0
+        self.db.execute("select c61, c64 from manycol where c72>7")
+
+        # vtab_config
+        self.assertRaises(ValueError, self.db.vtab_config, apsw.SQLITE_VTAB_CONSTRAINT_SUPPORT)
+        def check():
+            self.assertRaises(TypeError, self.db.vtab_config, "three")
+            self.assertRaises(TypeError, self.db.vtab_config, apsw.SQLITE_VTAB_CONSTRAINT_SUPPORT, "three")
+            self.assertRaises(TypeError, self.db.vtab_config, apsw.SQLITE_VTAB_CONSTRAINT_SUPPORT, apsw.SQLITE_VTAB_CONSTRAINT_SUPPORT, apsw.SQLITE_VTAB_CONSTRAINT_SUPPORT)
+            self.assertRaises(ValueError, self.db.vtab_config, 97657)
+        Source.create_callback = check
+        self.db.execute("create virtual table vtab_config using foo()")
+        self.assertRaises(ValueError, self.db.vtab_config, apsw.SQLITE_VTAB_CONSTRAINT_SUPPORT)
+
+    index_info_test_patterns = (("select * from bar where c7 is null", {
+        'nConstraint':
+        1,
+        'aConstraint': [{
+            'iColumn': 7,
+            'op': 71,
+            'op_str': 'SQLITE_INDEX_CONSTRAINT_ISNULL',
+            'usable': True,
+            'collation': 'BINARY',
+            'rhs': None
+        }],
+        'nOrderBy':
+        0,
+        'aOrderBy': [],
+        'aConstraintUsage': [{
+            'argvIndex': 0,
+            'omit': False
+        }],
+        'idxNum':
+        0,
+        'idxStr':
+        None,
+        'orderByConsumed':
+        False,
+        'estimatedCost':
+        5e+98,
+        'idxFlags':
+        0,
+        'idxFlags_set':
+        set(),
+        'colUsed':
+        {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29},
+        'distinct':
+        0
+    }), (
+        "select c2, c4, c6 from bar where c3 is not null and c10>'foo' and c12!=c14 group by c8 order by c10 asc, c12 desc",
+        {
+            'nConstraint':
+            2,
+            'aConstraint': [{
+                'iColumn': 10,
+                'op': 4,
+                'op_str': 'SQLITE_INDEX_CONSTRAINT_GT',
+                'usable': True,
+                'collation': 'BINARY',
+                'rhs': 'foo'
+            }, {
+                'iColumn': 3,
+                'op': 70,
+                'op_str': 'SQLITE_INDEX_CONSTRAINT_ISNOTNULL',
+                'usable': True,
+                'collation': 'BINARY',
+                'rhs': None
+            }],
+            'nOrderBy':
+            1,
+            'aOrderBy': [{
+                'iColumn': 8,
+                'desc': False
+            }],
+            'aConstraintUsage': [{
+                'argvIndex': 0,
+                'omit': False
+            }, {
+                'argvIndex': 0,
+                'omit': False
+            }],
+            'idxNum':
+            0,
+            'idxStr':
+            None,
+            'orderByConsumed':
+            False,
+            'estimatedCost':
+            5e+98,
+            'idxFlags':
+            0,
+            'idxFlags_set':
+            set(),
+            'colUsed': {2, 3, 4, 6, 8, 10, 12, 14},
+            'distinct':
+            1
+        },
+    ))
+
     def testWAL(self):
         "Test WAL functions"
         # note that it is harmless calling wal functions on a db not in wal mode
@@ -1791,17 +2109,19 @@ class APSW(unittest.TestCase):
         # cause final to run while the statement is being closed
         # https://sqlite.org/forum/forumpost/d72cba6ff7
         class windowfunc2:
+
             def step(*args):
                 return 3
+
             inverse = value = step
 
             def final(*args):
-                1/0
+                1 / 0
+
         self.db.create_window_function("sumint", windowfunc2)
         self.db.execute(query, can_cache=False)
         self.db.execute(query, can_cache=True)
         self.db.close()
-
 
     def testCollation(self):
         "Verify collations"
@@ -3295,21 +3615,31 @@ class APSW(unittest.TestCase):
         # https://sqlite.org/cvstrac/tktview?tn=3507
         # self.db.overloadfunction("a"*1024, 1)
         self.db.overloadfunction("xyz", 2)
-        self.assertRaises(apsw.SQLError, cur.execute, "select xyz(item,description) from foo")
+        self.assertRaises(apsw.SQLError, cur.execute, "select xyz(item,description) from foo", can_cache=False)
         VTable.FindFunction = VTable.FindFunction1
-        self.assertRaises(TypeError, cur.execute, "select xyz(item,description) from foo ")
+        self.assertRaises(apsw.SQLError,
+                          self.assertRaisesUnraisable,
+                          TypeError,
+                          cur.execute,
+                          "select xyz(item,description) from foo ",
+                          can_cache=False)
         VTable.FindFunction = VTable.FindFunction2
-        self.assertRaises(ZeroDivisionError, cur.execute, "select xyz(item,description) from foo  ")
+        self.assertRaises(apsw.SQLError,
+                          self.assertRaisesUnraisable,
+                          ZeroDivisionError,
+                          cur.execute,
+                          "select xyz(item,description) from foo  ",
+                          can_cache=False)
         VTable.FindFunction = VTable.FindFunction3
-        try:
-            for row in cur.execute("select xyz(item,description) from foo   "):
+
+        def foo():
+            for row in cur.execute("select xyz(item,description) from foo   ", can_cache=False):
                 pass
-            1 / 0
-        except TypeError:
-            pass
+
+        self.assertRaises(apsw.SQLError, self.assertRaisesUnraisable, TypeError, foo)
         # this should work
         VTable.FindFunction = VTable.FindFunction4
-        for row in cur.execute("select xyz(item,description) from foo    "):
+        for row in cur.execute("select xyz(item,description) from foo    ", can_cache=False):
             pass
 
         # transaction control
@@ -4047,7 +4377,6 @@ class APSW(unittest.TestCase):
         self.assertRaises(TypeError, apsw.unregister_vfs, "3", 3)
         self.assertRaises(ValueError, apsw.unregister_vfs, "4342345324")
 
-
     def testPysqliteRecursiveIssue(self):
         "Check an issue that affected pysqlite"
         # https://code.google.com/p/pysqlite/source/detail?r=260ee266d6686e0f87b0547c36b68a911e6c6cdb
@@ -4277,7 +4606,8 @@ class APSW(unittest.TestCase):
                                                 "|randomness|db_readonly|db_filename|release_memory|status64|result_.+|user_data|mprintf|aggregate_context"
                                                 "|declare_vtab|backup_remaining|backup_pagecount|mutex_enter|mutex_leave|sourceid|uri_.+"
                                                 "|column_name|column_decltype|column_database_name|column_table_name|column_origin_name"
-                                                "|stmt_isexplain|stmt_readonly|filename_journal|filename_wal|stmt_status|sql|log)$"),
+                                                "|stmt_isexplain|stmt_readonly|filename_journal|filename_wal|stmt_status|sql|log|vtab_collation"
+                                                "|vtab_rhs_value|vtab_distinct|vtab_config)$"),
                         # error message
                         'desc': "sqlite3_ calls must wrap with PYSQLITE_CALL",
                         },
@@ -4382,6 +4712,11 @@ class APSW(unittest.TestCase):
                     "notimpl": "VFSFILENOTIMPLEMENTED(%(base)s,"
                 },
                 "order": ("check", "notimpl"),
+            },
+            "SqliteIndexInfo": {
+                "req": {
+                    "check": "CHECK_INDEX",
+                },
             },
         }
 
@@ -8599,8 +8934,8 @@ shell.write(shell.stdout, "hello world\\n")
             def Next(self):
                 self.row += 1
 
-                def Close(self):
-                    pass
+            def Close(self):
+                pass
 
         ## VtabCreateBadString
         apsw.faultdict["VtabCreateBadString"] = True
@@ -8653,15 +8988,15 @@ shell.write(shell.stdout, "hello world\\n")
 
         ## FindFunctionAllocFailed
         apsw.faultdict["FindFunctionAllocFailed"] = True
-        try:
+
+        def foo():
             db = apsw.Connection(":memory:")
             db.overloadfunction("xyz", 2)
             db.createmodule("foo", Source())
             db.cursor().execute("create virtual table foo using foo()")
-            db.cursor().execute("select xyz(x,y) from foo")
-            1 / 0
-        except MemoryError:
-            pass
+            self.assertRaises(apsw.SQLError, db.cursor().execute, "select xyz(x,y) from foo")
+
+        self.assertRaisesUnraisable(MemoryError, foo)
 
         ## BlobDeallocException
         def f():
@@ -9466,11 +9801,6 @@ def setup():
         APSW.assertRaisesRegex = APSW.assertRaisesRegexCompat
 
     del memdb
-
-    # zipvfs causes some test failures - issue #394
-    for name in ('zipvfs', 'cksmvfs', 'zipvfsonly', 'multiplex',):
-        if name in apsw.vfsnames():
-            apsw.unregister_vfs(name)
 
 
 test_types_vals = (

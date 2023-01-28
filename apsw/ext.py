@@ -316,13 +316,69 @@ def print_augmented_traceback(exc_type: type[BaseException],
 
 def index_info_to_dict(o: apsw.IndexInfo,
                        *,
-                       column_names: Optional[List] = None,
-                       rowid_name: str = "__ROWID__") -> dict:
+                       column_names: Optional[List[str]] = None,
+                       rowid_name: str = "__ROWID__") -> Dict[str, Any]:
     """
     Returns a :class:`apsw.IndexInfo` as a dictionary.
 
-    If *column_names* is supplied then additional keys with column names are present, using *rowid_name* for the rowid.
+    If *column_names* is supplied then additional keys with column
+    names are present, using *rowid_name* for the rowid.
+
+    Here is an example response::
+
+        query = '''
+            SELECT orderid, note FROM sales WHERE
+                    price > 74.99
+                    AND quantity<=?
+                    AND customer in ('Acme Widgets', 'Acme Industries')
+            ORDER BY date desc
+            LIMIT 10'''
+
+        {'aConstraint': [{'collation': 'BINARY',
+                        'iColumn': 5,
+                        'iColumn_name': 'price',
+                        'op': 4,
+                        'op_str': 'SQLITE_INDEX_CONSTRAINT_GT',
+                        'rhs': 74.99,
+                        'usable': True},
+                        {'collation': 'BINARY',
+                        'iColumn': 7,
+                        'iColumn_name': 'quantity',
+                        'op': 8,
+                        'op_str': 'SQLITE_INDEX_CONSTRAINT_LE',
+                        'rhs': None,
+                        'usable': True},
+                        {'collation': 'BINARY',
+                        'iColumn': 8,
+                        'iColumn_name': 'customer',
+                        'op': 2,
+                        'op_str': 'SQLITE_INDEX_CONSTRAINT_EQ',
+                        'rhs': None,
+                        'usable': True},
+                        {'collation': 'BINARY',
+                        'op': 73,
+                        'op_str': 'SQLITE_INDEX_CONSTRAINT_LIMIT',
+                        'rhs': 10,
+                        'usable': True}],
+        'aConstraintUsage': [{'argvIndex': 0, 'in': False, 'omit': False},
+                            {'argvIndex': 0, 'in': False, 'omit': False},
+                            {'argvIndex': 0, 'in': True, 'omit': False},
+                            {'argvIndex': 0, 'in': False, 'omit': False}],
+        'aOrderBy': [{'desc': True, 'iColumn': 9, 'iColumn_name': 'date'}],
+        'colUsed': {0, 3, 5, 7, 8, 9},
+        'colUsed_names': {'date', 'note', 'customer', 'quantity', 'orderid', 'price'},
+        'distinct': 0,
+        'estimatedCost': 5e+98,
+        'estimatedRows': 25,
+        'idxFlags': 0,
+        'idxFlags_set': set(),
+        'idxNum': 0,
+        'idxStr': None,
+        'nConstraint': 4,
+        'nOrderBy': 1,
+        'orderByConsumed': False}
     """
+
     res = {
         "nConstraint":
         o.nConstraint,
@@ -343,6 +399,7 @@ def index_info_to_dict(o: apsw.IndexInfo,
         "aConstraintUsage": [{
             "argvIndex": o.get_aConstraintUsage_argvIndex(n),
             "omit": o.get_aConstraintUsage_omit(n),
+            "in": o.get_aConstraintUsage_in(n),
         } for n in range(o.nConstraint)],
         "idxNum":
         o.idxNum,
@@ -352,6 +409,8 @@ def index_info_to_dict(o: apsw.IndexInfo,
         o.orderByConsumed,
         "estimatedCost":
         o.estimatedCost,
+        "estimatedRows":
+        o.estimatedRows,
         "idxFlags":
         o.idxFlags,
         "idxFlags_set":
@@ -363,18 +422,23 @@ def index_info_to_dict(o: apsw.IndexInfo,
     }
 
     for aConstraint in res["aConstraint"]:
+        if aConstraint["op"] in (apsw.SQLITE_INDEX_CONSTRAINT_OFFSET, apsw.SQLITE_INDEX_CONSTRAINT_LIMIT):
+            del aConstraint["iColumn"]
         if aConstraint["op"] >= apsw.SQLITE_INDEX_CONSTRAINT_FUNCTION and aConstraint["op"] <= 255:
             aConstraint[
                 "op_str"] = f"SQLITE_INDEX_CONSTRAINT_FUNCTION+{ aConstraint['op'] - apsw.SQLITE_INDEX_CONSTRAINT_FUNCTION }"
 
     if column_names:
         for aconstraint in res["aConstraint"]:
-            aconstraint["iColumn_name"] = rowid_name if aconstraint["iColumn"] == -1 else column_names[
-                aconstraint["iColumn"]]
+            if "iColumn" in aconstraint:
+                aconstraint["iColumn_name"] = rowid_name if aconstraint["iColumn"] == -1 else column_names[
+                    aconstraint["iColumn"]]
         for aorderby in res["aOrderBy"]:
             aorderby["iColumn_name"] = rowid_name if aorderby["iColumn"] == -1 else column_names[aorderby["iColumn"]]
-        res["colUsed_names"] = set(column_names[i] for i in o.colUsed)
-        if 63 in o.colUsed: # could be one or more of the rest - we add all
+        # colUsed has all bits set when SQLite just wants the whole row
+        # eg when doing an update
+        res["colUsed_names"] = set(column_names[i] for i in o.colUsed if i<len(column_names))
+        if 63 in o.colUsed:  # could be one or more of the rest - we add all
             res["colUsed_names"].update(column_names[63:])
 
     return res

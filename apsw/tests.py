@@ -240,6 +240,8 @@ openflags = apsw.SQLITE_OPEN_READWRITE | apsw.SQLITE_OPEN_CREATE | apsw.SQLITE_O
 # main test class/code
 class APSW(unittest.TestCase):
 
+    maxDiff = 16384
+
     connection_nargs={ # number of args for function.  those not listed take zero
         'createaggregatefunction': 2,
         'createcollation': 2,
@@ -1132,7 +1134,7 @@ class APSW(unittest.TestCase):
             indexinfo_saved = None
             bio_callback = lambda *args: True
             filter_callback = lambda *args: 0
-            create_callback = lambda : 0
+            create_callback = lambda: 0
 
             schema = f"create table ignored({ ','.join(columns) })"
 
@@ -1156,16 +1158,31 @@ class APSW(unittest.TestCase):
 
                 Destroy = Disconnect
 
+                def UpdateChangeRow(self_table, *args):
+                    self.assertEqual(apsw.mapping_conflict_resolution_modes[self.db.vtab_on_conflict()],
+                                     Source.expected_conflict)
+
             class Cursor:
+                max_row = -1
 
                 def Filter(self, *args):
+                    self.rownum = 0
                     return Source.filter_callback(*args)
 
                 def Eof(self):
-                    return True
+                    return self.rownum >= self.max_row
 
                 def Close(self):
                     return
+
+                def Rowid(self):
+                    return self.rownum
+
+                def Column(self, num):
+                    return self.rownum
+
+                def Next(self):
+                    self.rownum += 1
 
         self.db.createmodule("foo", Source(), use_bestindex_object=True)
         self.db.execute("create virtual table bar using foo()")
@@ -1229,6 +1246,13 @@ class APSW(unittest.TestCase):
                         t = f"stuff { i }"
                         o.idxStr = t
                         self.assertEqual(o.idxStr, t)
+                elif n == "estimatedRows":
+                    self.assertRaises(TypeError, setattr, o, n, 3.2)
+                    self.assertRaises(TypeError, setattr, o, n, "seven")
+                    self.assertRaises(TypeError, setattr, o, n, [])
+                    for newval in (25, 77, 2 * 1024 * 1024 * 1024):
+                        setattr(o, n, newval)
+                        self.assertEqual(newval, getattr(o, n))
                 else:
                     raise Exception(f"untested attribute { n }")
 
@@ -1326,16 +1350,54 @@ class APSW(unittest.TestCase):
         Source.filter_callback = lambda *args: 0
         self.db.execute("select c61, c64 from manycol where c72>7")
 
+        # in args
+        def bio(o):
+            d = apsw.ext.index_info_to_dict(o)
+            self.assertTrue(d["aConstraintUsage"][0]["in"])
+            self.assertTrue(d["aConstraintUsage"][1]["in"])
+            self.assertFalse(d["aConstraintUsage"][2]["in"])
+            self.assertRaises(TypeError, o.set_aConstraintUsage_in, 0, 'foo')
+            self.assertRaises(IndexError, o.set_aConstraintUsage_in, 99, True)
+            self.assertRaises(ValueError, o.set_aConstraintUsage_in, 2, True)
+            o.set_aConstraintUsage_in(0, True)
+            o.set_aConstraintUsage_in(1, True)
+            for i in range(3):
+                o.set_aConstraintUsage_argvIndex(i, i + 1)
+            return True
+
+        def bio_f(*args):
+            self.assertEqual(args, (0, None, ({1, 'one', 1.1}, {b'aabbcc', None}, None)))
+
+        Source.schema = "create table ignored(c0,c1,c2)"
+        Source.bio_callback = bio
+        Source.filter_callback = bio_f
+        self.db.execute(
+            "create virtual table in_filter using foo(); select * from in_filter where c0 in (1,1.1,'one') and c1 in (?,?,?) and c2 in (?)",
+            (None, b'aabbcc', None, None))
+
         # vtab_config
         self.assertRaises(ValueError, self.db.vtab_config, apsw.SQLITE_VTAB_CONSTRAINT_SUPPORT)
+
         def check():
             self.assertRaises(TypeError, self.db.vtab_config, "three")
             self.assertRaises(TypeError, self.db.vtab_config, apsw.SQLITE_VTAB_CONSTRAINT_SUPPORT, "three")
-            self.assertRaises(TypeError, self.db.vtab_config, apsw.SQLITE_VTAB_CONSTRAINT_SUPPORT, apsw.SQLITE_VTAB_CONSTRAINT_SUPPORT, apsw.SQLITE_VTAB_CONSTRAINT_SUPPORT)
+            self.assertRaises(TypeError, self.db.vtab_config, apsw.SQLITE_VTAB_CONSTRAINT_SUPPORT,
+                              apsw.SQLITE_VTAB_CONSTRAINT_SUPPORT, apsw.SQLITE_VTAB_CONSTRAINT_SUPPORT)
             self.assertRaises(ValueError, self.db.vtab_config, 97657)
+
         Source.create_callback = check
         self.db.execute("create virtual table vtab_config using foo()")
         self.assertRaises(ValueError, self.db.vtab_config, apsw.SQLITE_VTAB_CONSTRAINT_SUPPORT)
+
+        # vtab_on_conflict
+        self.db.execute("create virtual table vtab_on_conflict using foo()")
+        self.assertRaises(ValueError, self.db.vtab_on_conflict)
+        Source.bio_callback = Source.filter_callback = lambda *args: True
+        Source.Cursor.max_row = 1
+        for mode in ("ROLLBACK", "FAIL", "ABORT", "IGNORE", "REPLACE"):
+            Source.expected_conflict = "SQLITE_" + mode
+            self.db.execute(f"update or { mode } vtab_on_conflict set c0=7 where rowid=0")
+        self.assertRaises(ValueError, self.db.vtab_on_conflict)
 
     index_info_test_patterns = (("select * from bar where c7 is null", {
         'nConstraint':
@@ -1353,6 +1415,7 @@ class APSW(unittest.TestCase):
         'aOrderBy': [],
         'aConstraintUsage': [{
             'argvIndex': 0,
+            'in': False,
             'omit': False
         }],
         'idxNum':
@@ -1363,6 +1426,8 @@ class APSW(unittest.TestCase):
         False,
         'estimatedCost':
         5e+98,
+        'estimatedRows':
+        25,
         'idxFlags':
         0,
         'idxFlags_set':
@@ -1399,10 +1464,12 @@ class APSW(unittest.TestCase):
             }],
             'aConstraintUsage': [{
                 'argvIndex': 0,
-                'omit': False
+                'omit': False,
+                'in': False,
             }, {
                 'argvIndex': 0,
-                'omit': False
+                'omit': False,
+                'in': False,
             }],
             'idxNum':
             0,
@@ -1412,6 +1479,8 @@ class APSW(unittest.TestCase):
             False,
             'estimatedCost':
             5e+98,
+            'estimatedRows':
+            25,
             'idxFlags':
             0,
             'idxFlags_set':
@@ -3897,7 +3966,7 @@ class APSW(unittest.TestCase):
             # The exception could be thrown on either of these lines
             # depending on several factors
             db = apsw.Connection(fname)
-            db.cursor().execute("select * from sqlite_master")
+            db.cursor().execute("select * from sqlite_schema")
             1 / 0  # should not be reachable
         except:
             klass, e, tb = sys.exc_info()
@@ -4092,7 +4161,7 @@ class APSW(unittest.TestCase):
                     sql = "select timesten(x) from foo where x=? order by x"
                     self.db.cursor().execute(sql, (i, ))
 
-        runtime = int(os.getenv("APSW_HEAVY_DURATION")) if os.getenv("APSW_HEAVY_DURATION") else 15
+        runtime = float(os.getenv("APSW_HEAVY_DURATION")) if os.getenv("APSW_HEAVY_DURATION") else 15
         threads = [ThreadRunner(dostuff, runtime) for _ in range(20)]
         for t in threads:
             t.start()
@@ -4607,7 +4676,7 @@ class APSW(unittest.TestCase):
                                                 "|declare_vtab|backup_remaining|backup_pagecount|mutex_enter|mutex_leave|sourceid|uri_.+"
                                                 "|column_name|column_decltype|column_database_name|column_table_name|column_origin_name"
                                                 "|stmt_isexplain|stmt_readonly|filename_journal|filename_wal|stmt_status|sql|log|vtab_collation"
-                                                "|vtab_rhs_value|vtab_distinct|vtab_config)$"),
+                                                "|vtab_rhs_value|vtab_distinct|vtab_config|vtab_on_conflict|vtab_in_first|vtab_in_next|vtab_in)$"),
                         # error message
                         'desc': "sqlite3_ calls must wrap with PYSQLITE_CALL",
                         },
@@ -4964,20 +5033,54 @@ class APSW(unittest.TestCase):
         class Source:
 
             def Create(self, db, modulename, dbname, tablename, *args):
-                return "create table placeholder(x)", object()
+                return "create table placeholder(x)", Source.Table()
+
+            Connect = Create
+
+            class Table:
+
+                def BestIndex(*args):
+                    return
+
+                def BestIndexObject(*args):
+                    return True
+
+                def Open(*args):
+                    return Source.Cursor()
+
+            class Cursor:
+
+                def Eof(*args):
+                    return True
+
+                def Filter(*args):
+                    pass
+
+                Close = Filter
 
         counter = 0
 
         def check_module(name: str, shouldfail: bool) -> None:
             nonlocal counter
             counter += 1
+            errs = []
+
+            # eponymous only will have no_module even when they exist
+            no_module = False
+            no_table = False
+
             try:
                 self.db.execute(f"create virtual table ex{ counter } using { name }()")
             except apsw.SQLError as e:
-                if shouldfail:
-                    self.assertIn(f"no such module: { name }", str(e))
-                else:
-                    raise
+                no_module = f"no such module: { name }" in str(e)
+            try:
+                self.db.execute(f"select * from  { name }()")
+            except apsw.SQLError as e:
+                no_table = f"no such table: { name }" in str(e)
+            if shouldfail:
+                self.assertTrue(no_module and no_table)
+            else:
+                self.assertFalse(no_module and no_table)
 
         self.db.createmodule("abc", Source())
         check_module("abc", False)
@@ -4985,9 +5088,23 @@ class APSW(unittest.TestCase):
         check_module("abc", True)
 
         # we register a whole bunch, and then unregister subsets
-        names = list("".join(x) for x in itertools.permutations("abc"))
+        args = []
+        for use_bestindex_object in (False, True):
+            for iVersion in (1, 2, 3):
+                for eponymous in (False, True):
+                    for eponymous_only in (False, True):
+                        for read_only in (False, True):
+                            args.append({
+                                "use_bestindex_object": use_bestindex_object,
+                                "iVersion": iVersion,
+                                "eponymous": eponymous,
+                                "eponymous_only": eponymous_only,
+                                "read_only": read_only
+                            })
+
+        names = list("".join(x) for x in itertools.permutations("abcd"))
         for n in names:
-            self.db.createmodule(n, Source())
+            self.db.createmodule(n, Source(), **random.choice(args))
             check_module(n, False)
 
         random.shuffle(names)
@@ -6774,15 +6891,15 @@ class APSW(unittest.TestCase):
         "Ensures databases are identical"
         c1 = db1.cursor()
         c2 = db2.cursor()
-        self.assertEqual(list(c1.execute("select * from sqlite_master order by _ROWID_")),
-                         list(c2.execute("select * from sqlite_master order by _ROWID_")))
-        for table in db1.cursor().execute("select name from sqlite_master where type='table'"):
+        self.assertEqual(list(c1.execute("select * from sqlite_schema order by _ROWID_")),
+                         list(c2.execute("select * from sqlite_schema order by _ROWID_")))
+        for table in db1.cursor().execute("select name from sqlite_schema where type='table'"):
             table = table[0]
             self.assertEqual(
                 list(c1.execute("select * from [%s] order by _ROWID_" % (table, ))),
                 list(c2.execute("select * from [%s] order by _ROWID_" % (table, ))),
             )
-        for table in db2.cursor().execute("select name from sqlite_master where type='table'"):
+        for table in db2.cursor().execute("select name from sqlite_schema where type='table'"):
             table = table[0]
             self.assertEqual(
                 list(c1.execute("select * from [%s] order by _ROWID_" % (table, ))),
@@ -6813,13 +6930,14 @@ class APSW(unittest.TestCase):
                     # this means main thread grabbed inuse first
                     pass
 
+        runtime = float(os.getenv("APSW_HEAVY_DURATION")) if os.getenv("APSW_HEAVY_DURATION") else 30
         t = ThreadRunner(wt)
         t.start()
         b4 = time.time()
-        # try to get inuse error for 30 seconds
+        # try to get inuse error
         try:
             try:
-                while not vals["stop"] and time.time() - b4 < 30:
+                while not vals["stop"] and time.time() - b4 < runtime:
                     self.db.backup("main", dbt, "main").close()
             except apsw.ThreadingViolationError:
                 vals["stop"] = True
@@ -7230,7 +7348,7 @@ class APSW(unittest.TestCase):
         reset()
         cmd(".open --new " + fn)
         s.cmdloop()
-        for row in s.db.cursor().execute("select * from sqlite_master"):
+        for row in s.db.cursor().execute("select * from sqlite_schema"):
             self.fail("--new didn't wipe file")
 
         ###
@@ -7508,7 +7626,7 @@ class APSW(unittest.TestCase):
         # What happens if db cannot be opened?
         s.process_args(args=["/"])
         reset()
-        cmd("select * from sqlite_master;\n.bail on\nselect 3;\n")
+        cmd("select * from sqlite_schema;\n.bail on\nselect 3;\n")
         self.assertRaises(apsw.CantOpenError, s.cmdloop)
         isempty(fh[1])
         self.assertTrue("unable to open database file" in get(fh[2]))
@@ -8144,7 +8262,7 @@ insert into xxblah values(3);
         newdata.sort()
         self.assertEqual(data, newdata)
         # error handling
-        for i in ".import", ".import one", ".import one two three", ".import nosuchfile nosuchtable", ".import nosuchfile sqlite_master":
+        for i in ".import", ".import one", ".import one two three", ".import nosuchfile nosuchtable", ".import nosuchfile sqlite_schema":
             reset()
             cmd(i)
             s.cmdloop()
@@ -8171,7 +8289,7 @@ insert into xxblah values(3);
         ###
 
         # errors
-        for i in ".autoimport", ".autoimport 1 2 3", ".autoimport nosuchfile", ".autoimport %stest-shell-1 sqlite_master" % (
+        for i in ".autoimport", ".autoimport 1 2 3", ".autoimport nosuchfile", ".autoimport %stest-shell-1 sqlite_schema" % (
                 TESTFILEPREFIX, ):
             reset()
             cmd(i)
@@ -9725,7 +9843,7 @@ def vfstestdb(filename=TESTFILEPREFIX + "testdb2", vfsname="apswtest", closedb=T
         hotdb = apsw.Connection(filename + "x", vfs=vfsname)
         if mode:
             hotdb.cursor().execute("pragma journal_mode=" + mode)
-        hotdb.cursor().execute("select sql from sqlite_master")
+        hotdb.cursor().execute("select sql from sqlite_schema")
         hotdb.close()
 
     if closedb:

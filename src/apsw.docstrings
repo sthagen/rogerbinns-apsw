@@ -1076,9 +1076,17 @@
 } while(0)
 
 
-#define  Connection_createmodule_DOC "createmodule($self,name,datasource,*,use_bestindex_object=False)\n--\n\nConnection.createmodule(name: str, datasource: Optional[VTModule], *, use_bestindex_object: bool = False) -> None\n\n" \
+#define  Connection_createmodule_DOC "createmodule($self,name,datasource,*,use_bestindex_object=False,iVersion=3,eponymous=False,eponymous_only=False,read_only=False)\n--\n\nConnection.createmodule(name: str, datasource: Optional[VTModule], *, use_bestindex_object: bool = False, iVersion: int = 3, eponymous: bool=False, eponymous_only: bool = False, read_only: bool = False) -> None\n\n" \
 "Registers a virtual table, or drops it if *datasource* is *None*.\n" \
 "See :ref:`virtualtables` for details.\n" \
+"\n" \
+":param name: Module name (what comes after USING in CREATE VIRTUAL TABLE tablename USING ...)\n" \
+":param datasource: Provides :class:`VTModule` methods\n" \
+":param use_bestindex_object: If True then BestIndexObject is used, else BestIndex\n" \
+":param iVersion: iVersion field in `sqlite3_module <https://www.sqlite.org/c3ref/module.html>`__\n" \
+":param eponymous: Configures module to be `eponymous <https://www.sqlite.org/vtab.html#eponymous_virtual_tables>`__\n" \
+":param eponymous_only: Configures module to be `eponymous only <https://www.sqlite.org/vtab.html#eponymous_only_virtual_tables>`__\n" \
+":param read_only: Leaves `sqlite3_module <https://www.sqlite.org/c3ref/module.html>`__ methods that involve writing and transactions as NULL\n" \
 "\n" \
 ".. seealso::\n" \
 "\n" \
@@ -1086,15 +1094,26 @@
 "\n" \
 "Calls: `sqlite3_create_module_v2 <https://sqlite.org/c3ref/create_module.html>`__\n" 
 
-#define Connection_createmodule_use_bestindex_object_MSG  "argument 'use_bestindex_object' of Connection.createmodule(name: str, datasource: Optional[VTModule], *, use_bestindex_object: bool = False) -> None" 
+#define Connection_createmodule_use_bestindex_object_MSG  "argument 'use_bestindex_object' of Connection.createmodule(name: str, datasource: Optional[VTModule], *, use_bestindex_object: bool = False, iVersion: int = 3, eponymous: bool=False, eponymous_only: bool = False, read_only: bool = False) -> None" 
+#define Connection_createmodule_eponymous_MSG  "argument 'eponymous' of Connection.createmodule(name: str, datasource: Optional[VTModule], *, use_bestindex_object: bool = False, iVersion: int = 3, eponymous: bool=False, eponymous_only: bool = False, read_only: bool = False) -> None" 
+#define Connection_createmodule_eponymous_only_MSG  "argument 'eponymous_only' of Connection.createmodule(name: str, datasource: Optional[VTModule], *, use_bestindex_object: bool = False, iVersion: int = 3, eponymous: bool=False, eponymous_only: bool = False, read_only: bool = False) -> None" 
+#define Connection_createmodule_read_only_MSG  "argument 'read_only' of Connection.createmodule(name: str, datasource: Optional[VTModule], *, use_bestindex_object: bool = False, iVersion: int = 3, eponymous: bool=False, eponymous_only: bool = False, read_only: bool = False) -> None" 
 
-#define Connection_createmodule_USAGE "Connection.createmodule(name: str, datasource: Optional[VTModule], *, use_bestindex_object: bool = False) -> None"
+#define Connection_createmodule_USAGE "Connection.createmodule(name: str, datasource: Optional[VTModule], *, use_bestindex_object: bool = False, iVersion: int = 3, eponymous: bool=False, eponymous_only: bool = False, read_only: bool = False) -> None"
 
 #define Connection_createmodule_CHECK do { \
   assert(__builtin_types_compatible_p(typeof(name), const char *)); \
   assert(__builtin_types_compatible_p(typeof(datasource), PyObject *)); \
   assert(__builtin_types_compatible_p(typeof(use_bestindex_object), int)); \
   assert(use_bestindex_object == 0); \
+  assert(__builtin_types_compatible_p(typeof(iVersion), int)); \
+  assert(iVersion == (3)); \
+  assert(__builtin_types_compatible_p(typeof(eponymous), int)); \
+  assert(eponymous == 0); \
+  assert(__builtin_types_compatible_p(typeof(eponymous_only), int)); \
+  assert(eponymous_only == 0); \
+  assert(__builtin_types_compatible_p(typeof(read_only), int)); \
+  assert(read_only == 0); \
 } while(0)
 
 
@@ -1963,6 +1982,25 @@
 } while(0)
 
 
+#define  Connection_vtab_config_DOC "vtab_config($self,op,val=0)\n--\n\nConnection.vtab_config(op: int, val: int = 0) -> None\n\n" \
+"Called during virtual table connect/create.\n" \
+"\n" \
+"Calls: `sqlite3_vtab_config <https://sqlite.org/c3ref/vtab_config.html>`__\n" 
+
+#define Connection_vtab_config_USAGE "Connection.vtab_config(op: int, val: int = 0) -> None"
+
+#define Connection_vtab_config_CHECK do { \
+  assert(__builtin_types_compatible_p(typeof(op), int)); \
+  assert(__builtin_types_compatible_p(typeof(val), int)); \
+  assert(val == (0)); \
+} while(0)
+
+
+#define  Connection_vtab_on_conflict_DOC "vtab_on_conflict($self)\n--\n\nConnection.vtab_on_conflict() -> int\n\n" \
+"Called during virtual table xUpdate\n" \
+"\n" \
+"Calls: `sqlite3_vtab_on_conflict <https://sqlite.org/c3ref/vtab_on_conflict.html>`__\n" 
+
 #define  Connection_wal_autocheckpoint_DOC "wal_autocheckpoint($self,n)\n--\n\nConnection.wal_autocheckpoint(n: int) -> None\n\n" \
 "Sets how often the :ref:`wal` checkpointing is run.\n" \
 "\n" \
@@ -2340,15 +2378,16 @@
 
 
 #define  IndexInfo_class_DOC "IndexInfo represents the `sqlite3_index_info\n" \
-"<https://www.sqlite.org/c3ref/index_info.html>`__\n" \
-"used in the :meth:`VTTable.BestIndexObject` method.\n" \
+"<https://www.sqlite.org/c3ref/index_info.html>`__ and associated\n" \
+"methods used in the :meth:`VTTable.BestIndexObject` method.  The\n" \
+"structure values are not altered or made friendlier in any way.\n" \
 "\n" \
-"Naming is identical to the C structure rather than\n" \
-"Pythonic.  You can access members directly while needing to\n" \
-"use get/set methods for array members.\n" \
+"Naming is identical to the C structure rather than Pythonic.  You can\n" \
+"access members directly while needing to use get/set methods for array\n" \
+"members.\n" \
 "\n" \
-"You will get :exc:`ValueError` if you use the object\n" \
-"outside of an BestIndex method.\n" \
+"You will get :exc:`ValueError` if you use the object outside of an\n" \
+"BestIndex method.\n" \
 "\n" \
 ":meth:`apsw.ext.index_info_to_dict` provides a convenient\n" \
 "representation of this object as a :class:`dict`.\n" 
@@ -2368,12 +2407,28 @@
 "\n" \
 "Estimated cost of using this index\n" 
 
+#define  IndexInfo_estimatedRows_DOC ":type: int\n" \
+"\n" \
+"Estimated number of rows returned\n" 
+
 #define  IndexInfo_get_aConstraintUsage_argvIndex_DOC "get_aConstraintUsage_argvIndex($self,which)\n--\n\nIndexInfo.get_aConstraintUsage_argvIndex(which: int) -> int\n\n" \
 "Returns *argvIndex* for *aConstraintUsage[which]*\n" 
 
 #define IndexInfo_get_aConstraintUsage_argvIndex_USAGE "IndexInfo.get_aConstraintUsage_argvIndex(which: int) -> int"
 
 #define IndexInfo_get_aConstraintUsage_argvIndex_CHECK do { \
+  assert(__builtin_types_compatible_p(typeof(which), int)); \
+} while(0)
+
+
+#define  IndexInfo_get_aConstraintUsage_in_DOC "get_aConstraintUsage_in($self,which)\n--\n\nIndexInfo.get_aConstraintUsage_in(which: int) -> bool\n\n" \
+"Returns True if the constraint is *in* - eg column in (3, 7, 9)\n" \
+"\n" \
+"Calls: `sqlite3_vtab_in <https://sqlite.org/c3ref/vtab_in.html>`__\n" 
+
+#define IndexInfo_get_aConstraintUsage_in_USAGE "IndexInfo.get_aConstraintUsage_in(which: int) -> bool"
+
+#define IndexInfo_get_aConstraintUsage_in_CHECK do { \
   assert(__builtin_types_compatible_p(typeof(which), int)); \
 } while(0)
 
@@ -2494,6 +2549,20 @@
 #define IndexInfo_set_aConstraintUsage_argvIndex_CHECK do { \
   assert(__builtin_types_compatible_p(typeof(which), int)); \
   assert(__builtin_types_compatible_p(typeof(argvIndex), int)); \
+} while(0)
+
+
+#define  IndexInfo_set_aConstraintUsage_in_DOC "set_aConstraintUsage_in($self,which,filter_all)\n--\n\nIndexInfo.set_aConstraintUsage_in(which: int, filter_all: bool) -> None\n\n" \
+"If *which* is an *in* constraint, and *filter_all* is True then your :meth:`VTCursor.Filter`\n" \
+"method will have all of the values at once.\n" 
+
+#define IndexInfo_set_aConstraintUsage_in_filter_all_MSG  "argument 'filter_all' of IndexInfo.set_aConstraintUsage_in(which: int, filter_all: bool) -> None" 
+
+#define IndexInfo_set_aConstraintUsage_in_USAGE "IndexInfo.set_aConstraintUsage_in(which: int, filter_all: bool) -> None"
+
+#define IndexInfo_set_aConstraintUsage_in_CHECK do { \
+  assert(__builtin_types_compatible_p(typeof(which), int)); \
+  assert(__builtin_types_compatible_p(typeof(filter_all), int)); \
 } while(0)
 
 

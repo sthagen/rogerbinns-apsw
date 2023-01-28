@@ -986,9 +986,17 @@ class Connection:
         Calls: `sqlite3_create_collation_v2 <https://sqlite.org/c3ref/create_collation.html>`__"""
         ...
 
-    def createmodule(self, name: str, datasource: Optional[VTModule], *, use_bestindex_object: bool = False) -> None:
+    def createmodule(self, name: str, datasource: Optional[VTModule], *, use_bestindex_object: bool = False, iVersion: int = 3, eponymous: bool=False, eponymous_only: bool = False, read_only: bool = False) -> None:
         """Registers a virtual table, or drops it if *datasource* is *None*.
         See :ref:`virtualtables` for details.
+
+        :param name: Module name (what comes after USING in CREATE VIRTUAL TABLE tablename USING ...)
+        :param datasource: Provides :class:`VTModule` methods
+        :param use_bestindex_object: If True then BestIndexObject is used, else BestIndex
+        :param iVersion: iVersion field in `sqlite3_module <https://www.sqlite.org/c3ref/module.html>`__
+        :param eponymous: Configures module to be `eponymous <https://www.sqlite.org/vtab.html#eponymous_virtual_tables>`__
+        :param eponymous_only: Configures module to be `eponymous only <https://www.sqlite.org/vtab.html#eponymous_only_virtual_tables>`__
+        :param read_only: Leaves `sqlite3_module <https://www.sqlite.org/c3ref/module.html>`__ methods that involve writing and transactions as NULL
 
         .. seealso::
 
@@ -1629,6 +1637,18 @@ class Connection:
         Calls: `sqlite3_txn_state <https://sqlite.org/c3ref/txn_state.html>`__"""
         ...
 
+    def vtab_config(self, op: int, val: int = 0) -> None:
+        """Called during virtual table connect/create.
+
+        Calls: `sqlite3_vtab_config <https://sqlite.org/c3ref/vtab_config.html>`__"""
+        ...
+
+    def vtab_on_conflict(self) -> int:
+        """Called during virtual table xUpdate
+
+        Calls: `sqlite3_vtab_on_conflict <https://sqlite.org/c3ref/vtab_on_conflict.html>`__"""
+        ...
+
     def wal_autocheckpoint(self, n: int) -> None:
         """Sets how often the :ref:`wal` checkpointing is run.
 
@@ -1942,15 +1962,16 @@ class Cursor:
 
 class IndexInfo:
     """IndexInfo represents the `sqlite3_index_info
-    <https://www.sqlite.org/c3ref/index_info.html>`__
-    used in the :meth:`VTTable.BestIndexObject` method.
+    <https://www.sqlite.org/c3ref/index_info.html>`__ and associated
+    methods used in the :meth:`VTTable.BestIndexObject` method.  The
+    structure values are not altered or made friendlier in any way.
 
-    Naming is identical to the C structure rather than
-    Pythonic.  You can access members directly while needing to
-    use get/set methods for array members.
+    Naming is identical to the C structure rather than Pythonic.  You can
+    access members directly while needing to use get/set methods for array
+    members.
 
-    You will get :exc:`ValueError` if you use the object
-    outside of an BestIndex method.
+    You will get :exc:`ValueError` if you use the object outside of an
+    BestIndex method.
 
     :meth:`apsw.ext.index_info_to_dict` provides a convenient
     representation of this object as a :class:`dict`."""
@@ -1967,8 +1988,17 @@ class IndexInfo:
     estimatedCost: float
     """Estimated cost of using this index"""
 
+    estimatedRows: int
+    """Estimated number of rows returned"""
+
     def get_aConstraintUsage_argvIndex(self, which: int) -> int:
         """Returns *argvIndex* for *aConstraintUsage[which]*"""
+        ...
+
+    def get_aConstraintUsage_in(self, which: int) -> bool:
+        """Returns True if the constraint is *in* - eg column in (3, 7, 9)
+
+        Calls: `sqlite3_vtab_in <https://sqlite.org/c3ref/vtab_in.html>`__"""
         ...
 
     def get_aConstraintUsage_omit(self, which: int) -> bool:
@@ -2027,6 +2057,11 @@ class IndexInfo:
 
     def set_aConstraintUsage_argvIndex(self, which: int, argvIndex: int) -> None:
         """Sets *argvIndex* for *aConstraintUsage[which]*"""
+        ...
+
+    def set_aConstraintUsage_in(self, which: int, filter_all: bool) -> None:
+        """If *which* is an *in* constraint, and *filter_all* is True then your :meth:`VTCursor.Filter`
+        method will have all of the values at once."""
         ...
 
     def set_aConstraintUsage_omit(self, which: int, omit: bool) -> None:
@@ -2489,10 +2524,17 @@ if sys.version_info >= (3, 8):
         def Filter(self, indexnum: int, indexname: str, constraintargs: Optional[Tuple]) -> None:
             """This method is always called first to initialize an iteration to the
             first row of the table. The arguments come from the
-            :meth:`~VTTable.BestIndex` method in the :class:`table <VTTable>`
-            object with constraintargs being a tuple of the constraints you
+            :meth:`~VTTable.BestIndex` or :meth:`~VTTable.BestIndexObject`
+            with constraintargs being a tuple of the constraints you
             requested. If you always return None in BestIndex then indexnum will
-            be zero, indexstring will be None and constraintargs will be empty)."""
+            be zero, indexstring will be None and constraintargs will be empty).
+
+            If you had an *in* constraint and set :meth:`IndexInfo.set_aConstraintUsage_in`
+            then that value will be a :class:`set`.
+
+            Calls:
+              * `sqlite3_vtab_in_first <https://sqlite.org/c3ref/vtab_in_first.html>`__
+              * `sqlite3_vtab_in_next <https://sqlite.org/c3ref/vtab_in_first.html>`__"""
             ...
 
         def Next(self) -> None:
@@ -2614,9 +2656,12 @@ if sys.version_info >= (3, 8):
 
         def BestIndex(self, constraints: Sequence[Tuple[int, int], ...], orderbys: Sequence[Tuple[int, int], ...]) -> Any:
             """This is a complex method. To get going initially, just return
-            *None* and you will be fine. Implementing this method reduces
-            the number of rows scanned in your table to satisfy queries, but
-            only if you have an index or index like mechanism available.
+            *None* and you will be fine. You should also consider using
+            :meth:`BestIndexObject` instead.
+
+            Implementing this method reduces the number of rows scanned
+            in your table to satisfy queries, but only if you have an
+            index or index like mechanism available.
 
             .. note::
 
@@ -2795,8 +2840,8 @@ if sys.version_info >= (3, 8):
             Use the :class:`IndexInfo` to tell SQLite about your indexes, and
             extract other information.
 
-            Return *True* to indicate all is well.  If you return *False* then
-            `SQLITE_CONSTRAINT
+            Return *True* to indicate all is well.  If you return *False* or there is an error,
+            then `SQLITE_CONSTRAINT
             <https://www.sqlite.org/vtab.html#return_value>`__ is returned to
             SQLite."""
             ...
@@ -2864,7 +2909,7 @@ if sys.version_info >= (3, 8):
             provide the method."""
             ...
 
-        def UpdateChangeRow(self, row: int, newrowid: int, fields: Tuple[SQLiteValue, ...]):
+        def UpdateChangeRow(self, row: int, newrowid: int, fields: Tuple[SQLiteValue, ...]) -> None:
             """Change an existing row.  You may also need to change the rowid - for example if the query was
             ``UPDATE table SET rowid=rowid+100 WHERE ...``
 
@@ -2873,7 +2918,7 @@ if sys.version_info >= (3, 8):
             :param fields: A tuple of values the same length and order as columns in your table"""
             ...
 
-        def UpdateDeleteRow(self, rowid: int):
+        def UpdateDeleteRow(self, rowid: int) -> None:
             """Delete the row with the specified *rowid*.
 
             :param rowid: 64 bit integer"""

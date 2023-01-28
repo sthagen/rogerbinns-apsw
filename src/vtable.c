@@ -49,17 +49,16 @@ function to do the mapping.
 /** .. class:: IndexInfo
 
   IndexInfo represents the `sqlite3_index_info
-  <https://www.sqlite.org/c3ref/index_info.html>`__
-  used in the :meth:`VTTable.BestIndexObject` method.
-  The structure values are not altered or made friendlier
-  in any way.
+  <https://www.sqlite.org/c3ref/index_info.html>`__ and associated
+  methods used in the :meth:`VTTable.BestIndexObject` method.  The
+  structure values are not altered or made friendlier in any way.
 
-  Naming is identical to the C structure rather than
-  Pythonic.  You can access members directly while needing to
-  use get/set methods for array members.
+  Naming is identical to the C structure rather than Pythonic.  You can
+  access members directly while needing to use get/set methods for array
+  members.
 
-  You will get :exc:`ValueError` if you use the object
-  outside of an BestIndex method.
+  You will get :exc:`ValueError` if you use the object outside of an
+  BestIndex method.
 
   :meth:`apsw.ext.index_info_to_dict` provides a convenient
   representation of this object as a :class:`dict`.
@@ -244,7 +243,7 @@ SqliteIndexInfo_get_aConstraint_rhs(SqliteIndexInfo *self, PyObject *args, PyObj
     return NULL;
   }
 
-  return convert_value_to_pyobject(pval);
+  return convert_value_to_pyobject(pval, 0);
 }
 
 /** .. method:: get_aOrderBy_iColumn(which: int) -> int
@@ -392,6 +391,62 @@ SqliteIndexInfo_set_aConstraintUsage_omit(SqliteIndexInfo *self, PyObject *args,
   Py_RETURN_NONE;
 }
 
+/** .. method:: get_aConstraintUsage_in(which: int) -> bool
+
+ Returns True if the constraint is *in* - eg column in (3, 7, 9)
+
+ -* sqlite3_vtab_in
+*/
+static PyObject *
+SqliteIndexInfo_get_aConstraintUsage_in(SqliteIndexInfo *self, PyObject *args, PyObject *kwds)
+{
+  int which;
+
+  CHECK_INDEX(NULL);
+
+  {
+    static char *kwlist[] = {"which", NULL};
+    IndexInfo_get_aConstraintUsage_in_CHECK;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "i:" IndexInfo_get_aConstraintUsage_in_USAGE, kwlist, &which))
+      return NULL;
+  }
+  CHECK_RANGE(nConstraint);
+
+  if (sqlite3_vtab_in(self->index_info, which, -1))
+    Py_RETURN_TRUE;
+  Py_RETURN_FALSE;
+}
+
+/** .. method:: set_aConstraintUsage_in(which: int, filter_all: bool) -> None
+
+ If *which* is an *in* constraint, and *filter_all* is True then your :meth:`VTCursor.Filter`
+ method will have all of the values at once.
+
+*/
+static PyObject *
+SqliteIndexInfo_set_aConstraintUsage_in(SqliteIndexInfo *self, PyObject *args, PyObject *kwds)
+{
+  int which, filter_all;
+
+  CHECK_INDEX(NULL);
+
+  {
+    static char *kwlist[] = {"which", "filter_all", NULL};
+    IndexInfo_set_aConstraintUsage_in_CHECK;
+    argcheck_bool_param filter_all_param = {&filter_all, IndexInfo_set_aConstraintUsage_in_filter_all_MSG};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "iO&:" IndexInfo_set_aConstraintUsage_in_USAGE, kwlist, &which, argcheck_bool, &filter_all_param))
+      return NULL;
+  }
+  CHECK_RANGE(nConstraint);
+
+  if (sqlite3_vtab_in(self->index_info, which, -1))
+  {
+    sqlite3_vtab_in(self->index_info, which, filter_all);
+    Py_RETURN_NONE;
+  }
+  return PyErr_Format(PyExc_ValueError, "Constraint %d is not an 'in' which can be set", which);
+}
+
 /** .. attribute:: idxNum
   :type: int
 
@@ -522,6 +577,35 @@ SqliteIndexInfo_set_estimatedCost(SqliteIndexInfo *self, PyObject *value)
   return 0;
 }
 
+/** .. attribute:: estimatedRows
+  :type: int
+
+  Estimated number of rows returned
+*/
+static PyObject *
+SqliteIndexInfo_get_estimatedRows(SqliteIndexInfo *self)
+{
+  CHECK_INDEX(NULL);
+
+  return PyLong_FromLongLong(self->index_info->estimatedRows);
+}
+
+static int
+SqliteIndexInfo_set_estimatedRows(SqliteIndexInfo *self, PyObject *value)
+{
+  sqlite3_int64 v;
+  CHECK_INDEX(-1);
+
+  v = PyLong_AsLongLong(value);
+
+  if (PyErr_Occurred())
+    return -1;
+
+  self->index_info->estimatedRows = v;
+
+  return 0;
+}
+
 /** .. attribute:: idxFlags
   :type: int
 
@@ -613,6 +697,7 @@ static PyGetSetDef SqliteIndexInfo_getsetters[] = {
     {"idxStr", (getter)SqliteIndexInfo_get_idxStr, (setter)SqliteIndexInfo_set_idxStr, IndexInfo_idxStr_DOC},
     {"orderByConsumed", (getter)SqliteIndexInfo_get_orderByConsumed, (setter)SqliteIndexInfo_set_OrderByConsumed, IndexInfo_orderByConsumed_DOC},
     {"estimatedCost", (getter)SqliteIndexInfo_get_estimatedCost, (setter)SqliteIndexInfo_set_estimatedCost, IndexInfo_estimatedCost_DOC},
+    {"estimatedRows", (getter)SqliteIndexInfo_get_estimatedRows, (setter)SqliteIndexInfo_set_estimatedRows, IndexInfo_estimatedRows_DOC},
     {"idxFlags", (getter)SqliteIndexInfo_get_idxFlags, (setter)SqliteIndexInfo_set_idxFlags, IndexInfo_idxFlags_DOC},
     {"colUsed", (getter)SqliteIndexInfo_get_colUsed, NULL, IndexInfo_colUsed_DOC},
     {"distinct", (getter)SqliteIndexInfo_get_distinct, NULL, IndexInfo_distinct_DOC},
@@ -642,6 +727,11 @@ static PyMethodDef SqliteIndexInfo_methods[] = {
      IndexInfo_get_aConstraintUsage_omit_DOC},
     {"set_aConstraintUsage_omit", (PyCFunction)SqliteIndexInfo_set_aConstraintUsage_omit, METH_VARARGS | METH_KEYWORDS,
      IndexInfo_set_aConstraintUsage_omit_DOC},
+    {"get_aConstraintUsage_in", (PyCFunction)SqliteIndexInfo_get_aConstraintUsage_in, METH_VARARGS | METH_KEYWORDS,
+     IndexInfo_get_aConstraintUsage_in_DOC},
+    {"set_aConstraintUsage_in", (PyCFunction)SqliteIndexInfo_set_aConstraintUsage_in, METH_VARARGS | METH_KEYWORDS,
+     IndexInfo_set_aConstraintUsage_in_DOC},
+
     /* sentinel */
     {NULL, NULL, 0, NULL}};
 
@@ -692,6 +782,7 @@ typedef struct
   PyObject *vtable;            /* object implementing vtable */
   PyObject *functions;         /* functions returned by vtabFindFunction */
   int bestindex_object;        /* 0: tuples are passed to xBestIndex, 1: object is */
+  Connection *connection;
 } apsw_vtable;
 
 static struct
@@ -771,6 +862,7 @@ apswvtabCreateOrConnect(sqlite3 *db,
   assert((void *)avi == (void *)&(avi->used_by_sqlite)); /* detect if weird padding happens */
   memset(avi, 0, sizeof(apsw_vtable));
   avi->bestindex_object = vti->bestindex_object;
+  avi->connection = self;
 
   schema = PySequence_GetItem(pyres, 0);
   if (!schema)
@@ -914,13 +1006,20 @@ apswvtabConnect(sqlite3 *db,
 static void
 apswvtabFree(void *context)
 {
-  vtableinfo *vti = (vtableinfo *)context;
   PyGILState_STATE gilstate;
   gilstate = PyGILState_Ensure();
 
+#if SQLITE_VERSION_NUMBER < 3041000
+/* https://sqlite.org/forum/forumpost/b68391eb71fdff73 */
+#warning "Memory will be deliberately leaked by this routine"
+#else
+  vtableinfo *vti = (vtableinfo *)context;
+
   Py_XDECREF(vti->datasource);
+  PyMem_Free(vti->sqlite3_module_def);
   /* connection was a borrowed reference so no decref needed */
   PyMem_Free(vti);
+#endif
 
   PyGILState_Release(gilstate);
 }
@@ -936,7 +1035,6 @@ static struct
         {"Disconnect",
          "VirtualTable.xDisconnect"}};
 
-/* See SQLite ticket 2099 */
 static int
 apswvtabDestroyOrDisconnect(sqlite3_vtab *pVtab, int stringindex)
 {
@@ -949,37 +1047,20 @@ apswvtabDestroyOrDisconnect(sqlite3_vtab *pVtab, int stringindex)
 
   /* mandatory for Destroy, optional for Disconnect */
   res = Call_PythonMethod(vtable, destroy_disconnect_strings[stringindex].methodname, (stringindex == 0), NULL);
-  /* sqlite 3.3.8 ignore return code for disconnect so we always free */
-  if (res || stringindex == 1)
-  {
-    /* see SQLite ticket 2127 */
-    if (pVtab->zErrMsg)
-      sqlite3_free(pVtab->zErrMsg);
 
+  if (!res)
+  {
+    sqliteres = MakeSqliteMsgFromPyException(&(pVtab->zErrMsg));
+    AddTraceBackHere(__FILE__, __LINE__, destroy_disconnect_strings[stringindex].pyexceptionname, "{s: O}", "self", OBJ(vtable));
+  }
+
+  if (stringindex == 1)
+  {
     Py_DECREF(vtable);
     Py_XDECREF(((apsw_vtable *)pVtab)->functions);
     PyMem_Free(pVtab);
-    goto finally;
   }
 
-  if (stringindex == 0)
-  {
-    /* ::TODO:: waiting on ticket 2099 to know if the pVtab should also be freed in case of error return with Destroy. */
-#if 0
-      /* see SQLite ticket 2127 */
-      if(pVtab->zErrMsg)
-	sqlite3_free(pVtab->zErrMsg);
-
-      Py_DECREF(vtable);
-      PyMem_Free(pVtab);
-#endif
-  }
-
-  /* pyexception:  we had an exception in python code */
-  sqliteres = MakeSqliteMsgFromPyException(&(pVtab->zErrMsg));
-  AddTraceBackHere(__FILE__, __LINE__, destroy_disconnect_strings[stringindex].pyexceptionname, "{s: O}", "self", OBJ(vtable));
-
-finally:
   Py_XDECREF(res);
 
   PyGILState_Release(gilstate);
@@ -1023,8 +1104,8 @@ apswvtabDisconnect(sqlite3_vtab *pVTab)
   Use the :class:`IndexInfo` to tell SQLite about your indexes, and
   extract other information.
 
-  Return *True* to indicate all is well.  If you return *False* then
-  `SQLITE_CONSTRAINT
+  Return *True* to indicate all is well.  If you return *False* or there is an error,
+  then `SQLITE_CONSTRAINT
   <https://www.sqlite.org/vtab.html#return_value>`__ is returned to
   SQLite.
 */
@@ -1075,9 +1156,12 @@ finally:
 /** .. method:: BestIndex(constraints: Sequence[Tuple[int, int], ...], orderbys: Sequence[Tuple[int, int], ...]) -> Any
 
   This is a complex method. To get going initially, just return
-  *None* and you will be fine. Implementing this method reduces
-  the number of rows scanned in your table to satisfy queries, but
-  only if you have an index or index like mechanism available.
+  *None* and you will be fine. You should also consider using
+  :meth:`BestIndexObject` instead.
+
+  Implementing this method reduces the number of rows scanned
+  in your table to satisfy queries, but only if you have an
+  index or index like mechanism available.
 
   .. note::
 
@@ -1640,7 +1724,7 @@ finally:
   return sqliteres;
 }
 
-/** .. method:: UpdateDeleteRow(rowid: int)
+/** .. method:: UpdateDeleteRow(rowid: int) -> None
 
   Delete the row with the specified *rowid*.
 
@@ -1657,7 +1741,7 @@ finally:
     to the row.  If *rowid* was not *None* then the return value
     is ignored.
 */
-/** .. method:: UpdateChangeRow(row: int, newrowid: int, fields: Tuple[SQLiteValue, ...])
+/** .. method:: UpdateChangeRow(row: int, newrowid: int, fields: Tuple[SQLiteValue, ...]) -> None
 
   Change an existing row.  You may also need to change the rowid - for example if the query was
   ``UPDATE table SET rowid=rowid+100 WHERE ...``
@@ -1680,12 +1764,15 @@ apswvtabUpdate(sqlite3_vtab *pVtab, int argc, sqlite3_value **argv, sqlite3_int6
   gilstate = PyGILState_Ensure();
 
   vtable = ((apsw_vtable *)pVtab)->vtable;
+  Connection *self = ((apsw_vtable *)pVtab)->connection;
+
+  CALL_ENTER(xUpdate);
 
   /* case 1 - argc=1 means delete row */
   if (argc == 1)
   {
     methodname = "UpdateDeleteRow";
-    args = Py_BuildValue("(O&)", convert_value_to_pyobject, argv[0]);
+    args = Py_BuildValue("(O&)", convert_value_to_pyobject_not_in, argv[0]);
     if (!args)
       goto pyexception;
   }
@@ -1704,7 +1791,7 @@ apswvtabUpdate(sqlite3_vtab *pVtab, int argc, sqlite3_value **argv, sqlite3_int6
     }
     else
     {
-      newrowid = convert_value_to_pyobject(argv[1]);
+      newrowid = convert_value_to_pyobject(argv[1], 0);
       if (!newrowid)
         goto pyexception;
     }
@@ -1716,8 +1803,8 @@ apswvtabUpdate(sqlite3_vtab *pVtab, int argc, sqlite3_value **argv, sqlite3_int6
     PyObject *oldrowid = NULL, *newrowid = NULL;
     methodname = "UpdateChangeRow";
     args = PyTuple_New(3);
-    oldrowid = convert_value_to_pyobject(argv[0]);
-    APSW_FAULT_INJECT(VtabUpdateChangeRowFail, newrowid = convert_value_to_pyobject(argv[1]), newrowid = PyErr_NoMemory());
+    oldrowid = convert_value_to_pyobject(argv[0], 0);
+    APSW_FAULT_INJECT(VtabUpdateChangeRowFail, newrowid = convert_value_to_pyobject(argv[1], 0), newrowid = PyErr_NoMemory());
     if (!args || !oldrowid || !newrowid)
     {
       Py_XDECREF(oldrowid);
@@ -1738,7 +1825,7 @@ apswvtabUpdate(sqlite3_vtab *pVtab, int argc, sqlite3_value **argv, sqlite3_int6
     for (i = 0; i + 2 < argc; i++)
     {
       PyObject *field;
-      APSW_FAULT_INJECT(VtabUpdateBadField, field = convert_value_to_pyobject(argv[i + 2]), field = PyErr_NoMemory());
+      APSW_FAULT_INJECT(VtabUpdateBadField, field = convert_value_to_pyobject(argv[i + 2], 0), field = PyErr_NoMemory());
       if (!field)
       {
         Py_DECREF(fields);
@@ -1783,7 +1870,7 @@ pyexception: /* we had an exception in python code */
 finally:
   Py_XDECREF(args);
   Py_XDECREF(res);
-
+  CALL_LEAVE(xUpdate);
   PyGILState_Release(gilstate);
   return sqliteres;
 }
@@ -1835,7 +1922,7 @@ apswvtabFindFunction(sqlite3_vtab *pVtab, int nArg, const char *zName,
   vtable = av->vtable;
 
   res = Call_PythonMethodV(vtable, "FindFunction", 0, "(Ni)", convertutf8string(zName), nArg);
-  if(!res)
+  if (!res)
   {
     AddTraceBackHere(__FILE__, __LINE__, "apswvtabFindFunction", "{s: s, s: i}", "zName", zName, "nArg", nArg);
     goto error;
@@ -1903,7 +1990,7 @@ error:
   Py_XDECREF(item_1);
   Py_XDECREF(res);
   Py_XDECREF(cbinfo);
-  if(PyErr_Occurred())
+  if (PyErr_Occurred())
     apsw_write_unraisable(NULL);
   PyGILState_Release(gilstate);
   return sqliteres;
@@ -1973,10 +2060,15 @@ it is.
 
   This method is always called first to initialize an iteration to the
   first row of the table. The arguments come from the
-  :meth:`~VTTable.BestIndex` method in the :class:`table <VTTable>`
-  object with constraintargs being a tuple of the constraints you
+  :meth:`~VTTable.BestIndex` or :meth:`~VTTable.BestIndexObject`
+  with constraintargs being a tuple of the constraints you
   requested. If you always return None in BestIndex then indexnum will
   be zero, indexstring will be None and constraintargs will be empty).
+
+  If you had an *in* constraint and set :meth:`IndexInfo.set_aConstraintUsage_in`
+  then that value will be a :class:`set`.
+
+  -* sqlite3_vtab_in_first sqlite3_vtab_in_next
 */
 static int
 apswvtabFilter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxStr,
@@ -1996,7 +2088,7 @@ apswvtabFilter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxStr,
     goto pyexception;
   for (i = 0; i < argc; i++)
   {
-    PyObject *value = convert_value_to_pyobject(sqliteargv[i]);
+    PyObject *value = convert_value_to_pyobject(sqliteargv[i], 1);
     if (!value)
       goto pyexception;
     PyTuple_SET_ITEM(argv, i, value);
@@ -2226,29 +2318,68 @@ finally:
   return sqliteres;
 }
 
-/* it would be nice to use C99 style initializers here ... */
-static struct sqlite3_module apsw_vtable_module =
-    {
-        1,              /* version */
-        apswvtabCreate, /* methods */
-        apswvtabConnect,
-        apswvtabBestIndex,
-        apswvtabDisconnect,
-        apswvtabDestroy,
-        apswvtabOpen,
-        apswvtabClose,
-        apswvtabFilter,
-        apswvtabNext,
-        apswvtabEof,
-        apswvtabColumn,
-        apswvtabRowid,
-        apswvtabUpdate,
-        apswvtabBegin,
-        apswvtabSync,
-        apswvtabCommit,
-        apswvtabRollback,
-        apswvtabFindFunction,
-        apswvtabRename};
+static sqlite3_module *
+apswvtabSetupModuleDef(int iVersion, int eponymous, int eponymous_only, int read_only)
+{
+  sqlite3_module *mod = NULL;
+  assert(!PyErr_Occurred());
+  if (iVersion < 1 || iVersion > 3)
+  {
+    PyErr_Format(PyExc_ValueError, "%d is not a valid iVersion - should be 1, 2, or 3", iVersion);
+    return NULL;
+  }
+
+  assert(iVersion == 1 || iVersion == 2 || iVersion == 3);
+  assert(eponymous == 0 || eponymous == 1);
+  assert(eponymous_only == 0 || eponymous_only == 1);
+  assert(read_only == 0 || read_only == 1);
+
+  if (eponymous_only)
+    eponymous = 1;
+
+  mod = PyMem_Calloc(1, sizeof(*mod));
+  if (!mod)
+    return NULL;
+
+  mod->iVersion = iVersion;
+  if (eponymous_only)
+    ;
+  else if (eponymous)
+    mod->xCreate = apswvtabConnect;
+  else
+    mod->xCreate = apswvtabCreate;
+  mod->xConnect = apswvtabConnect;
+  mod->xBestIndex = apswvtabBestIndex;
+  mod->xDisconnect = apswvtabDisconnect;
+  mod->xDestroy = apswvtabDestroy;
+  mod->xOpen = apswvtabOpen;
+  mod->xClose = apswvtabClose;
+  mod->xFilter = apswvtabFilter;
+  mod->xNext = apswvtabNext;
+  mod->xEof = apswvtabEof;
+  mod->xColumn = apswvtabColumn;
+  mod->xRowid = apswvtabRowid;
+  if (!read_only)
+  {
+    mod->xUpdate = apswvtabUpdate;
+    mod->xBegin = apswvtabBegin;
+    mod->xSync = apswvtabSync;
+    mod->xCommit = apswvtabCommit;
+    mod->xRollback = apswvtabRollback;
+  }
+  mod->xFindFunction = apswvtabFindFunction;
+  if (!read_only)
+    mod->xRename = apswvtabRename;
+
+  /* ::TODO::
+    mod->xSavepoint = apswvtabSavepoint;
+    mod->xRelease = apswvtabRelease;
+    mod->xRollbackTo = apswvtabRollbackTo;
+    mod->xShadowName = apswvtabShadowName;
+  */
+
+  return mod;
+}
 
 /**
 

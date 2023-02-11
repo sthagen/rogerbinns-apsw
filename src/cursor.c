@@ -294,6 +294,7 @@ APSWCursor_close_internal(APSWCursor *self, int force)
 static void
 APSWCursor_dealloc(APSWCursor *self)
 {
+  PyObject_GC_UnTrack(self);
   APSW_CLEAR_WEAKREFS;
 
   APSWCursor_close_internal(self, 2);
@@ -667,26 +668,32 @@ APSWCursor_dobindings(APSWCursor *self)
       assert(*key == ':' || *key == '$' || *key == '@');
       key++; /* first char is a colon / dollar / at which we skip */
 
-      /*
-      Here be dragons: PyDict_GetItemString swallows exceptions if
-      the item doesn't exist (or any other reason) and apsw has therefore
-      always had the behaviour that missing dict keys get bound as
-      None/null.  PyMapping_GetItemString does throw exceptions.  So to
-      preserve existing behaviour, missing keys from dict are treated as
-      None, while missing keys from other types will throw an exception.
-      */
-
-      obj = PyDict_Check(self->bindings) ? PyDict_GetItemString(self->bindings, key) : PyMapping_GetItemString(self->bindings, key);
+      if (PyDict_Check(self->bindings) && allow_missing_dict_bindings)
+      {
+        obj = PyDict_GetItemString(self->bindings, key);
+        /* it returns a borrowed reference */
+        Py_XINCREF(obj);
+      }
+      else
+        obj = PyMapping_GetItemString(self->bindings, key);
       if (PyErr_Occurred())
+      {
+        Py_XDECREF(obj);
         return -1;
+      }
       if (!obj)
-        /* this is where we could error on missing keys */
+      {
+        /* missing keys allowed */
+        assert(allow_missing_dict_bindings);
         continue;
+      }
       if (APSWCursor_dobinding(self, arg, obj) != SQLITE_OK)
       {
         assert(PyErr_Occurred());
+        Py_DECREF(obj);
         return -1;
       }
+      Py_DECREF(obj);
     }
 
     return 0;
@@ -743,7 +750,7 @@ APSWCursor_doexectrace(APSWCursor *self, Py_ssize_t savedbindingsoffset)
   assert(self->statement);
 
   /* make a string of the command */
-  sqlcmd = PyUnicode_FromStringAndSize(self->statement->utf8, self->statement->query_size);
+  sqlcmd = PyUnicode_FromStringAndSize(self->statement->utf8 ? self->statement->utf8 : "", self->statement->query_size);
 
   if (!sqlcmd)
     return -1;

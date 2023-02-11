@@ -8,17 +8,22 @@ if sys.version_info >= (3, 10):
 else:
     NoneType = type(None)
 
-from dataclasses import dataclass, make_dataclass
+import dataclasses
+from dataclasses import dataclass, make_dataclass, is_dataclass
 
 from typing import Optional, Tuple, Union, List, Any, Dict, Callable, Sequence, TextIO
 import types
 
 import functools
 import abc
-
+import enum
+import inspect
+import unicodedata
 import logging
 import traceback
-
+import re
+import string
+import textwrap
 import apsw
 
 try:
@@ -437,11 +442,733 @@ def index_info_to_dict(o: apsw.IndexInfo,
             aorderby["iColumn_name"] = rowid_name if aorderby["iColumn"] == -1 else column_names[aorderby["iColumn"]]
         # colUsed has all bits set when SQLite just wants the whole row
         # eg when doing an update
-        res["colUsed_names"] = set(column_names[i] for i in o.colUsed if i<len(column_names))
+        res["colUsed_names"] = set(column_names[i] for i in o.colUsed if i < len(column_names))
         if 63 in o.colUsed:  # could be one or more of the rest - we add all
             res["colUsed_names"].update(column_names[63:])
 
     return res
+
+
+def format_query_table(db: apsw.Connection,
+                       query: str,
+                       bindings: Optional[apsw.Bindings] = None,
+                       *,
+                       colour: bool = False,
+                       quote: bool = False,
+                       string_sanitize: Union[Callable[[str], str], Union[Literal[0], Literal[1], Literal[2]]] = 1,
+                       binary: Callable[[bytes], str] = lambda x: f"[ { len(x) } bytes ]",
+                       null: str = "(null)",
+                       truncate: int = 4096,
+                       truncate_val: str = " ...",
+                       text_width: int = 80,
+                       use_unicode: bool = True,
+                       word_wrap: bool = True) -> str:
+    r"""Produces query output in an attractive text table
+
+    See :ref:`the example <example_format_query>`.
+
+    :param db: Connection to run the query on
+    :param query: Query to run
+    :param bindings: Bindings for query (if needed)
+    :param colour: If True then `ANSI colours <https://en.wikipedia.org/wiki/ANSI_escape_code#Colors>`__ are
+        used to outline the header, and show the type of each value.
+    :param quote: If True then :meth:`apsw.format_sql_value` is used to get a textual representation of a
+         value
+    :param string_sanitize:  If this is a callable then each string is passed to it for cleaning up.
+        Bigger numbers give more sanitization to the string.  Using an example source string of::
+
+            '''hello \\ \t\f\0日本語 world'''
+
+        .. list-table::
+            :header-rows: 1
+            :widths: auto
+
+            * - param
+              - example output
+              - description
+            * - 0
+              - hello \\\\  \0日本語 world
+              - Various whitespace (eg tabs, vertical form feed) are replaced. backslashes
+                are escaped, embedded nulls become \\0
+            * - 1
+              - hello \\\\  \\0{CJK UNIFIED IDEOGRAPH-65E5}{CJK UNIFIED IDEOGRAPH-672C}{CJK UNIFIED IDEOGRAPH-8A9E} world
+              - After step 0, all non-ascii characters are replaced with their :func:`unicodedata.name` or \\x and hex value
+            * - 2
+              - hello.\\........world
+              - All non-ascii characters and whitespace are replaced by a dot
+
+    :param binary: Called to convert bytes to string
+    :param null: How to represent the null value
+    :param truncate: How many characters to truncate long strings at (after sanitization)
+    :param truncate_val: Appended to truncated strings to show it was truncated
+    :param text_width: Maximum output width to generate
+    :param use_unicode: If True then unicode line drawing characters are used.  If False then +---+ and | are
+        used.
+    :param word_wrap: If True then :mod:`textwrap` is used to break wide text into fit column width
+    """
+
+    if colour:
+        c = lambda v: f"\x1b[{ v }m"
+        colours = {
+            # inverse
+            "header_start": c(7) + c(1),
+            "header_end": c(27) + c(22),
+            # red
+            "null_start": c(31),
+            "null_end": c(39),
+            # yellow
+            "string_start": c(33),
+            "string_end": c(39),
+            # blue
+            "blob_start": c(34),
+            "blob_end": c(39),
+            # magenta
+            "number_start": c(35),
+            "number_end": c(39),
+        }
+
+        def colour_wrap(text: str, kind: type, header=False) -> str:
+            if header:
+                return colours["header_start"] + text + colours["header_end"]
+            if kind == str:
+                tkind = "string"
+            elif kind == bytes:
+                tkind = "blob"
+            elif kind in (int, float):
+                tkind = "number"
+            else:
+                tkind = "null"
+            return colours[tkind + "_start"] + text + colours[tkind + "_end"]
+
+    else:
+        colours = {}
+
+        def colour_wrap(text, *args, **kwargs):
+            return text
+
+    def table_builder(colnames, rows):
+        colwidths = [max(len(v) for v in c.splitlines()) for c in colnames]
+        coltypes = [set() for _ in colnames]
+
+        # type, measure and stringize each cell
+        for row in rows:
+            for i, cell in enumerate(row):
+                coltypes[i].add(type(cell))
+                if isinstance(cell, str):
+                    if callable(string_sanitize):
+                        cell = string_sanitize(cell)
+                    else:
+                        cell = unicodedata.normalize("NFKC", cell)
+                        if string_sanitize in (0, 1):
+                            cell = cell.replace("\\", "\\\\")
+                            cell = cell.replace("\r\n", "\n")
+                            cell = cell.replace("\r", " ")
+                            cell = cell.replace("\t", " ")
+                            cell = cell.replace("\f", "")
+                            cell = cell.replace("\v", "")
+                            cell = cell.replace("\0", "\\0")
+
+                        if string_sanitize == 1:
+
+                            def repl(s):
+                                if s[0] in string.printable:
+                                    return s[0]
+                                try:
+                                    return "{" + unicodedata.name(s[0]) + "}"
+                                except ValueError:
+                                    return "\\x" + f"{ord(s[0]):02}"
+
+                            cell = re.sub(".", repl, cell)
+
+                        if string_sanitize == 2:
+
+                            def repl(s):
+                                if s[0] in string.printable and s[0] not in string.whitespace:
+                                    return s[0]
+                                return "."
+
+                            cell = re.sub(".", repl, cell)
+                if quote:
+                    val = apsw.format_sql_value(cell)
+                else:
+                    if isinstance(cell, str):
+                        val = cell
+                    elif isinstance(cell, (float, int)):
+                        val = str(cell)
+                    elif isinstance(cell, bytes):
+                        val = binary(cell)
+                    else:
+                        val = null
+                assert isinstance(val, str), f"expected str not { val!r}"
+
+                val = val.replace("\r\n", "\n")
+
+                if truncate > 0 and len(val) > truncate:
+                    val = val[:truncate] + truncate_val
+                row[i] = (val, type(cell))
+                colwidths[i] = max(colwidths[i], max(len(v) for v in val.splitlines()) if val else 0)
+
+        ## work out widths
+        # we need a space each side of a cell plus a cell separator hence 3
+        # "| cell " and another for the final "|"
+        total_width = lambda: sum(w + 3 for w in colwidths) + 1
+
+        # proportionally reduce column widths
+        victim = len(colwidths) - 1
+        while total_width() > text_width:
+            # if all are 1 then we can't go any narrower
+            if sum(colwidths) == len(colwidths):
+                break
+
+            # this makes wider columns take more of the width blame
+            proportions = [w * 1.1 / total_width() for w in colwidths]
+
+            excess = total_width() - text_width
+
+            # start with widest columns first
+            for _, i in reversed(sorted((proportions[n], n) for n in range(len(colwidths)))):
+                w = colwidths[i]
+                w -= int(proportions[i] * excess)
+                w = max(1, w)
+                colwidths[i] = w
+                new_excess = total_width() - text_width
+                # narrower than needed?
+                if new_excess < 0:
+                    colwidths[i] -= new_excess
+                    break
+
+            # if still too wide, then punish victim
+            if total_width() > text_width:
+                if colwidths[victim] > 1:
+                    colwidths[victim] -= 1
+                victim -= 1
+                if victim < 0:
+                    victim = len(colwidths) - 1
+
+        # can't fit
+        if total_width() > text_width:
+            raise ValueError("Results can't be fitted in text width even with 1 char wide columns")
+
+        # break headers and cells into lines
+        if word_wrap:
+
+            def wrap(text, width):
+                res = []
+                for para in text.splitlines():
+                    if para:
+                        res.extend(textwrap.wrap(para, width=width, drop_whitespace=False))
+                    else:
+                        res.append("")
+                return res
+        else:
+
+            def wrap(text, width):
+                res = []
+                for para in text.splitlines():
+                    if len(para) < width:
+                        res.append(para)
+                    else:
+                        res.extend([para[s:s + width] for s in range(0, len(para), width)])
+                return res
+
+        colnames = [wrap(colnames[i], colwidths[i]) for i in range(len(colwidths))]
+        for row in rows:
+            for i, (text, t) in enumerate(row):
+                row[i] = (wrap(text, colwidths[i]), t)
+
+        ## output
+        # are any cells more than one line?
+        multiline = max(len(cell[0]) for cell in row for row in rows) > 1
+
+        out_lines = []
+
+        def do_bar(chars):
+            line = chars[0]
+            for i, w in enumerate(colwidths):
+                line += chars[1] * (w + 2)
+                if i == len(colwidths) - 1:
+                    line += chars[3]
+                else:
+                    line += chars[2]
+            out_lines.append(line)
+
+        def do_row(row, sep, *, centre=False, header=False):
+            # column names
+            for n in range(max(len(cell[0]) for cell in row)):
+                line = sep
+                for i, (cell, t) in enumerate(row):
+                    text = cell[n] if n < len(cell) else ""
+                    text = " " + text + " "
+                    lt = len(text)
+                    # fudge things a little with this heuristic which
+                    # works when there is extra space - the earlier textwrap
+                    # doesn't know about different char widths
+                    lt += sum(1 if unicodedata.east_asian_width(c) == "W" else 0 for c in text)
+                    extra = " " * max(colwidths[i] + 2 - lt, 0)
+                    if centre:
+                        lpad = extra[:len(extra) // 2]
+                        rpad = extra[len(extra) // 2:]
+                    else:
+                        lpad = ""
+                        rpad = extra
+                    if header:
+                        text = colour_wrap(lpad + text + rpad, None, header=True)
+                    else:
+                        text = lpad + colour_wrap(text, t) + rpad
+                    line += text + sep
+                out_lines.append(line)
+
+        do_bar("┌─┬┐" if use_unicode else "+-++")
+        do_row([(c, None) for c in colnames], "│" if use_unicode else "|", centre=True, header=True)
+
+        # rows
+        if rows:
+            for row in rows:
+                if multiline:
+                    do_bar("├─┼┤" if use_unicode else "+-++")
+                do_row(row, "│" if use_unicode else "|")
+
+        do_bar("└─┴┘" if use_unicode else "+-++")
+
+        return "\n".join(out_lines) + "\n"
+
+    res = []
+
+    cursor = db.cursor()
+    colnames = None
+    rows = []
+
+    def trace(c, query, bindings):
+        nonlocal colnames, rows
+        if colnames:
+            res.append(table_builder(colnames, rows))
+            rows = []
+        colnames = [n for n, _ in c.getdescription()]
+        return True
+
+    cursor.exectrace = trace
+    # mitigate any existing rowtracer
+    if db.rowtrace:
+        cursor.rowtrace=lambda x, y: y
+
+    for row in cursor.execute(query, bindings):
+        rows.append(list(row))
+
+    if colnames:
+        res.append(table_builder(colnames, rows))
+
+    if len(res) == 1:
+        return res[0]
+    return "\n".join(res)
+
+
+class VTColumnAccess(enum.Enum):
+    "How the column value is accessed from a row, for :meth:`make_virtual_module`"
+    By_Index = enum.auto()
+    "By number like with tuples and lists - eg :code:`row[3]`"
+    By_Name = enum.auto()
+    "By name like with dicts - eg :code:`row['quantity']`"
+    By_Attr = enum.auto()
+    "By attribute like with :mod:`dataclasses` - eg :code:`row.quantity`"
+
+
+def get_column_names(row: Any) -> Tuple[List[str], VTColumnAccess]:
+    r"""
+    Works out column names and access given an example row
+
+    *row* can be an instance of a row, or the class used to make
+    one (eg a :mod:`dataclass <dataclasses>`)
+
+    .. list-table::
+        :header-rows: 1
+
+        * - Type
+          - Access
+          - Column names From
+        * - :external:func:`dataclasses.is_dataclass`
+          - :attr:`VTColumnAccess.By_Attr`
+          - :func:`dataclasses.fields`
+        * - :func:`isinstance <isinstance>`\(:class:`tuple`) and :func:`hasattr <hasattr>`\(:code:`"_fields"`) - eg :func:`~collections.namedtuple`
+          - :attr:`VTColumnAccess.By_Index`
+          - :code:`row._fields`
+        * - :func:`hasattr <hasattr>`\(:code:`"__match_args__"`)
+          - :attr:`VTColumnAccess.By_Attr`
+          - :code:`row.__match_args__` (if not empty)
+        * - :func:`isinstance <isinstance>`\(:class:`dict`)
+          - :attr:`VTColumnAccess.By_Name`
+          - :meth:`dict.keys`
+        * - :func:`isinstance <isinstance>`\(:class:`tuple`\)
+          - :attr:`VTColumnAccess.By_Index`
+          - :code:`columnX` where *X* is zero up to :func:`len <len>`\(:code:`row`)
+
+
+    Example usage:
+
+    .. code::
+
+        def method(arg1, arg2):
+            yield {"fruit": "orange", "price": 17, "quantity": 2}
+
+        example_row = next(method(0, 10))
+        method.columns, method.column_access = apsw.ext.get_column_names(example_row)
+
+    """
+    if is_dataclass(row):
+        return tuple(field.name for field in dataclasses.fields(row)), VTColumnAccess.By_Attr
+    if isinstance(row, tuple) and hasattr(row, "_fields"):
+        return row._fields, VTColumnAccess.By_Index
+    if getattr(row, "__match_args__", None):
+        return row.__match_args__, VTColumnAccess.By_Attr
+    if isinstance(row, dict):
+        return tuple(row.keys()), VTColumnAccess.By_Name
+    if isinstance(row, tuple):
+        return tuple(f"column{ x }" for x in range(len(row))), VTColumnAccess.By_Index
+    raise TypeError(f"Can't figure out columns for { row }")
+
+
+def make_virtual_module(db: apsw.Connection,
+                        name: str,
+                        callable: Callable,
+                        *,
+                        eponymous: bool = True,
+                        eponymous_only: bool = False,
+                        repr_invalid: bool = False) -> None:
+    """
+    Registers a read-only virtual table module with *db* based on
+    *callable*.  The *callable* must have an attribute named *columns*
+    with a list of column names, and an attribute named *column_access*
+    with a :class:`VTColumnAccess` saying how to access columns from a row.
+    See :meth:`get_column_names` for easily figuring that out.
+
+    The goal is to make it very easy to turn a Python function into a
+    virtual table.  For example the following Python function::
+
+      def gendata(start_id, end_id=1000, include_system=False):
+          yield (10, "2020-10-21", "readme.txt)
+          yield (11, "2019-05-12", "john.txt)
+
+      gendata.columns = ("user_id", "start_date", "file_name")
+      gendata.column_access = VTColumnAccess.By_Index
+
+    Will generate a table declared like this, using `HIDDEN
+    <https://sqlite.org/vtab.html#hidden_columns_in_virtual_tables>`__
+    for parameters:
+
+    .. code-block:: sql
+
+        CREATE TABLE table_name(user_id,
+                                start_date,
+                                file_name,
+                                start_id HIDDEN,
+                                end_id HIDDEN,
+                                include_system HIDDEN);
+
+    :func:`inspect.signature` is used to discover parameter names.
+
+    Positional parameters to *callable* come from the table definition.
+
+    .. code-block:: sql
+
+      SELECT * from table_name(1, 100, 1);
+
+    Keyword arguments come from WHERE clauses.
+
+    .. code-block:: sql
+
+      SELECT * from table_name(1) WHERE
+            include_system=1;
+
+    :func:`iter` is called on *callable* with each iteration expected
+    to return the next row.  That means *callable* can return its data
+    all at once (eg a list of rows), or *yield* them one row at a
+    time.  The number of columns must always be the same, no matter
+    what the parameter values.
+
+    :param eponymous: Lets you use the *name* as a table name without
+             having to create a virtual table
+    :param eponymous_only: Can only reference as a table name
+    :param repr_invalid: If *True* then values that are not valid
+       :class:`apsw.SQLiteValue` will be converted to a string using
+       :func:`repr`
+
+    See the :ref:`example <example_virtual_tables>`
+
+    Advanced
+    ++++++++
+
+    The *callable* may also have an attribute named *primary_key*.
+    By default the :func:`id` of each row is used as the primary key.
+    If present then it must be a column number to use as the primary
+    key.  The contents of that column must be unique for every row.
+
+    If you specify a parameter to the table and in WHERE, or have
+    non-equality for WHERE clauses of parameters then the query will
+    fail with :class:`apsw.SQLError` and a message "no query solution"
+    """
+
+    class Module:
+
+        def __init__(self, callable: Callable, columns: tuple[str], column_access: VTColumnAccess,
+                     primary_key: Optional[int], repr_invalid: bool):
+            self.columns = columns
+            self.callable: Callable = callable
+            if not isinstance(column_access, VTColumnAccess):
+                raise ValueError(f"Expected column_access to be { VTColumnAccess } not {column_access!r}")
+            self.column_access = column_access
+            self.parameters: list[str] = []
+            # These are as representable as SQLiteValue and are not used
+            # for the actual call.
+            self.defaults: list[apsw.SQLiteValue] = []
+            for p, v in inspect.signature(callable).parameters.items():
+                self.parameters.append(p)
+                default = None if v.default is inspect.Parameter.empty else v.default
+                try:
+                    apsw.format_sql_value(default)
+                except TypeError:
+                    default = repr(default)
+                self.defaults.append(default)
+
+            both = set(self.columns) & set(self.parameters)
+            if both:
+                raise ValueError(f"Same name in columns and in paramters: { both }")
+
+            self.all_columns: tuple[str] = tuple(self.columns) + tuple(self.parameters)
+            self.primary_key = primary_key
+            if self.primary_key is not None and not (0 <= self.primary_key < len(self.columns)):
+                raise ValueError(f"{self.primary_key!r} should be None or a column number < { len(self.columns) }")
+            self.repr_invalid = repr_invalid
+            column_defs = ""
+            for i, c in enumerate(self.columns):
+                if column_defs:
+                    column_defs += ", "
+                column_defs += f"[{ c }]"
+                if self.primary_key == i:
+                    column_defs += " PRIMARY KEY"
+            for p in self.parameters:
+                column_defs += f",[{ p }] HIDDEN"
+
+            self.schema = f"CREATE TABLE ignored({ column_defs })"
+            if self.primary_key is not None:
+                self.schema += " WITHOUT rowid"
+
+        def Create(self, db, modulename, dbname, tablename, *args: apsw.SQLiteValue) -> tuple[str, apsw.VTTable]:
+
+            if len(args) > len(self.parameters):
+                raise ValueError(f"Too many parameters: parameters accepted are { ' '.join(self.parameters) }")
+
+            param_values = dict(zip(self.parameters, args))
+
+            return self.schema, self.Table(self, param_values)
+
+        Connect = Create
+
+        class Table:
+
+            def __init__(self, module: Module, param_values: dict[str, apsw.SQLiteValue]):
+                self.module = module
+                self.param_values = param_values
+
+            def BestIndexObject(self, o: apsw.IndexInfo) -> bool:
+                idx_str: list[str] = []
+                param_start = len(self.module.columns)
+                for c in range(o.nConstraint):
+                    if o.get_aConstraint_iColumn(c) >= param_start:
+                        if not o.get_aConstraint_usable(c):
+                            continue
+                        if o.get_aConstraint_op(c) != apsw.SQLITE_INDEX_CONSTRAINT_EQ:
+                            return False
+                        o.set_aConstraintUsage_argvIndex(c, len(idx_str) + 1)
+                        o.set_aConstraintUsage_omit(c, True)
+                        n = self.module.all_columns[o.get_aConstraint_iColumn(c)]
+                        # a parameter could be a function parameter and where
+                        #    generate_series(7) where start=8
+                        # the order they appear in IndexInfo is random so we
+                        # have to abort the query because a random one would
+                        # prevail
+                        if n in idx_str:
+                            return False
+                        idx_str.append(n)
+
+                o.idxStr = ",".join(idx_str)
+                # say there are a huge number of rows so the query planner avoids us
+                o.estimatedRows = 2147483647
+                return True
+
+            def Open(self):
+                return self.module.Cursor(self.module, self.param_values)
+
+            def Disconnect(self):
+                pass
+
+            Destroy = Disconnect
+
+        class Cursor:
+
+            def __init__(self, module: Module, param_values: dict[str, apsw.SQLiteValue]):
+                self.module = module
+                self.param_values = param_values
+                self.iterating: Optional[Iterator] = None
+                self.current_row: Any = None
+                self.columns = module.columns
+                self.repr_invalid = module.repr_invalid
+                self.num_columns = len(self.columns)
+                self.access = self.module.column_access
+
+            def Filter(self, idx_num: int, idx_str: str, args: tuple[apsw.SQLiteValue]) -> None:
+                params: dict[str, apsw.SQLiteValue] = self.param_values.copy()
+                params.update(zip(idx_str.split(","), args))
+                self.iterating = iter(self.module.callable(**params))
+                # proactively advance so we can tell if eof
+                self.Next()
+
+                self.param_values: List[SQLiteValue] = self.module.defaults[:]
+                for k, v in params.items():
+                    self.param_values[self.module.parameters.index(k)] = v
+
+            def Eof(self) -> bool:
+                return self.iterating is None
+
+            def Close(self) -> None:
+                if self.iterating:
+                    if hasattr(self.iterating, "close"):
+                        self.iterating.close()
+                    self.iterating = None
+
+            def Column(self, which: int) -> apsw.SQLiteValue:
+                if which >= self.num_columns:
+                    return self.param_values[which - self.num_columns]
+                if self.access == VTColumnAccess.By_Index:
+                    v = self.current_row[which]
+                elif self.access == VTColumnAccess.By_Name:
+                    v = self.current_row[self.columns[which]]
+                elif self.access == VTColumnAccess.By_Attr:
+                    v = getattr(self.current_row, self.columns[which])
+                if self.repr_invalid:
+                    try:
+                        apsw.format_sql_value(v)
+                    except TypeError:
+                        v = repr(v)
+                return v
+
+            def Next(self) -> None:
+                try:
+                    self.current_row = next(self.iterating)
+                except StopIteration:
+                    if hasattr(self.iterating, "close"):
+                        self.iterating.close()
+                    self.iterating = None
+
+            def Rowid(self):
+                if self.module.primary_key is None:
+                    return id(self.current_row)
+                return self.Column(self.module.primary_key)
+
+    mod = Module(callable, callable.columns, callable.column_access, getattr(callable, "primary_key", None),
+                 repr_invalid)
+
+    # unregister any existing first
+    db.createmodule(name, None)
+    db.createmodule(name,
+                    mod,
+                    use_bestindex_object=True,
+                    eponymous=eponymous,
+                    eponymous_only=eponymous_only,
+                    read_only=True)
+
+
+def generate_series_sqlite(start=None, stop=0xffffffff, step=1):
+    """Behaves like SQLite's generate_series
+
+    `SQLite doc <https://sqlite.org/series.html>`__.
+
+    Only integers are supported.  If *step* is negative
+    then values are generated from *stop* to *start*
+
+    To use::
+
+        apsw.ext.make_virtual_module(db,
+                                     "generate_series",
+                                     apsw.ext.generate_series_sqlite)
+
+
+        db.execute("SELECT value FROM generate_series(1, 10))
+
+    .. seealso::
+
+        :meth:`generate_series`
+
+    """
+    if start is None:
+        raise ValueError("You must specify a value for start")
+    istart = int(start)
+    istop = int(stop)
+    istep = int(step)
+    if istart != start or istop != stop or istep != step:
+        raise TypeError("generate_series_sqlite only works with integers")
+    if step > 0:
+        while start <= stop:
+            yield (start, )
+            start += step
+    elif step < 0:
+        while stop >= start:
+            yield (stop, )
+            stop += step
+    else:
+        # SQLite doesn't error on step==0
+        pass
+
+
+generate_series_sqlite.columns = ("value", )
+generate_series_sqlite.column_access = VTColumnAccess.By_Index
+generate_series_sqlite.primary_key = 0
+
+
+def generate_series(start, stop, step=None):
+    """Behaves like Postgres and SQL Server
+
+    `Postgres doc
+    <https://www.postgresql.org/docs/current/functions-srf.html>`__
+    `SQL server doc
+    <https://learn.microsoft.com/en-us/sql/t-sql/functions/generate-series-transact-sql>`__
+
+    Operates on floating point as well as integer.  If step is not
+    specified then it is 1 if *stop* is greater than *start* and -1 if
+    *stop* is less than *start*.
+
+    To use::
+
+        apsw.ext.make_virtual_module(db,
+                                     "generate_series",
+                                     apsw.ext.generate_series)
+
+        db.execute("SELECT value FROM generate_series(1, 10))
+
+    .. seealso::
+
+        :meth:`generate_series`
+
+    """
+    if step is None:
+        if stop > start:
+            step = 1
+        else:
+            step = -1
+
+    if step > 0:
+        while start <= stop:
+            yield (start, )
+            start += step
+    elif step < 0:
+        while start >= stop:
+            yield (start, )
+            start += step
+    else:
+        raise ValueError("step of zero is not valid")
+
+
+generate_series.columns = ("value", )
+generate_series.column_access = VTColumnAccess.By_Index
+generate_series.primary_key = 0
 
 
 def query_info(db: apsw.Connection,

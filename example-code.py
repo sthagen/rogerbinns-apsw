@@ -8,7 +8,6 @@ import time
 import apsw
 import apsw.ext
 import random
-import ast
 
 # Note: this code uses Python's optional typing annotations.  You can
 # ignore them and do not need to use them
@@ -335,7 +334,7 @@ for row in connection.execute("""
         ) AS sum_y
         FROM t3 ORDER BY x;
     """):
-        print("ROW", row)
+    print("ROW", row)
 
 ### collation: Defining collations (sorting)
 # How you sort can depend on the languages or values involved.  You
@@ -679,107 +678,141 @@ connection.setupdatehook(None)
 # Virtual tables let you provide data on demand as a SQLite table so
 # you can use SQL queries against that data. :ref:`Read more about
 # virtual tables <virtualtables>`.
+#
+# Writing your own virtual table requires understanding the
+# `BestIndex <https://www.sqlite.org/vtab.html#the_xbestindex_method>`__ method
+# as it is how you return less than all of the data.
+#
+# These examples use :func:`apsw.ext.make_virtual_module` to wrap a
+# Python function, so you can have a virtual table in 3 lines of code.
+# For the first example you'll find :meth:`apsw.ext.generate_series`
+# useful instead.
 
-# This example provides information about all the files in Python's
-# path.  The minimum amount of code needed is shown, and lets SQLite
-# do all the heavy lifting.  A more advanced table would use indices
-# and filters to reduce the number of rows shown to SQLite.
 
-# these first columns are used by our virtual table
-vtcolumns = ["rowid", "name", "directory"]
+# 3 lines of code ...
+def table_range(start=1, stop=100, step=1):
+    for i in range(start, stop + 1, step):
+        yield (i, )
 
 
-def get_file_data(directories):
-    "Returns a list of column names, and a list of all the files with their attributes"
-    columns = None
-    data = []
-    counter = 1
-    for directory in directories:
-        for f in os.listdir(directory):
-            if not os.path.isfile(os.path.join(directory, f)):
+# set column names
+table_range.columns = ("value", )
+# set how to access what table_range returns
+table_range.column_access = apsw.ext.VTColumnAccess.By_Index
+
+# register it
+apsw.ext.make_virtual_module(connection, "range", table_range)
+
+# see it work.  we can provide both positional and keyword
+# arguments
+query = "SELECT * FROM range(90) WHERE step=2"
+print(apsw.ext.format_query_table(connection, query))
+
+# the parameters are hidden columns so '*' doesn't select them
+# but you can ask
+query = "SELECT *, start, stop, step FROM range(89) WHERE step=3"
+print(apsw.ext.format_query_table(connection, query))
+
+# Expose the unicode database.
+import unicodedata
+
+# The methods we will call on each codepoint
+unicode_methods = (unicodedata.name, unicodedata.decimal, unicodedata.digit, unicodedata.numeric, unicodedata.category,
+                   unicodedata.bidirectional, unicodedata.combining, unicodedata.east_asian_width, unicodedata.mirrored,
+                   unicodedata.decomposition)
+
+
+# the function we will turn into a virtual table
+def unicode_data(start=0, stop=sys.maxunicode):
+
+    # some methods raise ValueError on some codepoints
+    def call(meth, c):
+        try:
+            return meth(c)
+        except ValueError:
+            return None
+
+    for c in range(start, stop + 1):
+        c = chr(c)
+        yield tuple(call(func, c) for func in unicode_methods)
+
+
+# setup column names and access
+unicode_data.columns = tuple(func.__name__ for func in unicode_methods)
+unicode_data.column_access = apsw.ext.VTColumnAccess.By_Index
+
+# register
+apsw.ext.make_virtual_module(connection, "unicode_data", unicode_data)
+
+# how many codepoints are in each category?
+query = """
+    SELECT count(*), category FROM unicode_data
+       WHERE start = 0x1000 AND stop = 0xffff
+       GROUP BY category
+       ORDER BY category
+       LIMIT 10"""
+print(apsw.ext.format_query_table(connection, query))
+
+
+# A more complex example - given a list of directories return information about the files within
+def get_files_info(directories: str,
+                   sep: str = os.pathsep,
+                   *,
+                   ignore_symlinks: bool = True) -> Iterator[dict[str, Any]]:
+    """Scan directories returning information about the files within"""
+    for root in directories.split(sep):
+        for entry in os.scandir(root):
+            if entry.is_symlink() and ignore_symlinks:
                 continue
-            counter += 1
-            st = os.stat(os.path.join(directory, f))
-            if columns is None:
-                # we add on all the fields from os.stat
-                columns = vtcolumns + [x for x in dir(st) if x.startswith("st_")]
-            data.append([counter, f, directory] + [getattr(st, x) for x in columns[3:]])
-    return columns, data
+            if entry.is_dir():
+                yield from get_files_info(os.path.join(root, entry.name), ignore_symlinks=ignore_symlinks)
+            elif entry.is_file():
+                s = entry.stat()
+                yield {
+                    **{
+                        "directory": root,
+                        "name": entry.name,
+                        "extension": os.path.splitext(entry.name)[1],
+                    },
+                    **{k: getattr(s, k)
+                       for k in get_files_info.stat_columns}
+                }
 
 
-# This gets registered with the Connection
-class Source:
+# which stat columns do we want?
+get_files_info.stat_columns = tuple(n for n in dir(os.stat(".")) if n.startswith("st_"))
+# setup columns and access by providing an example of the first entry returned
+get_files_info.columns, get_files_info.column_access = \
+    apsw.ext.get_column_names(next(get_files_info(".")))
 
-    def Create(self, db, modulename, dbname, tablename, *args):
-        # the eval strips off layer of quotes
-        columns, data = get_file_data([ast.literal_eval(a.replace("\\", "\\\\")) for a in args])
-        schema = "create table foo(" + ','.join(["'%s'" % (x, ) for x in columns[1:]]) + ")"
-        return schema, Table(columns, data)
+apsw.ext.make_virtual_module(connection, "files_info", get_files_info)
 
-    Connect = Create
+# all the sys.path directories except our current one
+bindings = (os.pathsep.join(p for p in sys.path if os.path.isdir(p) and not os.path.samefile(p, ".")), )
 
+# Find the 3 biggest files
+query = """SELECT st_size, directory, name
+            FROM files_info(?)
+            ORDER BY st_size DESC
+            LIMIT 3"""
+print(apsw.ext.format_query_table(connection, query, bindings))
 
-# Represents a table
-class Table:
+# Find the 3 oldest
+query = """SELECT DATE(st_ctime, 'auto') AS date, directory, name
+            FROM files_info(?)
+            ORDER BY st_size DESC
+            LIMIT 3"""
+print(apsw.ext.format_query_table(connection, query, bindings))
 
-    def __init__(self, columns, data):
-        self.columns = columns
-        self.data = data
+# find space used by filename extension
+query = """SELECT extension, SUM(st_size) as total_size
+            FROM files_info(?)
+            GROUP BY extension
+            ORDER BY extension"""
+print(apsw.ext.format_query_table(connection, query, bindings))
 
-    def BestIndex(self, *args):
-        return None
-
-    def Open(self):
-        return Cursor(self)
-
-    def Disconnect(self):
-        pass
-
-    Destroy = Disconnect
-
-
-# Represents a cursor used during SQL query processing
-class Cursor:
-
-    def __init__(self, table):
-        self.table = table
-
-    def Filter(self, *args):
-        self.pos = 0
-
-    def Eof(self):
-        return self.pos >= len(self.table.data)
-
-    def Rowid(self):
-        return self.table.data[self.pos][0]
-
-    def Column(self, col):
-        return self.table.data[self.pos][1 + col]
-
-    def Next(self):
-        self.pos += 1
-
-    def Close(self):
-        pass
-
-
-# Register the module as filesource
-connection.createmodule("filesource", Source())
-
-# Arguments to module - all directories in sys.path
-sysdirs = ",".join(["'%s'" % (x, ) for x in sys.path[1:] if len(x) and os.path.isdir(x)])
-connection.execute("create virtual table sysfiles using filesource(" + sysdirs + ")")
-
-print("3 biggest files")
-for size, directory, file in connection.execute(
-        "select st_size,directory,name from sysfiles order by st_size desc limit 3"):
-    print(size, file, directory)
-
-print()
-print("3 oldest files")
-for ctime, directory, file in connection.execute(
-        "select st_ctime,directory,name from sysfiles order by st_ctime limit 3"):
-    print(ctime, file, directory)
+# unregister a virtual table by passing None
+connection.createmodule("files_info", None)
 
 ### vfs: VFS - Virtual File System
 # VFS lets you control access to the filesystem from SQLite.  APSW
@@ -990,6 +1023,41 @@ connection.trace_v2(apsw.SQLITE_TRACE_STMT | apsw.SQLITE_TRACE_PROFILE | apsw.SQ
 # We will get one each of the trace events
 for _ in connection.execute(query):
     pass
+
+# Turn off tracing
+connection.trace_v2(0, None)
+
+### format_query: Formatting query results table
+# :meth:`apsw.ext.format_query_table` makes it easy
+# to format the results of a query in an automatic
+# adjusting table, colour, sanitizing strings,
+# truncation etc
+
+# Create a table with some dummy data
+connection.execute(
+    """CREATE TABLE dummy(quantity, [spaces in name], last);
+    INSERT INTO dummy VALUES(3, 'some regular text to make this row interesting', x'030709');
+    INSERT INTO dummy VALUES(3.14, 'Tiếng Việt', null);
+    INSERT INTO dummy VALUES('', ?, ' ');
+""", ('special \t\n\f\0 cha\\rs', ))
+
+query = "SELECT * FROM dummy"
+# default
+print(apsw.ext.format_query_table(connection, query))
+
+# no unicode and maximum sanitize the text
+kwargs = {"use_unicode": False, "string_sanitize": 2}
+print(apsw.ext.format_query_table(connection, query, **kwargs))
+
+# lets have unicode and make things narrow with no word wrap
+kwargs = {"use_unicode": True, "string_sanitize": 0, "text_width": 30, "word_wrap": False}
+print(apsw.ext.format_query_table(connection, query, **kwargs))
+
+# have the values in SQL syntax
+kwargs = {"quote": True}
+print(apsw.ext.format_query_table(connection, query, **kwargs))
+
+# do look at the format_query_table doc for more output tweaking
 
 ### cleanup:  Cleanup
 # As a general rule you do not need to do any cleanup.  Standard

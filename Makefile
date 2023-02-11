@@ -52,6 +52,7 @@ docs: build_ext $(GENDOCS) doc/example.rst doc/.static doc/typing.rstgen
 doc/example.rst: example-code.py tools/example2rst.py src/apswversion.h
 	rm -f dbfile
 	env PYTHONPATH=. $(PYTHON) -sS tools/example2rst.py
+	rm -f dbfile
 
 doc/typing.rstgen: src/apswtypes.py tools/types2rst.py
 	-rm -f doc/typing.rstgen
@@ -118,8 +119,8 @@ fossil: ## Grabs latest trunk from SQLite source control, extracts and builds in
 	-mv sqlite3/sqlite3config.h .
 	-rm -rf sqlite3
 	mkdir sqlite3
-	set -e ; cd sqlite3 ; wget https://www.sqlite.org/src/tarball/sqlite.tar.gz ; tar xfa sqlite.tar.gz --strip-components=1
-	set -e ; cd sqlite3 ; ./configure --quiet ; make sqlite3.c sqlite3
+	set -e ; cd sqlite3 ; curl --output - https://www.sqlite.org/src/tarball/sqlite.tar.gz | tar xfz - --strip-components=1
+	set -e ; cd sqlite3 ; ./configure --quiet --enable-all ; make sqlite3.c sqlite3
 	-mv sqlite3config.h sqlite3/
 
 # the funky test stuff is to exit successfully when grep has rc==1 since that means no lines found.
@@ -217,7 +218,7 @@ release: ## Signs built source file(s)
 	cd dist ; zip -m $(VERDIR)-sigs.zip *.asc
 
 # building a python debug interpreter
-PYDEBUG_VER=3.11.1
+PYDEBUG_VER=3.11.2
 PYDEBUG_DIR=/space/pydebug
 PYVALGRIND_VER=$(PYDEBUG_VER)
 PYVALGRIND_DIR=/space/pyvalgrind
@@ -228,7 +229,7 @@ pydebug: ## Build a debug python including address sanitizer.  Extensions it bui
 	set -x && cd "$(PYDEBUG_DIR)" && find . -delete && \
 	curl https://www.python.org/ftp/python/$(PYDEBUG_VER)/Python-$(PYDEBUG_VER).tar.xz | tar xfJ - && \
 	cd Python-$(PYDEBUG_VER) && \
-	./configure --with-address-sanitizer --with-undefined-behavior-sanitizer --without-pymalloc --prefix="$(PYDEBUG_DIR)" \
+	./configure --with-address-sanitizer --with-undefined-behavior-sanitizer --without-pymalloc --with-pydebug --prefix="$(PYDEBUG_DIR)" \
 	CPPFLAGS="-DPyDict_MAXFREELIST=0 -DPyFloat_MAXFREELIST=0 -DPyTuple_MAXFREELIST=0 -DPyList_MAXFREELIST=0" && \
 	env PATH="/usr/lib/ccache:$$PATH" ASAN_OPTIONS=detect_leaks=false make -j install
 
@@ -236,7 +237,7 @@ pyvalgrind: ## Build a debug python with valgrind integration
 	set -x && cd "$(PYVALGRIND_DIR)" && find . -delete && \
 	curl https://www.python.org/ftp/python/$(PYVALGRIND_VER)/Python-$(PYVALGRIND_VER).tar.xz | tar xfJ - && \
 	cd Python-$(PYVALGRIND_VER) && \
-	./configure --with-valgrind --without-pymalloc --prefix="$(PYVALGRIND_DIR)" \
+	./configure --with-valgrind --without-pymalloc  --with-pydebug --prefix="$(PYVALGRIND_DIR)" \
 	CPPFLAGS="-DPyDict_MAXFREELIST=0 -DPyFloat_MAXFREELIST=0 -DPyTuple_MAXFREELIST=0 -DPyList_MAXFREELIST=0" && \
 	env PATH="/usr/lib/ccache:$$PATH" make -j install
 

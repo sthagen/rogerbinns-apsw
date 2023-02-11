@@ -136,6 +136,23 @@ This number may be different than the actual library in use if the
 library is shared and has been updated.  Call
 :meth:`sqlitelibversion` to get the actual library version."""
 
+def allow_missing_dict_bindings(value: bool) -> bool:
+    """Changes how missing bindings are handled when using a :class:`dict`.
+    Historically missing bindings were treated as *None*.  It was
+    anticipated that dict bindings would be used when there were lots
+    of columns, so having missing ones defaulting to *None* was
+    convenient.
+
+    Unfortunately this also has the side effect of not catching typos
+    and similar issues.
+
+    APSW 3.41.0.0 changed the default so that missing dict entries
+    will result in an exception.  Call this with *True* to restore
+    the earlier behaviour, and *False* to have an exception.
+
+    The previous value is returned."""
+    ...
+
 def apswversion() -> str:
     """Returns the APSW version."""
     ...
@@ -264,7 +281,13 @@ def fork_checker() -> None:
     ...
 
 def format_sql_value(value: SQLiteValue) -> str:
-    """Returns a Python string representing the supplied value in SQL syntax."""
+    """Returns a Python string representing the supplied value in SQLite
+    syntax.
+
+    Note that SQLite represents floating point `Nan
+    <https://en.wikipedia.org/wiki/NaN>`__ as :code:`NULL`, infinity as
+    :code:`1e999` and loses the sign on `negative zero
+    <https://en.wikipedia.org/wiki/Signed_zero>`__."""
     ...
 
 def hard_heap_limit(limit: int) -> int:
@@ -323,6 +346,11 @@ def memoryused() -> int:
 
     Calls: `sqlite3_memory_used <https://sqlite.org/c3ref/memory_highwater.html>`__"""
     ...
+
+no_change: 
+"""A sentinel value used to indicate no change in a value when
+used with :meth:`VTCursor.ColumnNoChange` and
+:meth:`VTTable.UpdateChangeRow`"""
 
 def randomness(amount: int)  -> bytes:
     """Gets random data from SQLite's random number generator.
@@ -986,13 +1014,14 @@ class Connection:
         Calls: `sqlite3_create_collation_v2 <https://sqlite.org/c3ref/create_collation.html>`__"""
         ...
 
-    def createmodule(self, name: str, datasource: Optional[VTModule], *, use_bestindex_object: bool = False, iVersion: int = 3, eponymous: bool=False, eponymous_only: bool = False, read_only: bool = False) -> None:
+    def createmodule(self, name: str, datasource: Optional[VTModule], *, use_bestindex_object: bool = False, use_no_change: bool = False, iVersion: int = 1, eponymous: bool=False, eponymous_only: bool = False, read_only: bool = False) -> None:
         """Registers a virtual table, or drops it if *datasource* is *None*.
         See :ref:`virtualtables` for details.
 
         :param name: Module name (what comes after USING in CREATE VIRTUAL TABLE tablename USING ...)
         :param datasource: Provides :class:`VTModule` methods
         :param use_bestindex_object: If True then BestIndexObject is used, else BestIndex
+        :param use_no_change: Turn on understanding :meth:`VTCursor.ColumnNoChange` and using :attr:`apsw.no_change` to reduce :meth:`VTTable.UpdateChangeRow` work
         :param iVersion: iVersion field in `sqlite3_module <https://www.sqlite.org/c3ref/module.html>`__
         :param eponymous: Configures module to be `eponymous <https://www.sqlite.org/vtab.html#eponymous_virtual_tables>`__
         :param eponymous_only: Configures module to be `eponymous only <https://www.sqlite.org/vtab.html#eponymous_only_virtual_tables>`__
@@ -2509,6 +2538,22 @@ if sys.version_info >= (3, 8):
               supported types <types>`"""
             ...
 
+        def ColumnNoChange(self, number: int) -> SQLiteValue:
+            """:meth:`VTTable.UpdateChangeRow` is going to be called which includes
+            values for all columns.  However this column is not going to be changed
+            in that update.
+
+            If you return :attr:`apsw.no_change` then :meth:`VTTable.UpdateChangeRow`
+            will have :attr:`apsw.no_change` for this column.  If you return
+            anything else then it will have that value - as though :meth:`VTCursor.Column`
+            had been called.
+
+            This method will only be called if *use_no_change* was *True* in the
+            call to :meth:`Connection.createmodule`.
+
+            Calls: `sqlite3_vtab_nochange <https://sqlite.org/c3ref/vtab_nochange.html>`__"""
+            ...
+
         def Eof(self) -> bool:
             """Called to ask if we are at the end of the table. It is called after each call to Filter and Next.
 
@@ -2620,6 +2665,19 @@ if sys.version_info >= (3, 8):
             The corresponding call is :meth:`VTTable.Destroy`."""
             ...
 
+        def ShadowName(self, table_suffix: str) -> bool:
+            """This method is called to check if
+            *table_suffix* is a `shadow name
+            <https://www.sqlite.org/vtab.html#the_xshadowname_method>`__
+
+            The default implementation always returns *False*.
+
+            If a virtual table is created using this module
+            named :code:`example` and then a  real table is created
+            named :code:`example_content`, this would be called with
+            a *table_suffix* of :code:`content`"""
+            ...
+
 
 if sys.version_info >= (3, 8):
 
@@ -2638,7 +2696,7 @@ if sys.version_info >= (3, 8):
         .. _vtablestructure:
 
         A virtual table is structured as a series of rows, each of which has
-        the same columns.  The value in a column must be one of the `5
+        the same number of columns.  The value in a column must be one of the `5
         supported types <https://sqlite.org/datatype3.html>`_, but the
         type can be different between rows for the same column.  The virtual
         table routines identify the columns by number, starting at zero.
@@ -2647,7 +2705,10 @@ if sys.version_info >= (3, 8):
         <https://sqlite.org/autoinc.html>`_ with the :class:`Cursor
         <VTCursor>` routines operating on this number, as well as some of
         the :class:`Table <VTTable>` routines such as :meth:`UpdateChangeRow
-        <VTTable.UpdateChangeRow>`."""
+        <VTTable.UpdateChangeRow>`.
+
+        It is possible to not have a rowid - read more at `the SQLite
+        site <https://www.sqlite.org/vtab.html#_without_rowid_virtual_tables_>`__"""
 
         def Begin(self) -> None:
             """This function is used as part of transactions.  You do not have to
@@ -2726,10 +2787,11 @@ if sys.version_info >= (3, 8):
 
                (integer, boolean)
                  By default SQLite will check what you return. For example if
-                 you said that you had an index on price, SQLite will still
-                 check that each row you returned is greater than 74.99. If you
-                 set the boolean to False then SQLite won't do that double
-                 checking.
+                 you said that you had an index on price and so would only
+                 return rows greater than 74.99, then SQLite will still
+                 check that each row you returned is greater than 74.99.
+                 If the boolean is True then SQLite will not double
+                 check, while False retains the default double checking.
 
             Example query: ``select * from foo where price > 74.99 and
             quantity<=10 and customer=='Acme Widgets'``.  customer is column 0,
@@ -2892,6 +2954,13 @@ if sys.version_info >= (3, 8):
             """Returns a :class:`cursor <VTCursor>` object."""
             ...
 
+        def Release(self, level: int) -> None:
+            """Release nested transactions back to *level*.
+
+            If you do not provide this method then the call succeeds (matching
+            SQLite behaviour when no callback is provided)."""
+            ...
+
         def Rename(self, newname: str) -> None:
             """Notification that the table will be given a new name. If you return
             without raising an exception, then SQLite renames the table (you
@@ -2902,6 +2971,13 @@ if sys.version_info >= (3, 8):
         def Rollback(self) -> None:
             """This function is used as part of transactions.  You do not have to
             provide the method."""
+            ...
+
+        def Savepoint(self, level: int) -> None:
+            """Set nested transaction to *level*.
+
+            If you do not provide this method then the call succeeds (matching
+            SQLite behaviour when no callback is provided)."""
             ...
 
         def Sync(self) -> None:

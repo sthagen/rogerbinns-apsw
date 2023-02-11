@@ -135,6 +135,13 @@ static PyObject *apswmodule;
 /* root exception class */
 static PyObject *APSWException;
 
+/* no change sentinel for vtable updates */
+static PyTypeObject apsw_no_change_object = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+        .tp_name = "apsw.no_change",
+    .tp_doc = Apsw_no_change_DOC,
+};
+
 typedef struct
 {
   PyObject_HEAD long long blobsize;
@@ -166,6 +173,8 @@ typedef struct
 
 /* Zeroblob and blob */
 #include "blob.c"
+
+static int allow_missing_dict_bindings = 0;
 
 /* cursors */
 #include "cursor.c"
@@ -1132,8 +1141,13 @@ fail:
 
 /** .. method:: format_sql_value(value: SQLiteValue) -> str
 
-  Returns a Python string representing the supplied value in SQL syntax.
+  Returns a Python string representing the supplied value in SQLite
+  syntax.
 
+  Note that SQLite represents floating point `Nan
+  <https://en.wikipedia.org/wiki/NaN>`__ as :code:`NULL`, infinity as
+  :code:`1e999` and loses the sign on `negative zero
+  <https://en.wikipedia.org/wiki/Signed_zero>`__.
 */
 static PyObject *
 formatsqlvalue(PyObject *Py_UNUSED(self), PyObject *value)
@@ -1142,9 +1156,22 @@ formatsqlvalue(PyObject *Py_UNUSED(self), PyObject *value)
   if (value == Py_None)
     return PyUnicode_FromString("NULL");
 
-  /* Integer/Float */
-  if (PyLong_Check(value) || PyFloat_Check(value))
+  /* Integer */
+  if (PyLong_Check(value))
     return PyObject_Str(value);
+
+  /* float */
+  if (PyFloat_Check(value))
+  {
+    double d = PyFloat_AS_DOUBLE(value);
+    if (isnan(d))
+      return PyUnicode_FromString("NULL");
+    if (isinf(d))
+      return PyUnicode_FromString(signbit(d) ? "-1e999" : "1e999");
+    if (d == 0 && signbit(d))
+      return PyUnicode_FromString("0.0");
+    return PyObject_Str(value);
+  }
 
   /* Unicode */
   if (PyUnicode_Check(value))
@@ -1452,6 +1479,41 @@ apsw_unregister_vfs(PyObject *Py_UNUSED(module), PyObject *args, PyObject *kwds)
   Py_RETURN_NONE;
 }
 
+/** .. method:: allow_missing_dict_bindings(value: bool) -> bool
+
+  Changes how missing bindings are handled when using a :class:`dict`.
+  Historically missing bindings were treated as *None*.  It was
+  anticipated that dict bindings would be used when there were lots
+  of columns, so having missing ones defaulting to *None* was
+  convenient.
+
+  Unfortunately this also has the side effect of not catching typos
+  and similar issues.
+
+  APSW 3.41.0.0 changed the default so that missing dict entries
+  will result in an exception.  Call this with *True* to restore
+  the earlier behaviour, and *False* to have an exception.
+
+  The previous value is returned.
+*/
+static PyObject *
+apsw_allow_missing_dict_bindings(PyObject *Py_UNUSED(module), PyObject *args, PyObject *kwds)
+{
+  int curval = allow_missing_dict_bindings;
+  int value;
+  {
+    static char *kwlist[] = {"value", NULL};
+    Apsw_allow_missing_dict_bindings_CHECK;
+    argcheck_bool_param value_param = {&value, Apsw_allow_missing_dict_bindings_value_MSG};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O&:" Apsw_allow_missing_dict_bindings_USAGE, kwlist, argcheck_bool, &value_param))
+      return NULL;
+  }
+  allow_missing_dict_bindings = value;
+  if (curval)
+    Py_RETURN_TRUE;
+  Py_RETURN_FALSE;
+}
+
 static PyObject *
 apsw_getattr(PyObject *module, PyObject *name)
 {
@@ -1513,6 +1575,7 @@ static PyMethodDef module_methods[] = {
     {"strnicmp", (PyCFunction)apsw_strnicmp, METH_VARARGS | METH_KEYWORDS, Apsw_strnicmp_DOC},
     {"set_default_vfs", (PyCFunction)apsw_set_default_vfs, METH_VARARGS | METH_KEYWORDS, Apsw_set_default_vfs_DOC},
     {"unregister_vfs", (PyCFunction)apsw_unregister_vfs, METH_VARARGS | METH_KEYWORDS, Apsw_unregister_vfs_DOC},
+    {"allow_missing_dict_bindings", (PyCFunction)apsw_allow_missing_dict_bindings, METH_VARARGS | METH_KEYWORDS, Apsw_allow_missing_dict_bindings_DOC},
 #ifdef APSW_TESTFIXTURES
     {"_fini", (PyCFunction)apsw_fini, METH_NOARGS,
      "Frees all caches and recycle lists"},
@@ -1555,16 +1618,7 @@ PyInit_apsw(void)
     goto fail;
   }
 
-  if (PyType_Ready(&ConnectionType) < 0
-      || PyType_Ready(&APSWCursorType) < 0
-      || PyType_Ready(&ZeroBlobBindType) < 0
-      || PyType_Ready(&APSWBlobType) < 0
-      || PyType_Ready(&APSWVFSType) < 0
-      || PyType_Ready(&APSWVFSFileType) < 0
-      || PyType_Ready(&APSWURIFilenameType) < 0
-      || PyType_Ready(&FunctionCBInfoType) < 0
-      || PyType_Ready(&APSWBackupType) < 0
-      || PyType_Ready(&SqliteIndexInfoType) < 0)
+  if (PyType_Ready(&ConnectionType) < 0 || PyType_Ready(&APSWCursorType) < 0 || PyType_Ready(&ZeroBlobBindType) < 0 || PyType_Ready(&APSWBlobType) < 0 || PyType_Ready(&APSWVFSType) < 0 || PyType_Ready(&APSWVFSFileType) < 0 || PyType_Ready(&APSWURIFilenameType) < 0 || PyType_Ready(&FunctionCBInfoType) < 0 || PyType_Ready(&APSWBackupType) < 0 || PyType_Ready(&SqliteIndexInfoType) < 0 || PyType_Ready(&apsw_no_change_object) < 0)
     goto fail;
 
   m = apswmodule = PyModule_Create(&apswmoduledef);
@@ -1654,6 +1708,15 @@ PyInit_apsw(void)
   Py_INCREF(Py_False);
   PyModule_AddObject(m, "using_amalgamation", Py_False);
 #endif
+
+  /** .. attribute:: no_change
+
+    A sentinel value used to indicate no change in a value when
+    used with :meth:`VTCursor.ColumnNoChange` and
+    :meth:`VTTable.UpdateChangeRow`
+  */
+
+  PyModule_AddObject(m, "no_change", Py_NewRef(&apsw_no_change_object));
 
   /**
 

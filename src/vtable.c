@@ -33,11 +33,18 @@ Some examples of how you might use this:
 
 * There are other examples on the `SQLite page <https://sqlite.org/vtab.html>`__
 
-You need to have 3 types of object. A :class:`module <VTModule>`, a
-:class:`virtual table <VTTable>` and a :class:`cursor
-<VTCursor>`. These are documented below. You can also read the `SQLite
-C method documentation <https://sqlite.org/vtab.html>`__.  At the C
-level, they are just one set of methods. At the Python/APSW level,
+.. tip::
+
+  You'll find initial development a lot quicker by using
+  :meth:`apsw.ext.make_virtual_module`.  To write your own
+  you will need to understand `xBestIndex <https://www.sqlite.org/vtab.html#the_xbestindex_method>`__.
+
+
+To write a virtual table, you need to have 3 types of object. A
+:class:`module <VTModule>`, a :class:`virtual table <VTTable>` and a
+:class:`cursor <VTCursor>`. These are documented below. You can also
+read the `SQLite C method documentation <https://sqlite.org/vtab.html>`__.
+At the C level, they are just one set of methods. At the Python/APSW level,
 they are split over the 3 types of object. The leading **x** is
 omitted in Python. You can return SQLite error codes (eg
 *SQLITE_READONLY*) by raising the appropriate exceptions (eg
@@ -181,7 +188,7 @@ SqliteIndexInfo_get_aConstraint_usable(SqliteIndexInfo *self, PyObject *args, Py
   }
   CHECK_RANGE(nConstraint);
 
-  if (self->index_info->aConstraint[which].op)
+  if (self->index_info->aConstraint[which].usable)
     Py_RETURN_TRUE;
   Py_RETURN_FALSE;
 }
@@ -243,7 +250,7 @@ SqliteIndexInfo_get_aConstraint_rhs(SqliteIndexInfo *self, PyObject *args, PyObj
     return NULL;
   }
 
-  return convert_value_to_pyobject(pval, 0);
+  return convert_value_to_pyobject(pval, 0, 0);
 }
 
 /** .. method:: get_aOrderBy_iColumn(which: int) -> int
@@ -467,6 +474,11 @@ SqliteIndexInfo_set_idxNum(SqliteIndexInfo *self, PyObject *value)
 
   CHECK_INDEX(-1);
 
+  if (!PyLong_Check(value))
+  {
+    PyErr_Format(PyExc_TypeError, "Expected an int, not %s", Py_TypeName(value));
+    return -1;
+  }
   v = PyLong_AsInt(value);
   if (PyErr_Occurred())
     return -1;
@@ -596,6 +608,12 @@ SqliteIndexInfo_set_estimatedRows(SqliteIndexInfo *self, PyObject *value)
   sqlite3_int64 v;
   CHECK_INDEX(-1);
 
+  if (!PyLong_Check(value))
+  {
+    PyErr_Format(PyExc_TypeError, "Expected an int, not %s", Py_TypeName(value));
+    return -1;
+  }
+
   v = PyLong_AsLongLong(value);
 
   if (PyErr_Occurred())
@@ -624,6 +642,12 @@ SqliteIndexInfo_set_idxFlags(SqliteIndexInfo *self, PyObject *value)
 {
   int v;
   CHECK_INDEX(-1);
+
+  if (!PyLong_Check(value))
+  {
+    PyErr_Format(PyExc_TypeError, "Expected an int, not %s", Py_TypeName(value));
+    return -1;
+  }
 
   v = PyLong_AsInt(value);
   if (PyErr_Occurred())
@@ -782,6 +806,7 @@ typedef struct
   PyObject *vtable;            /* object implementing vtable */
   PyObject *functions;         /* functions returned by vtabFindFunction */
   int bestindex_object;        /* 0: tuples are passed to xBestIndex, 1: object is */
+  int use_no_change;           /* 1: we understand no_change updating */
   Connection *connection;
 } apsw_vtable;
 
@@ -856,12 +881,12 @@ apswvtabCreateOrConnect(sqlite3 *db,
   if (!vtable)
     goto pyexception;
 
-  avi = PyMem_Malloc(sizeof(apsw_vtable));
+  avi = PyMem_Calloc(1, sizeof(apsw_vtable));
   if (!avi)
     goto pyexception;
   assert((void *)avi == (void *)&(avi->used_by_sqlite)); /* detect if weird padding happens */
-  memset(avi, 0, sizeof(apsw_vtable));
   avi->bestindex_object = vti->bestindex_object;
+  avi->use_no_change = vti->use_no_change;
   avi->connection = self;
 
   schema = PySequence_GetItem(pyres, 0);
@@ -974,6 +999,22 @@ apswvtabConnect(sqlite3 *db,
   return apswvtabCreateOrConnect(db, pAux, argc, argv, pVTab, errmsg, 1);
 }
 
+/** .. method:: ShadowName(table_suffix: str) -> bool
+
+  This method is called to check if
+  *table_suffix* is a `shadow name
+  <https://www.sqlite.org/vtab.html#the_xshadowname_method>`__
+
+  The default implementation always returns *False*.
+
+  If a virtual table is created using this module
+  named :code:`example` and then a  real table is created
+  named :code:`example_content`, this would be called with
+  a *table_suffix* of :code:`content`
+*/
+
+/* actual implementation is later */
+
 /** .. class:: VTTable
 
   .. note::
@@ -990,7 +1031,7 @@ apswvtabConnect(sqlite3 *db,
   .. _vtablestructure:
 
   A virtual table is structured as a series of rows, each of which has
-  the same columns.  The value in a column must be one of the `5
+  the same number of columns.  The value in a column must be one of the `5
   supported types <https://sqlite.org/datatype3.html>`_, but the
   type can be different between rows for the same column.  The virtual
   table routines identify the columns by number, starting at zero.
@@ -1001,7 +1042,12 @@ apswvtabConnect(sqlite3 *db,
   the :class:`Table <VTTable>` routines such as :meth:`UpdateChangeRow
   <VTTable.UpdateChangeRow>`.
 
+  It is possible to not have a rowid - read more at `the SQLite
+  site <https://www.sqlite.org/vtab.html#_without_rowid_virtual_tables_>`__
+
 */
+
+static void freeShadowName(sqlite3_module *mod, PyObject *datasource);
 
 static void
 apswvtabFree(void *context)
@@ -1011,9 +1057,11 @@ apswvtabFree(void *context)
 
 #if SQLITE_VERSION_NUMBER < 3041000
 /* https://sqlite.org/forum/forumpost/b68391eb71fdff73 */
-#warning "Memory will be deliberately leaked by this routine"
 #else
   vtableinfo *vti = (vtableinfo *)context;
+
+  if (vti->sqlite3_module_def && vti->sqlite3_module_def->xShadowName)
+    freeShadowName(vti->sqlite3_module_def, vti->datasource);
 
   Py_XDECREF(vti->datasource);
   PyMem_Free(vti->sqlite3_module_def);
@@ -1050,7 +1098,7 @@ apswvtabDestroyOrDisconnect(sqlite3_vtab *pVtab, int stringindex)
 
   if (!res)
   {
-    sqliteres = MakeSqliteMsgFromPyException(&(pVtab->zErrMsg));
+    sqliteres = MakeSqliteMsgFromPyException(NULL);
     AddTraceBackHere(__FILE__, __LINE__, destroy_disconnect_strings[stringindex].pyexceptionname, "{s: O}", "self", OBJ(vtable));
   }
 
@@ -1226,10 +1274,11 @@ finally:
 
      (integer, boolean)
        By default SQLite will check what you return. For example if
-       you said that you had an index on price, SQLite will still
-       check that each row you returned is greater than 74.99. If you
-       set the boolean to False then SQLite won't do that double
-       checking.
+       you said that you had an index on price and so would only
+       return rows greater than 74.99, then SQLite will still
+       check that each row you returned is greater than 74.99.
+       If the boolean is True then SQLite will not double
+       check, while False retains the default double checking.
 
   Example query: ``select * from foo where price > 74.99 and
   quantity<=10 and customer=='Acme Widgets'``.  customer is column 0,
@@ -1414,6 +1463,9 @@ apswvtabBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *indexinfo)
     goto finally;
 
   indices = PySequence_GetItem(res, 0);
+  if (!indices)
+    goto pyexception;
+
   if (indices != Py_None)
   {
     if (!PySequence_Check(indices) || PySequence_Size(indices) != nconstraints)
@@ -1457,7 +1509,8 @@ apswvtabBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *indexinfo)
         goto pyexception;
       }
       argvindex = PySequence_GetItem(constraint, 0);
-      omit = PySequence_GetItem(constraint, 1);
+      if (argvindex)
+        omit = PySequence_GetItem(constraint, 1);
       if (!argvindex || !omit)
         goto constraintfail;
       if (!PyLong_Check(argvindex))
@@ -1518,10 +1571,11 @@ apswvtabBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *indexinfo)
     {
       if (!PyUnicode_Check(idxstr))
       {
-        PyErr_Format(PyExc_TypeError, "Expected a string for idxStr");
+        PyErr_Format(PyExc_TypeError, "Expected a string for idxStr not %s", Py_TypeName(idxstr));
         Py_DECREF(idxstr);
         goto pyexception;
       }
+      assert(indexinfo->idxStr == NULL);
       indexinfo->idxStr = sqlite3_mprintf("%s", PyUnicode_AsUTF8(idxstr));
       indexinfo->needToFreeIdxStr = 1;
     }
@@ -1687,6 +1741,7 @@ typedef struct
 {
   sqlite3_vtab_cursor used_by_sqlite; /* I don't touch this */
   PyObject *cursor;                   /* Object implementing cursor */
+  int use_no_change;
 } apsw_vtable_cursor;
 
 static int
@@ -1704,11 +1759,10 @@ apswvtabOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor)
   res = Call_PythonMethod(vtable, "Open", 1, NULL);
   if (!res)
     goto pyexception;
-  avc = PyMem_Malloc(sizeof(apsw_vtable_cursor));
+  avc = PyMem_Calloc(1, sizeof(apsw_vtable_cursor));
   assert((void *)avc == (void *)&(avc->used_by_sqlite)); /* detect if weird padding happens */
-  memset(avc, 0, sizeof(apsw_vtable_cursor));
-
   avc->cursor = res;
+  avc->use_no_change = ((apsw_vtable *)pVtab)->use_no_change;
   res = NULL;
   *ppCursor = (sqlite3_vtab_cursor *)avc;
   goto finally;
@@ -1791,7 +1845,7 @@ apswvtabUpdate(sqlite3_vtab *pVtab, int argc, sqlite3_value **argv, sqlite3_int6
     }
     else
     {
-      newrowid = convert_value_to_pyobject(argv[1], 0);
+      newrowid = convert_value_to_pyobject(argv[1], 0, 0);
       if (!newrowid)
         goto pyexception;
     }
@@ -1803,8 +1857,8 @@ apswvtabUpdate(sqlite3_vtab *pVtab, int argc, sqlite3_value **argv, sqlite3_int6
     PyObject *oldrowid = NULL, *newrowid = NULL;
     methodname = "UpdateChangeRow";
     args = PyTuple_New(3);
-    oldrowid = convert_value_to_pyobject(argv[0], 0);
-    APSW_FAULT_INJECT(VtabUpdateChangeRowFail, newrowid = convert_value_to_pyobject(argv[1], 0), newrowid = PyErr_NoMemory());
+    oldrowid = convert_value_to_pyobject(argv[0], 0, 0);
+    APSW_FAULT_INJECT(VtabUpdateChangeRowFail, newrowid = convert_value_to_pyobject(argv[1], 0, 0), newrowid = PyErr_NoMemory());
     if (!args || !oldrowid || !newrowid)
     {
       Py_XDECREF(oldrowid);
@@ -1825,7 +1879,7 @@ apswvtabUpdate(sqlite3_vtab *pVtab, int argc, sqlite3_value **argv, sqlite3_int6
     for (i = 0; i + 2 < argc; i++)
     {
       PyObject *field;
-      APSW_FAULT_INJECT(VtabUpdateBadField, field = convert_value_to_pyobject(argv[i + 2], 0), field = PyErr_NoMemory());
+      APSW_FAULT_INJECT(VtabUpdateBadField, field = convert_value_to_pyobject(argv[i + 2], 0, ((apsw_vtable *)pVtab)->use_no_change), field = PyErr_NoMemory());
       if (!field)
       {
         Py_DECREF(fields);
@@ -1970,7 +2024,7 @@ apswvtabFindFunction(sqlite3_vtab *pVtab, int nArg, const char *zName,
       sqliteres = PyLong_AsInt(item_0);
       if (PyErr_Occurred() || sqliteres < SQLITE_INDEX_CONSTRAINT_FUNCTION || sqliteres > 255)
       {
-        PyErr_Format(PyExc_TypeError, "Expected FindFunction sequence [int, Callable] to have int between SQLITE_INDEX_CONSTRAINT_FUNCTION and 255, not %i", sqliteres);
+        PyErr_Format(PyExc_ValueError, "Expected FindFunction sequence [int, Callable] to have int between SQLITE_INDEX_CONSTRAINT_FUNCTION and 255, not %i", sqliteres);
         sqliteres = 0;
         goto error;
       }
@@ -2008,27 +2062,107 @@ static int
 apswvtabRename(sqlite3_vtab *pVtab, const char *zNew)
 {
   PyGILState_STATE gilstate;
-  PyObject *vtable, *res = NULL, *newname = NULL;
+  PyObject *vtable, *res = NULL;
   int sqliteres = SQLITE_OK;
 
   gilstate = PyGILState_Ensure();
   vtable = ((apsw_vtable *)pVtab)->vtable;
 
-  APSW_FAULT_INJECT(VtabRenameBadName, newname = convertutf8string(zNew), newname = PyErr_NoMemory());
-  if (!newname)
-  {
-    sqliteres = SQLITE_ERROR;
-    goto finally;
-  }
   /* Marked as optional since sqlite does the actual renaming */
-  res = Call_PythonMethodV(vtable, "Rename", 0, "(N)", newname);
+  res = Call_PythonMethodV(vtable, "Rename", 0, "(s)", zNew);
   if (!res)
   {
     sqliteres = MakeSqliteMsgFromPyException(NULL);
     AddTraceBackHere(__FILE__, __LINE__, "VirtualTable.xRename", "{s: O, s: s}", "self", vtable, "newname", zNew);
   }
 
-finally:
+  Py_XDECREF(res);
+  PyGILState_Release(gilstate);
+  return sqliteres;
+}
+
+/** .. method:: Savepoint(level: int) -> None
+
+  Set nested transaction to *level*.
+
+  If you do not provide this method then the call succeeds (matching
+  SQLite behaviour when no callback is provided).
+*/
+static int
+apswvtabSavepoint(sqlite3_vtab *pVtab, int level)
+{
+  PyGILState_STATE gilstate;
+  PyObject *vtable, *res = NULL;
+  int sqliteres = SQLITE_OK;
+
+  gilstate = PyGILState_Ensure();
+  vtable = ((apsw_vtable *)pVtab)->vtable;
+
+  res = Call_PythonMethodV(vtable, "Savepoint", 0, "(i)", level);
+  if (!res)
+  {
+    sqliteres = MakeSqliteMsgFromPyException(NULL);
+    AddTraceBackHere(__FILE__, __LINE__, "VirtualTable.xSavepoint", "{s: O, s: i}", "self", vtable, "level", level);
+  }
+
+  Py_XDECREF(res);
+  PyGILState_Release(gilstate);
+  return sqliteres;
+}
+
+/** .. method:: Release(level: int) -> None
+
+  Release nested transactions back to *level*.
+
+  If you do not provide this method then the call succeeds (matching
+  SQLite behaviour when no callback is provided).
+*/
+static int
+apswvtabRelease(sqlite3_vtab *pVtab, int level)
+{
+  PyGILState_STATE gilstate;
+  PyObject *vtable, *res = NULL;
+  int sqliteres = SQLITE_OK;
+
+  gilstate = PyGILState_Ensure();
+  vtable = ((apsw_vtable *)pVtab)->vtable;
+
+  res = Call_PythonMethodV(vtable, "Release", 0, "(i)", level);
+  if (!res)
+  {
+    sqliteres = MakeSqliteMsgFromPyException(NULL);
+    AddTraceBackHere(__FILE__, __LINE__, "VirtualTable.xRelease", "{s: O, s: i}", "self", vtable, "level", level);
+  }
+
+  Py_XDECREF(res);
+  PyGILState_Release(gilstate);
+  return sqliteres;
+}
+
+/* .. method:: RollbackTo(level: int) -> None
+
+  Rollback nested transactions back to *level*.
+
+  If you do not provide this method then the call succeeds (matching
+  SQLite behaviour when no callback is provided).
+*/
+static int
+apswvtabRollbackTo(sqlite3_vtab *pVtab, int level)
+{
+  PyGILState_STATE gilstate;
+  PyObject *vtable, *res = NULL;
+  int sqliteres = SQLITE_OK;
+
+  gilstate = PyGILState_Ensure();
+  vtable = ((apsw_vtable *)pVtab)->vtable;
+
+  res = Call_PythonMethodV(vtable, "RollbackTo", 0, "(i)", level);
+  if (!res)
+  {
+    sqliteres = MakeSqliteMsgFromPyException(NULL);
+    AddTraceBackHere(__FILE__, __LINE__, "VirtualTable.xRollbackTo", "{s: O, s: i}", "self", vtable, "level", level);
+  }
+
   Py_XDECREF(res);
   PyGILState_Release(gilstate);
   return sqliteres;
@@ -2088,7 +2222,7 @@ apswvtabFilter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxStr,
     goto pyexception;
   for (i = 0; i < argc; i++)
   {
-    PyObject *value = convert_value_to_pyobject(sqliteargv[i], 1);
+    PyObject *value = convert_value_to_pyobject(sqliteargv[i], 1, 0);
     if (!value)
       goto pyexception;
     PyTuple_SET_ITEM(argv, i, value);
@@ -2167,6 +2301,29 @@ finally:
   :returns: Must be one one of the :ref:`5
     supported types <types>`
 */
+
+/*
+  Tt would be ideal for the return to be Union[SQLiteValue, apsw.no_change]
+  but that then requires apsw.no_change being documented as a class
+  which then confuses the documentation extractor.
+*/
+/** .. method:: ColumnNoChange(number: int) -> SQLiteValue
+
+  :meth:`VTTable.UpdateChangeRow` is going to be called which includes
+  values for all columns.  However this column is not going to be changed
+  in that update.
+
+  If you return :attr:`apsw.no_change` then :meth:`VTTable.UpdateChangeRow`
+  will have :attr:`apsw.no_change` for this column.  If you return
+  anything else then it will have that value - as though :meth:`VTCursor.Column`
+  had been called.
+
+  This method will only be called if *use_no_change* was *True* in the
+  call to :meth:`Connection.createmodule`.
+
+  -* sqlite3_vtab_nochange
+*/
+
 /* forward decln */
 static int set_context_result(sqlite3_context *context, PyObject *obj);
 
@@ -2176,16 +2333,25 @@ apswvtabColumn(sqlite3_vtab_cursor *pCursor, sqlite3_context *result, int ncolum
   PyObject *cursor, *res = NULL;
   PyGILState_STATE gilstate;
   int sqliteres = SQLITE_OK, ok;
+  int nc;
 
   gilstate = PyGILState_Ensure();
 
   cursor = ((apsw_vtable_cursor *)pCursor)->cursor;
 
-  res = Call_PythonMethodV(cursor, "Column", 1, "(i)", ncolumn);
+  nc = ((apsw_vtable_cursor *)pCursor)->use_no_change && sqlite3_vtab_nochange(result);
+
+  if (nc)
+    res = Call_PythonMethodV(cursor, "ColumnNoChange", 1, "(i)", ncolumn);
+  else
+    res = Call_PythonMethodV(cursor, "Column", 1, "(i)", ncolumn);
   if (!res)
     goto pyexception;
 
-  ok = set_context_result(result, res);
+  if (nc && Py_Is(res, (PyObject *)&apsw_no_change_object))
+    ok = 1;
+  else
+    ok = set_context_result(result, res);
   if (!PyErr_Occurred())
   {
     assert(ok);
@@ -2195,7 +2361,7 @@ apswvtabColumn(sqlite3_vtab_cursor *pCursor, sqlite3_context *result, int ncolum
 pyexception: /* we had an exception in python code */
   assert(PyErr_Occurred());
   sqliteres = MakeSqliteMsgFromPyException(&(pCursor->pVtab->zErrMsg)); /* SQLite flaw: errMsg should be on the cursor not the table! */
-  AddTraceBackHere(__FILE__, __LINE__, "VirtualTable.xColumn", "{s: O, s: O}", "self", cursor, "res", OBJ(res));
+  AddTraceBackHere(__FILE__, __LINE__, "VirtualTable.xColumn", "{s: O, s: O, s: O}", "self", cursor, "res", OBJ(res), "no_change", nc ? Py_True : Py_False);
 
 finally:
   Py_XDECREF(res);
@@ -2318,8 +2484,186 @@ finally:
   return sqliteres;
 }
 
+/* xShadowName has no context information so we have to make
+   make multiple functions (so each has a different address
+   and do lots of housekeeping.
+
+  https://sqlite.org/forum/forumpost/d5589fe401
+*/
+
+/* our multiple copies of the callback then call this
+   methir providing the which parameter */
+static int
+apswvtabShadowName(int which, const char *table_suffix);
+
+#define SN(n)                                    \
+  static int xShadowName_##n(const char *suffix) \
+  {                                              \
+    return apswvtabShadowName(n, suffix);        \
+  }
+
+SN(0)
+SN(1)
+SN(2)
+SN(3)
+SN(4)
+SN(5)
+SN(6)
+SN(7)
+SN(8)
+SN(9)
+SN(10)
+SN(11)
+SN(12)
+SN(13)
+SN(14)
+SN(15)
+SN(16)
+SN(17)
+SN(18)
+SN(19)
+SN(20)
+SN(21)
+SN(22)
+SN(23)
+SN(24)
+SN(25)
+SN(26)
+SN(27)
+SN(28)
+SN(29)
+SN(30)
+SN(31)
+
+#undef SN
+#define SN(n)             \
+  {                       \
+    xShadowName_##n, 0, 0 \
+  }
+
+static struct
+{
+  /* sqlite callback */
+  int (*apsw_xShadowName)(const char *);
+  /* associated python object we call */
+  PyObject *source;
+  /* this isn't needed but we use it with assertions to catch any errors */
+  struct sqlite3_module *module;
+} shadowname_allocation[] = {
+    SN(0),
+    SN(1),
+    SN(2),
+    SN(3),
+    SN(4),
+    SN(5),
+    SN(6),
+    SN(7),
+    SN(8),
+    SN(9),
+    SN(10),
+    SN(11),
+    SN(12),
+    SN(13),
+    SN(14),
+    SN(15),
+    SN(16),
+    SN(17),
+    SN(18),
+    SN(19),
+    SN(20),
+    SN(21),
+    SN(22),
+    SN(23),
+    SN(24),
+    SN(25),
+    SN(26),
+    SN(27),
+    SN(28),
+    SN(29),
+    SN(30),
+    SN(31)};
+
+#undef SN
+
+/* sanity check of entry x.  */
+#define SN_CHECK(x)                                                                                    \
+  do                                                                                                   \
+  {                                                                                                    \
+    assert((shadowname_allocation[x].module == NULL && shadowname_allocation[x].source == NULL) ||     \
+           shadowname_allocation[x].apsw_xShadowName == shadowname_allocation[x].module->xShadowName); \
+  } while (0)
+
+static void allocShadowName(sqlite3_module *mod, PyObject *datasource)
+{
+  const int max_sn = sizeof(shadowname_allocation) / sizeof(shadowname_allocation[0]);
+  int i;
+  for (i = 0; i < max_sn; i++)
+  {
+    SN_CHECK(i);
+    if (shadowname_allocation[i].module)
+      continue;
+
+    shadowname_allocation[i].module = mod;
+    mod->xShadowName = shadowname_allocation[i].apsw_xShadowName;
+    shadowname_allocation[i].source = datasource;
+    SN_CHECK(i);
+    return;
+  }
+  PyErr_Format(PyExc_Exception, "No xShadowName slots are available.  There can be at most %d at once across all databases.", max_sn);
+}
+
+static void freeShadowName(sqlite3_module *mod, PyObject *datasource)
+{
+  const int max_sn = sizeof(shadowname_allocation) / sizeof(shadowname_allocation[0]);
+  int i;
+  int (*apsw_xShadowName)(const char *) = mod->xShadowName;
+
+  for (i = 0; i < max_sn; i++)
+  {
+    SN_CHECK(i);
+    if (shadowname_allocation[i].apsw_xShadowName == apsw_xShadowName)
+    {
+      assert(shadowname_allocation[i].source == datasource && shadowname_allocation[i].module == mod);
+      shadowname_allocation[i].source = NULL;
+      shadowname_allocation[i].module = NULL;
+      SN_CHECK(i);
+      return;
+    }
+  }
+  assert(0); /* something went horribly wrong */
+}
+
+static int
+apswvtabShadowName(int which, const char *table_suffix)
+{
+  PyGILState_STATE gilstate;
+  PyObject *res = NULL;
+  int sqliteres = 0;
+
+  gilstate = PyGILState_Ensure();
+  SN_CHECK(which);
+  res = Call_PythonMethodV(shadowname_allocation[which].source, "ShadowName", 0, "(s)", table_suffix);
+  if (!res)
+    sqliteres = 0;
+  else if (Py_IsNone(res) || Py_IsFalse(res))
+    sqliteres = 0;
+  else if (Py_IsTrue(res))
+    sqliteres = 1;
+  else
+    PyErr_Format(PyExc_TypeError, "Expected a bool from ShadowName not %s", Py_TypeName(res));
+
+  if (PyErr_Occurred())
+  {
+    AddTraceBackHere(__FILE__, __LINE__, "VTModule.ShadowName", "{s: s, s: O}", "table_suffix", table_suffix, res, OBJ(res));
+    apsw_write_unraisable(NULL);
+  }
+  Py_XDECREF(res);
+  PyGILState_Release(gilstate);
+  return sqliteres;
+}
+
 static sqlite3_module *
-apswvtabSetupModuleDef(int iVersion, int eponymous, int eponymous_only, int read_only)
+apswvtabSetupModuleDef(PyObject *datasource, int iVersion, int eponymous, int eponymous_only, int read_only)
 {
   sqlite3_module *mod = NULL;
   assert(!PyErr_Occurred());
@@ -2369,14 +2713,21 @@ apswvtabSetupModuleDef(int iVersion, int eponymous, int eponymous_only, int read
   }
   mod->xFindFunction = apswvtabFindFunction;
   if (!read_only)
+  {
     mod->xRename = apswvtabRename;
-
-  /* ::TODO::
     mod->xSavepoint = apswvtabSavepoint;
     mod->xRelease = apswvtabRelease;
     mod->xRollbackTo = apswvtabRollbackTo;
-    mod->xShadowName = apswvtabShadowName;
-  */
+  }
+  if (iVersion >= 3)
+  {
+    allocShadowName(mod, datasource);
+    if (!mod->xShadowName)
+    {
+      PyMem_Free(mod);
+      return NULL;
+    }
+  }
 
   return mod;
 }

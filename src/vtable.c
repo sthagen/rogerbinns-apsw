@@ -520,10 +520,17 @@ SqliteIndexInfo_set_idxStr(SqliteIndexInfo *self, PyObject *value)
 
   if (!Py_IsNone(value))
   {
-    self->index_info->idxStr = sqlite3_mprintf(PyUnicode_AsUTF8(value));
-    self->index_info->needToFreeIdxStr = 1;
-    if (!self->index_info->idxStr || PyErr_Occurred())
+    const char *svalue = PyUnicode_AsUTF8(value);
+    if (!svalue)
       return -1;
+    const char *isvalue = sqlite3_mprintf("%s", svalue);
+    if (!isvalue)
+    {
+      PyErr_NoMemory();
+      return -1;
+    }
+    self->index_info->idxStr = (char *)isvalue;
+    self->index_info->needToFreeIdxStr = 1;
   }
 
   return 0;
@@ -843,11 +850,16 @@ apswvtabCreateOrConnect(sqlite3 *db,
 
   gilstate = PyGILState_Ensure();
 
+  MakeExistingException();
+
   vti = (vtableinfo *)pAux;
   assert(db == vti->connection->db);
 
   Connection *self = vti->connection;
   CALL_ENTER(xConnect);
+
+  if (PyErr_Occurred())
+    goto pyexception;
 
   args = PyTuple_New(1 + argc);
   if (!args)
@@ -859,7 +871,7 @@ apswvtabCreateOrConnect(sqlite3 *db,
   {
     PyObject *str;
 
-    APSW_FAULT_INJECT(VtabCreateBadString, str = convertutf8string(argv[i]), str = PyErr_NoMemory());
+    str = convertutf8string(argv[i]);
     if (!str)
       goto pyexception;
     PyTuple_SET_ITEM(args, 1 + i, str);
@@ -873,7 +885,8 @@ apswvtabCreateOrConnect(sqlite3 *db,
      the table and an object implementing it */
   if (!PySequence_Check(pyres) || PySequence_Size(pyres) != 2)
   {
-    PyErr_Format(PyExc_TypeError, "Expected two values - a string with the table schema and a vtable object implementing it");
+    if (!PyErr_Occurred())
+      PyErr_Format(PyExc_TypeError, "Expected two values - a string with the table schema and a vtable object implementing it");
     goto pyexception;
   }
 
@@ -1089,8 +1102,11 @@ apswvtabDestroyOrDisconnect(sqlite3_vtab *pVtab, int stringindex)
   gilstate = PyGILState_Ensure();
   vtable = ((apsw_vtable *)pVtab)->vtable;
 
-  /* mandatory for Destroy, optional for Disconnect */
-  res = Call_PythonMethod(vtable, destroy_disconnect_strings[stringindex].methodname, (stringindex == 0), NULL);
+  MakeExistingException();
+
+  CHAIN_EXC(
+      /* mandatory for Destroy, optional for Disconnect */
+      res = Call_PythonMethod(vtable, destroy_disconnect_strings[stringindex].methodname, (stringindex == 0), NULL););
 
   if (!res)
   {
@@ -1106,6 +1122,9 @@ apswvtabDestroyOrDisconnect(sqlite3_vtab *pVtab, int stringindex)
   }
 
   Py_XDECREF(res);
+
+  if (PyErr_Occurred())
+    apsw_write_unraisable(NULL);
 
   PyGILState_Release(gilstate);
   return sqliteres;
@@ -1159,12 +1178,18 @@ apswvtabBestIndexObject(sqlite3_vtab *pVtab, sqlite3_index_info *in_index_info)
   PyGILState_STATE gilstate;
   PyObject *vtable;
   PyObject *res = NULL;
-  int sqlite_res = SQLITE_OK;
+  int sqlite_res = SQLITE_ERROR;
   struct SqliteIndexInfo *index_info = NULL;
 
   gilstate = PyGILState_Ensure();
   vtable = ((apsw_vtable *)pVtab)->vtable;
-  index_info = PyObject_New(struct SqliteIndexInfo, &SqliteIndexInfoType);
+
+  MakeExistingException();
+
+  if (PyErr_Occurred())
+    goto finally;
+
+  index_info = (struct SqliteIndexInfo *)_PyObject_New(&SqliteIndexInfoType);
   if (!index_info)
     goto finally;
 
@@ -1394,6 +1419,8 @@ apswvtabBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *indexinfo)
 
   gilstate = PyGILState_Ensure();
 
+  MakeExistingException();
+
   vtable = ((apsw_vtable *)pVtab)->vtable;
 
   /* count how many usable constraints there are */
@@ -1491,7 +1518,7 @@ apswvtabBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *indexinfo)
       /* or an integer */
       if (PyLong_Check(constraint))
       {
-        indexinfo->aConstraintUsage[i].argvIndex = PyLong_AsLong(constraint) + 1;
+        indexinfo->aConstraintUsage[i].argvIndex = PyLong_AsInt(constraint) + 1;
         Py_DECREF(constraint);
         continue;
       }
@@ -1519,7 +1546,7 @@ apswvtabBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *indexinfo)
       omitv = PyObject_IsTrue(omit);
       if (omitv == -1)
         goto constraintfail;
-      indexinfo->aConstraintUsage[i].argvIndex = PyLong_AsLong(argvindex) + 1;
+      indexinfo->aConstraintUsage[i].argvIndex = PyLong_AsInt(argvindex) + 1;
       indexinfo->aConstraintUsage[i].omit = omitv;
       Py_DECREF(constraint);
       Py_DECREF(argvindex);
@@ -1550,7 +1577,7 @@ apswvtabBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *indexinfo)
         Py_DECREF(idxnum);
         goto pyexception;
       }
-      indexinfo->idxNum = PyLong_AsLong(idxnum);
+      indexinfo->idxNum = PyLong_AsInt(idxnum);
     }
     Py_DECREF(idxnum);
   }
@@ -1572,7 +1599,20 @@ apswvtabBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *indexinfo)
         goto pyexception;
       }
       assert(indexinfo->idxStr == NULL);
-      indexinfo->idxStr = sqlite3_mprintf("%s", PyUnicode_AsUTF8(idxstr));
+      const char *svalue = PyUnicode_AsUTF8(idxstr);
+      if (!svalue)
+      {
+        Py_DECREF(idxstr);
+        goto pyexception;
+      }
+      const char *isvalue = sqlite3_mprintf("%s", svalue);
+      if (!isvalue)
+      {
+        PyErr_NoMemory();
+        Py_DECREF(idxstr);
+        goto pyexception;
+      }
+      indexinfo->idxStr = (char *)isvalue;
       indexinfo->needToFreeIdxStr = 1;
     }
   }
@@ -1687,6 +1727,9 @@ apswvtabTransactionMethod(sqlite3_vtab *pVtab, int stringindex)
   int sqliteres = SQLITE_OK;
 
   gilstate = PyGILState_Ensure();
+
+  MakeExistingException();
+
   vtable = ((apsw_vtable *)pVtab)->vtable;
 
   res = Call_PythonMethod(vtable, transaction_strings[stringindex].methodname, 0, NULL);
@@ -1750,12 +1793,19 @@ apswvtabOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor)
 
   gilstate = PyGILState_Ensure();
 
+  MakeExistingException();
+
+  if (PyErr_Occurred())
+    goto pyexception;
+
   vtable = ((apsw_vtable *)pVtab)->vtable;
 
   res = Call_PythonMethod(vtable, "Open", 1, NULL);
   if (!res)
     goto pyexception;
   avc = PyMem_Calloc(1, sizeof(apsw_vtable_cursor));
+  if (!avc)
+    goto pyexception;
   assert((void *)avc == (void *)&(avc->used_by_sqlite)); /* detect if weird padding happens */
   avc->cursor = res;
   avc->use_no_change = ((apsw_vtable *)pVtab)->use_no_change;
@@ -1813,6 +1863,8 @@ apswvtabUpdate(sqlite3_vtab *pVtab, int argc, sqlite3_value **argv, sqlite3_int6
 
   gilstate = PyGILState_Ensure();
 
+  MakeExistingException();
+
   vtable = ((apsw_vtable *)pVtab)->vtable;
   Connection *self = ((apsw_vtable *)pVtab)->connection;
 
@@ -1854,7 +1906,8 @@ apswvtabUpdate(sqlite3_vtab *pVtab, int argc, sqlite3_value **argv, sqlite3_int6
     methodname = "UpdateChangeRow";
     args = PyTuple_New(3);
     oldrowid = convert_value_to_pyobject(argv[0], 0, 0);
-    APSW_FAULT_INJECT(VtabUpdateChangeRowFail, newrowid = convert_value_to_pyobject(argv[1], 0, 0), newrowid = PyErr_NoMemory());
+    if (oldrowid)
+      newrowid = convert_value_to_pyobject(argv[1], 0, 0);
     if (!args || !oldrowid || !newrowid)
     {
       Py_XDECREF(oldrowid);
@@ -1875,7 +1928,7 @@ apswvtabUpdate(sqlite3_vtab *pVtab, int argc, sqlite3_value **argv, sqlite3_int6
     for (i = 0; i + 2 < argc; i++)
     {
       PyObject *field;
-      APSW_FAULT_INJECT(VtabUpdateBadField, field = convert_value_to_pyobject(argv[i + 2], 0, ((apsw_vtable *)pVtab)->use_no_change), field = PyErr_NoMemory());
+      field = convert_value_to_pyobject(argv[i + 2], 0, ((apsw_vtable *)pVtab)->use_no_change);
       if (!field)
       {
         Py_DECREF(fields);
@@ -1969,7 +2022,9 @@ apswvtabFindFunction(sqlite3_vtab *pVtab, int nArg, const char *zName,
   gilstate = PyGILState_Ensure();
   vtable = av->vtable;
 
-  res = Call_PythonMethodV(vtable, "FindFunction", 0, "(Ni)", convertutf8string(zName), nArg);
+  MakeExistingException();
+
+  res = Call_PythonMethodV(vtable, "FindFunction", 0, "(si)", zName, nArg);
   if (!res)
   {
     AddTraceBackHere(__FILE__, __LINE__, "apswvtabFindFunction", "{s: s, s: i}", "zName", zName, "nArg", nArg);
@@ -1979,11 +2034,7 @@ apswvtabFindFunction(sqlite3_vtab *pVtab, int nArg, const char *zName,
   if (res != Py_None)
   {
     if (!av->functions)
-    {
-      APSW_FAULT_INJECT(FindFunctionAllocFailed,
-                        av->functions = PyList_New(0),
-                        av->functions = PyErr_NoMemory());
-    }
+      av->functions = PyList_New(0);
     if (!av->functions)
     {
       assert(PyErr_Occurred());
@@ -2029,9 +2080,13 @@ apswvtabFindFunction(sqlite3_vtab *pVtab, int nArg, const char *zName,
       sqliteres = 1;
       res = NULL;
     }
-    *pxFunc = cbdispatch_func;
-    *ppArg = cbinfo;
-    PyList_Append(av->functions, (PyObject *)cbinfo);
+    if (0 == PyList_Append(av->functions, (PyObject *)cbinfo))
+    {
+      *pxFunc = cbdispatch_func;
+      *ppArg = cbinfo;
+    }
+    else
+      sqliteres = 0;
   }
 error:
   Py_XDECREF(item_0);
@@ -2061,6 +2116,8 @@ apswvtabRename(sqlite3_vtab *pVtab, const char *zNew)
 
   gilstate = PyGILState_Ensure();
   vtable = ((apsw_vtable *)pVtab)->vtable;
+
+  MakeExistingException();
 
   /* Marked as optional since sqlite does the actual renaming */
   res = Call_PythonMethodV(vtable, "Rename", 0, "(s)", zNew);
@@ -2092,6 +2149,8 @@ apswvtabSavepoint(sqlite3_vtab *pVtab, int level)
   gilstate = PyGILState_Ensure();
   vtable = ((apsw_vtable *)pVtab)->vtable;
 
+  MakeExistingException();
+
   res = Call_PythonMethodV(vtable, "Savepoint", 0, "(i)", level);
   if (!res)
   {
@@ -2121,6 +2180,8 @@ apswvtabRelease(sqlite3_vtab *pVtab, int level)
   gilstate = PyGILState_Ensure();
   vtable = ((apsw_vtable *)pVtab)->vtable;
 
+  MakeExistingException();
+
   res = Call_PythonMethodV(vtable, "Release", 0, "(i)", level);
   if (!res)
   {
@@ -2149,6 +2210,8 @@ apswvtabRollbackTo(sqlite3_vtab *pVtab, int level)
 
   gilstate = PyGILState_Ensure();
   vtable = ((apsw_vtable *)pVtab)->vtable;
+
+  MakeExistingException();
 
   res = Call_PythonMethodV(vtable, "RollbackTo", 0, "(i)", level);
   if (!res)
@@ -2208,8 +2271,12 @@ apswvtabFilter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxStr,
   int i;
 
   gilstate = PyGILState_Ensure();
-
   cursor = ((apsw_vtable_cursor *)pCursor)->cursor;
+
+  MakeExistingException();
+
+  if (PyErr_Occurred())
+    goto pyexception;
 
   argv = PyTuple_New(argc);
   if (!argv)
@@ -2222,7 +2289,7 @@ apswvtabFilter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxStr,
     PyTuple_SET_ITEM(argv, i, value);
   }
 
-  res = Call_PythonMethodV(cursor, "Filter", 1, "(iO&O)", idxNum, convertutf8string, idxStr, argv);
+  res = Call_PythonMethodV(cursor, "Filter", 1, "(isO)", idxNum, idxStr, argv);
   if (res)
     goto finally; /* result is ignored */
 
@@ -2260,12 +2327,13 @@ apswvtabEof(sqlite3_vtab_cursor *pCursor)
   int sqliteres = 0; /* nb a true/false value not error code */
 
   gilstate = PyGILState_Ensure();
+  cursor = ((apsw_vtable_cursor *)pCursor)->cursor;
+
+  MakeExistingException();
 
   /* is there already an error? */
   if (PyErr_Occurred())
-    goto finally;
-
-  cursor = ((apsw_vtable_cursor *)pCursor)->cursor;
+    goto pyexception;
 
   res = Call_PythonMethod(cursor, "Eof", 1, NULL);
   if (!res)
@@ -2330,10 +2398,13 @@ apswvtabColumn(sqlite3_vtab_cursor *pCursor, sqlite3_context *result, int ncolum
   int nc;
 
   gilstate = PyGILState_Ensure();
-
   cursor = ((apsw_vtable_cursor *)pCursor)->cursor;
-
   nc = ((apsw_vtable_cursor *)pCursor)->use_no_change && sqlite3_vtab_nochange(result);
+
+  MakeExistingException();
+
+  if (PyErr_Occurred())
+    goto pyexception;
 
   if (nc)
     res = Call_PythonMethodV(cursor, "ColumnNoChange", 1, "(i)", ncolumn);
@@ -2384,6 +2455,8 @@ apswvtabNext(sqlite3_vtab_cursor *pCursor)
 
   gilstate = PyGILState_Ensure();
 
+  MakeExistingException();
+
   cursor = ((apsw_vtable_cursor *)pCursor)->cursor;
 
   res = Call_PythonMethod(cursor, "Next", 1, NULL);
@@ -2413,10 +2486,11 @@ apswvtabClose(sqlite3_vtab_cursor *pCursor)
 {
   PyObject *cursor, *res = NULL;
   PyGILState_STATE gilstate;
-  char **zErrMsgLocation = &(pCursor->pVtab->zErrMsg); /* we free pCursor but still need this field */
   int sqliteres = SQLITE_OK;
 
   gilstate = PyGILState_Ensure();
+
+  MakeExistingException();
 
   cursor = ((apsw_vtable_cursor *)pCursor)->cursor;
 
@@ -2427,7 +2501,7 @@ apswvtabClose(sqlite3_vtab_cursor *pCursor)
 
   /* pyexception: we had an exception in python code */
   assert(PyErr_Occurred());
-  sqliteres = MakeSqliteMsgFromPyException(zErrMsgLocation); /* SQLite flaw: errMsg should be on the cursor not the table! */
+  sqliteres = MakeSqliteMsgFromPyException(NULL); /* SQLite api: we can't report error string */
   AddTraceBackHere(__FILE__, __LINE__, "VirtualTable.xClose", "{s: O}", "self", cursor);
 
 finally:
@@ -2450,6 +2524,8 @@ apswvtabRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid)
   int sqliteres = SQLITE_OK;
 
   gilstate = PyGILState_Ensure();
+
+  MakeExistingException();
 
   cursor = ((apsw_vtable_cursor *)pCursor)->cursor;
 
@@ -2528,14 +2604,15 @@ SN(28)
 SN(29)
 SN(30)
 SN(31)
-
+SN(32)
+SN(33) SN(34) SN(35) SN(36) SN(37) SN(38) SN(39) SN(40) SN(41) SN(42) SN(43) SN(44) SN(45) SN(46) SN(47) SN(48) SN(49) SN(50) SN(51) SN(52) SN(53) SN(54) SN(55) SN(56) SN(57) SN(58) SN(59) SN(60) SN(61) SN(62) SN(63) SN(64) SN(65) SN(66) SN(67) SN(68) SN(69) SN(70) SN(71) SN(72) SN(73) SN(74) SN(75) SN(76) SN(77) SN(78) SN(79) SN(80) SN(81) SN(82) SN(83) SN(84) SN(85) SN(86) SN(87) SN(88) SN(89) SN(90) SN(91) SN(92) SN(93) SN(94) SN(95) SN(96) SN(97) SN(98) SN(99) SN(100) SN(101) SN(102) SN(103) SN(104) SN(105) SN(106) SN(107) SN(108) SN(109) SN(110) SN(111) SN(112) SN(113) SN(114) SN(115) SN(116) SN(117) SN(118) SN(119) SN(120) SN(121) SN(122) SN(123) SN(124) SN(125) SN(126) SN(127) SN(128) SN(129) SN(130) SN(131) SN(132) SN(133) SN(134) SN(135) SN(136) SN(137) SN(138) SN(139) SN(140) SN(141) SN(142) SN(143) SN(144) SN(145) SN(146) SN(147) SN(148) SN(149) SN(150) SN(151) SN(152) SN(153) SN(154) SN(155) SN(156) SN(157) SN(158) SN(159) SN(160) SN(161) SN(162) SN(163) SN(164) SN(165) SN(166) SN(167) SN(168) SN(169) SN(170) SN(171) SN(172) SN(173) SN(174) SN(175) SN(176) SN(177) SN(178) SN(179) SN(180) SN(181) SN(182) SN(183) SN(184) SN(185) SN(186) SN(187) SN(188) SN(189) SN(190) SN(191) SN(192) SN(193) SN(194) SN(195) SN(196) SN(197) SN(198) SN(199)
 #undef SN
 #define SN(n)             \
   {                       \
     xShadowName_##n, 0, 0 \
   }
 
-static struct
+    static struct
 {
   /* sqlite callback */
   int (*apsw_xShadowName)(const char *);
@@ -2575,7 +2652,8 @@ static struct
     SN(28),
     SN(29),
     SN(30),
-    SN(31)};
+    SN(31),
+    SN(32), SN(33), SN(34), SN(35), SN(36), SN(37), SN(38), SN(39), SN(40), SN(41), SN(42), SN(43), SN(44), SN(45), SN(46), SN(47), SN(48), SN(49), SN(50), SN(51), SN(52), SN(53), SN(54), SN(55), SN(56), SN(57), SN(58), SN(59), SN(60), SN(61), SN(62), SN(63), SN(64), SN(65), SN(66), SN(67), SN(68), SN(69), SN(70), SN(71), SN(72), SN(73), SN(74), SN(75), SN(76), SN(77), SN(78), SN(79), SN(80), SN(81), SN(82), SN(83), SN(84), SN(85), SN(86), SN(87), SN(88), SN(89), SN(90), SN(91), SN(92), SN(93), SN(94), SN(95), SN(96), SN(97), SN(98), SN(99), SN(100), SN(101), SN(102), SN(103), SN(104), SN(105), SN(106), SN(107), SN(108), SN(109), SN(110), SN(111), SN(112), SN(113), SN(114), SN(115), SN(116), SN(117), SN(118), SN(119), SN(120), SN(121), SN(122), SN(123), SN(124), SN(125), SN(126), SN(127), SN(128), SN(129), SN(130), SN(131), SN(132), SN(133), SN(134), SN(135), SN(136), SN(137), SN(138), SN(139), SN(140), SN(141), SN(142), SN(143), SN(144), SN(145), SN(146), SN(147), SN(148), SN(149), SN(150), SN(151), SN(152), SN(153), SN(154), SN(155), SN(156), SN(157), SN(158), SN(159), SN(160), SN(161), SN(162), SN(163), SN(164), SN(165), SN(166), SN(167), SN(168), SN(169), SN(170), SN(171), SN(172), SN(173), SN(174), SN(175), SN(176), SN(177), SN(178), SN(179), SN(180), SN(181), SN(182), SN(183), SN(184), SN(185), SN(186), SN(187), SN(188), SN(189), SN(190), SN(191), SN(192), SN(193), SN(194), SN(195), SN(196), SN(197), SN(198), SN(199)};
 
 #undef SN
 
@@ -2635,6 +2713,9 @@ apswvtabShadowName(int which, const char *table_suffix)
   int sqliteres = 0;
 
   gilstate = PyGILState_Ensure();
+
+  MakeExistingException();
+
   SN_CHECK(which);
   res = Call_PythonMethodV(shadowname_allocation[which].source, "ShadowName", 0, "(s)", table_suffix);
   if (!res)

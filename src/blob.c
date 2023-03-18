@@ -208,7 +208,7 @@ APSWBlob_close_internal(APSWBlob *self, int force)
     PyErr_Fetch(&err_type, &err_value, &err_traceback);
 
   /* note that sqlite3_blob_close always works even if an error is
-     returned - see sqlite ticket #2815 */
+     returned */
 
   if (self->pBlob)
   {
@@ -356,8 +356,8 @@ APSWBlob_read(APSWBlob *self, PyObject *args, PyObject *kwds)
   then copying into buffer.
 
   :param buffer: A writable buffer like object.
-                 There is a bytearray type that is very useful.
-                 `arrays <https://docs.python.org/3/library/array.html>`__ also work.
+                 There is a :class:`bytearray` type that is very useful.
+                 :mod:`Arrays <array>` also work.
 
   :param offset: The position to start writing into the buffer
                  defaulting to the beginning.
@@ -417,11 +417,9 @@ APSWBlob_readinto(APSWBlob *self, PyObject *args, PyObject *kwds)
   if (length > bloblen - self->curoffset)
     ERREXIT(PyErr_Format(PyExc_ValueError, "More data requested than blob length"));
 
-  APSW_FAULT_INJECT(BlobReadIntoPyError,
-    PYSQLITE_BLOB_CALL(res = sqlite3_blob_read(self->pBlob, (char *)(py3buffer.buf) + offset, length, self->curoffset)),
-    PyErr_NoMemory());
-  if (PyErr_Occurred())
-    ERREXIT(NULL);
+  PYSQLITE_BLOB_CALL(res = sqlite3_blob_read(self->pBlob, (char *)(py3buffer.buf) + offset, length, self->curoffset));
+
+  assert(!PyErr_Occurred());
 
   if (res != SQLITE_OK)
   {
@@ -532,23 +530,24 @@ APSWBlob_write(APSWBlob *self, PyObject *args, PyObject *kwds)
       return NULL;
   }
 
-  if (((int)(data.len + self->curoffset)) < self->curoffset)
+  Py_ssize_t calc_end = data.len + self->curoffset;
+
+  APSW_FAULT_INJECT(BlobWriteTooBig, , calc_end = (Py_ssize_t)0x7FFFFFFF * (Py_ssize_t)0x1000);
+
+  if ((int)calc_end < 0)
   {
-    PyErr_Format(PyExc_ValueError, "Data is too large (integer wrap)");
+    PyErr_Format(PyExc_ValueError, "Data is too large (integer overflow)");
     goto finally;
   }
 
-  if (((int)(data.len + self->curoffset)) > sqlite3_blob_bytes(self->pBlob))
+  if (calc_end > sqlite3_blob_bytes(self->pBlob))
   {
     PyErr_Format(PyExc_ValueError, "Data would go beyond end of blob");
     goto finally;
   }
 
-  APSW_FAULT_INJECT(BlobWritePyError,
-    PYSQLITE_BLOB_CALL(res = sqlite3_blob_write(self->pBlob, data.buf, data.len, self->curoffset)),
-    PyErr_NoMemory());
-  if (PyErr_Occurred())
-    goto finally;
+  PYSQLITE_BLOB_CALL(res = sqlite3_blob_write(self->pBlob, data.buf, data.len, self->curoffset));
+  assert(!PyErr_Occurred());
 
   if (res != SQLITE_OK)
   {

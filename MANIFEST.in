@@ -1,6 +1,7 @@
 # The C source
 
 include src/*.c
+include src/faultinject.h
 include src/apswtypes.py
 include src/apswversion.h
 include src/apsw.docstrings
@@ -15,6 +16,8 @@ include apsw/shell.py
 include apsw/speedtest.py
 include apsw/trace.py
 include apsw/tests.py
+include apsw/ext.py
+
 include LICENSE
 include checksums
 include setup.py

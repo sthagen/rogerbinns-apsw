@@ -294,11 +294,20 @@ APSWCursor_close_internal(APSWCursor *self, int force)
 static void
 APSWCursor_dealloc(APSWCursor *self)
 {
+  /* dealloc is not allowed to return an exception or
+     clear the current exception */
+  PyObject *one, *two, *three;
+  PyErr_Fetch(&one, &two, &three);
+
   PyObject_GC_UnTrack(self);
   APSW_CLEAR_WEAKREFS;
 
   APSWCursor_close_internal(self, 2);
 
+  if (PyErr_Occurred())
+    apsw_write_unraisable(NULL);
+
+  PyErr_Restore(one, two, three);
   Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
@@ -360,9 +369,9 @@ APSWCursor_tp_traverse(APSWCursor *self, visitproc visit, void *arg)
 }
 
 static const char *description_formats[] = {
-    "(O&O&)",
-    "(O&O&OOOOO)",
-    "(O&O&O&O&O&)"};
+    "(ss)",
+    "(ssOOOOO)",
+    "(sssss)"};
 
 static PyObject *
 APSWCursor_internal_getdescription(APSWCursor *self, int fmtnum)
@@ -397,34 +406,40 @@ APSWCursor_internal_getdescription(APSWCursor *self, int fmtnum)
 
   for (i = 0; i < ncols; i++)
   {
+
 #define INDEX self->statement->vdbestatement, i
 /* this is needed because msvc chokes with the ifdef inside */
 #ifdef SQLITE_ENABLE_COLUMN_METADATA
-#define DESCFMT2 Py_BuildValue(description_formats[fmtnum],                            \
-                               convertutf8string, sqlite3_column_name(INDEX),          \
-                               convertutf8string, sqlite3_column_decltype(INDEX),      \
-                               convertutf8string, sqlite3_column_database_name(INDEX), \
-                               convertutf8string, sqlite3_column_table_name(INDEX),    \
-                               convertutf8string, sqlite3_column_origin_name(INDEX))
+#define DESCFMT2 Py_BuildValue(description_formats[fmtnum],         \
+                               column_name,                         \
+                               sqlite3_column_decltype(INDEX),      \
+                               sqlite3_column_database_name(INDEX), \
+                               sqlite3_column_table_name(INDEX),    \
+                               sqlite3_column_origin_name(INDEX))
 #else
 #define DESCFMT2 NULL
 #endif
+    /* only column_name is described as returning NULL on error */
+    const char *column_name = sqlite3_column_name(INDEX);
+    if (!column_name)
+    {
+      PyErr_Format(PyExc_MemoryError, "SQLite call sqlite3_column_name ran out of memory");
+      goto error;
+    }
     INUSE_CALL(
-        APSW_FAULT_INJECT(GetDescriptionFail,
-                          column = (fmtnum < 2) ? Py_BuildValue(description_formats[fmtnum],
-                                                                convertutf8string, sqlite3_column_name(INDEX),
-                                                                convertutf8string, sqlite3_column_decltype(INDEX),
-                                                                Py_None,
-                                                                Py_None,
-                                                                Py_None,
-                                                                Py_None,
-                                                                Py_None)
-                                                : DESCFMT2,
-                          column = PyErr_NoMemory()));
+        column = (fmtnum < 2) ? Py_BuildValue(description_formats[fmtnum],
+                                              column_name,
+                                              sqlite3_column_decltype(INDEX),
+                                              Py_None,
+                                              Py_None,
+                                              Py_None,
+                                              Py_None,
+                                              Py_None)
+                              : DESCFMT2);
 #undef INDEX
     if (!column)
       goto error;
-
+    assert(!PyErr_Occurred());
     PyTuple_SET_ITEM(result, i, column);
     /* owned by result now */
     column = 0;
@@ -552,7 +567,7 @@ APSWCursor_is_dict_binding(PyObject *obj)
     return 0;
 
   /* abstract base classes final answer */
-  if (PyObject_IsInstance(obj, collections_abc_Mapping) == 1)
+  if (collections_abc_Mapping && PyObject_IsInstance(obj, collections_abc_Mapping) == 1)
     return 1;
 
   return 0;
@@ -588,7 +603,7 @@ APSWCursor_dobinding(APSWCursor *self, int arg, PyObject *obj)
   {
     const char *strdata = NULL;
     Py_ssize_t strbytes = 0;
-    APSW_FAULT_INJECT(DoBindingUnicodeConversionFails, strdata = PyUnicode_AsUTF8AndSize(obj, &strbytes), strdata = (const char *)PyErr_NoMemory());
+    strdata = PyUnicode_AsUTF8AndSize(obj, &strbytes);
     if (strdata)
     {
       PYSQLITE_CUR_CALL(res = sqlite3_bind_text64(self->statement->vdbestatement, arg, strdata, strbytes, SQLITE_TRANSIENT, SQLITE_UTF8));
@@ -604,7 +619,7 @@ APSWCursor_dobinding(APSWCursor *self, int arg, PyObject *obj)
     int asrb;
     Py_buffer py3buffer;
 
-    APSW_FAULT_INJECT(DoBindingAsReadBufferFails, asrb = PyObject_GetBuffer(obj, &py3buffer, PyBUF_SIMPLE), (PyErr_NoMemory(), asrb = -1));
+    asrb = PyObject_GetBuffer(obj, &py3buffer, PyBUF_SIMPLE);
     if (asrb != 0)
       return -1;
 
@@ -765,9 +780,7 @@ APSWCursor_doexectrace(APSWCursor *self, Py_ssize_t savedbindingsoffset)
     }
     else
     {
-      APSW_FAULT_INJECT(DoExecTraceBadSlice,
-                        bindings = PySequence_GetSlice(self->bindings, savedbindingsoffset, self->bindingsoffset),
-                        bindings = PyErr_NoMemory());
+      bindings = PySequence_GetSlice(self->bindings, savedbindingsoffset, self->bindingsoffset);
 
       if (!bindings)
       {
@@ -1166,7 +1179,10 @@ APSWCursor_executemany(APSWCursor *self, PyObject *args, PyObject *kwds)
   }
   self->emiter = PyObject_GetIter(sequenceofbindings);
   if (!self->emiter)
-    return PyErr_Format(PyExc_TypeError, "2nd parameter must be iterable");
+  {
+    assert(PyErr_Occurred());
+    return NULL;
+  }
 
   INUSE_CALL(next = PyIter_Next(self->emiter));
   if (!next && PyErr_Occurred())
@@ -1672,6 +1688,10 @@ APSWCursor_is_readonly(APSWCursor *self)
   Note that while SQLite supports nulls in strings, their implementation
   of sqlite3_expanded_sql stops at the first null.
 
+  You will get :exc:`MemoryError` if SQLite ran out of memory, or if
+  the expanded string would exceed `SQLITE_LIMIT_LENGTH
+  <https://www.sqlite.org/c3ref/c_limit_attached.html>`__.
+
   -* sqlite3_expanded_sql
 */
 static PyObject *
@@ -1683,7 +1703,8 @@ APSWCursor_expanded_sql(APSWCursor *self)
   CHECK_CURSOR_CLOSED(NULL);
 
   PYSQLITE_VOID_CALL(es = sqlite3_expanded_sql(self->statement->vdbestatement));
-
+  if (!es)
+    return PyErr_NoMemory();
   res = convertutf8string(es);
   sqlite3_free((void *)es);
   return res;

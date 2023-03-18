@@ -5,8 +5,13 @@
 */
 
 /* used in calls to AddTraceBackHere where O format takes non-null but
-   we often have null so convert to None */
-#define OBJ(o) ((o) ? (o) : (Py_None))
+   we often have null so convert to None.  This can't be done as a portable
+   macro because v would end up double evaluated */
+static PyObject *
+OBJ(PyObject *v)
+{
+  return v ? v : Py_None;
+}
 
 /* we clear weakref lists when close is called on a blob/cursor as
    well as when it is deallocated */
@@ -20,10 +25,12 @@
     }                                           \
   } while (0)
 
+#undef Call_PythonMethod
 /* Calls the named method of object with the provided args */
 static PyObject *
 Call_PythonMethod(PyObject *obj, const char *methodname, int mandatory, PyObject *args)
 {
+#include "faultinject.h"
   PyObject *method = NULL;
   PyObject *res = NULL;
 
@@ -53,6 +60,8 @@ Call_PythonMethod(PyObject *obj, const char *methodname, int mandatory, PyObject
     goto finally;
   }
 
+  assert(!PyErr_Occurred());
+
   res = PyObject_CallObject(method, args);
   if (!pyerralreadyoccurred && PyErr_Occurred())
     AddTraceBackHere(__FILE__, __LINE__, "Call_PythonMethod", "{s: s, s: i, s: O, s: O}",
@@ -68,9 +77,11 @@ finally:
   return res;
 }
 
+#undef Call_PythonMethodV
 static PyObject *
 Call_PythonMethodV(PyObject *obj, const char *methodname, int mandatory, const char *format, ...)
 {
+#include "faultinject.h"
   PyObject *args = NULL, *result = NULL;
   va_list list;
   va_start(list, format);
@@ -86,20 +97,24 @@ Call_PythonMethodV(PyObject *obj, const char *methodname, int mandatory, const c
 
 /* CONVENIENCE FUNCTIONS */
 
+#undef convertutf8string
 /* Convert a NULL terminated UTF-8 string into a Python object.  None
    is returned if NULL is passed in. */
 static PyObject *
 convertutf8string(const char *str)
 {
+#include "faultinject.h"
   if (!str)
     Py_RETURN_NONE;
 
   return PyUnicode_FromStringAndSize(str, strlen(str));
 }
 
+#undef PyLong_AsInt
 static int
 PyLong_AsInt(PyObject *val)
 {
+#include "faultinject.h"
   int ival = -1;
   long lval = PyLong_AsLong(val);
   if (!PyErr_Occurred())
@@ -113,10 +128,6 @@ PyLong_AsInt(PyObject *val)
   }
   return ival;
 }
-
-#define GET_BUFFER(faultName, var, src, dest) APSW_FAULT_INJECT(faultName, var = PyObject_GetBuffer(src, dest, PyBUF_SIMPLE), (PyErr_NoMemory(), var = -1))
-
-#define STRING_NEW(faultName, var, size, maxchar) APSW_FAULT_INJECT(faultName, var = PyUnicode_New(size, maxchar), var = PyErr_NoMemory())
 
 /* These correspond to the slots tp_version_tag, tp_finalize, tp_vectorcall */
 #if PY_VERSION_HEX < 0x03080000
@@ -197,4 +208,31 @@ parameters for AddTraceBackHere to be provided.
     }                                                                                   \
                                                                                         \
   } while (0)
-;
+
+/* similar space to the above but if there was an
+   exception coming in and the call to `x` results
+   in an exception, then the incoming exception
+   is chained to the `x` exception so you'd get
+
+   Exception in `x`
+     which happened while handling
+        incoming exception
+   */
+#define CHAIN_EXC(x)                           \
+  do                                           \
+  {                                            \
+    PyObject *_exc = PyErr_Occurred();         \
+    PyObject *_e1, *_e2, *_e3;                 \
+    if (_exc)                                  \
+      PyErr_Fetch(&_e1, &_e2, &_e3);           \
+    {                                          \
+      x;                                       \
+    }                                          \
+    if (_exc)                                  \
+    {                                          \
+      if (PyErr_Occurred())                    \
+        _PyErr_ChainExceptions(_e1, _e2, _e3); \
+      else                                     \
+        PyErr_Restore(_e1, _e2, _e3);          \
+    }                                          \
+  } while (0)

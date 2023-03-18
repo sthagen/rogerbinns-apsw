@@ -92,7 +92,13 @@ API Reference
 #include <pythread.h>
 #include "structmember.h"
 
+/* This function does nothing in regular builds, but in faultinjection
+builds allows for an existing exception to be injected in callbacks */
+static int MakeExistingException(void) { return 0; }
+#include "faultinject.h"
+
 #ifdef APSW_TESTFIXTURES
+
 /* Fault injection */
 #define APSW_FAULT_INJECT(faultName, good, bad) \
   do                                            \
@@ -126,7 +132,6 @@ static int APSW_Should_Fault(const char *);
   {                                             \
     good;                                       \
   } while (0)
-
 #endif
 
 /* The module object */
@@ -146,6 +151,8 @@ typedef struct
 {
   PyObject_HEAD long long blobsize;
 } ZeroBlobBind;
+
+static void apsw_write_unraisable(PyObject *hookobject);
 
 /* Argument parsing helpers */
 #include "argparse.c"
@@ -184,6 +191,9 @@ static int allow_missing_dict_bindings = 0;
 
 /* virtual file system */
 #include "vfs.c"
+
+/* constants */
+#include "constants.c"
 
 /* MODULE METHODS */
 
@@ -247,13 +257,68 @@ enablesharedcache(PyObject *Py_UNUSED(self), PyObject *args, PyObject *kwds)
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "O&:" Apsw_enablesharedcache_USAGE, kwlist, argcheck_bool, &enable_param))
       return NULL;
   }
-  APSW_FAULT_INJECT(EnableSharedCacheFail, res = sqlite3_enable_shared_cache(enable), res = SQLITE_NOMEM);
+  res = sqlite3_enable_shared_cache(enable);
   SET_EXC(res, NULL);
 
   if (res != SQLITE_OK)
     return NULL;
 
   Py_RETURN_NONE;
+}
+
+/** .. method:: connections() -> list[Connection]
+
+  Returns a list of the connections
+
+*/
+static PyObject *the_connections;
+static PyObject *
+apsw_connections(PyObject *Py_UNUSED(self))
+{
+  Py_ssize_t i;
+  PyObject *res = PyList_New(0);
+  for (i = 0; i < PyList_GET_SIZE(the_connections); i++)
+  {
+    PyObject *item = PyWeakref_GetObject(PyList_GET_ITEM(the_connections, i));
+    if (!Py_IsNone(item))
+      if (PyList_Append(res, item))
+        goto fail;
+  }
+  return res;
+fail:
+  Py_XDECREF(res);
+  return NULL;
+}
+
+static void
+apsw_connection_remove(Connection *con)
+{
+  Py_ssize_t i;
+  for (i = 0; i < PyList_GET_SIZE(the_connections);)
+  {
+    PyObject *wr = PyList_GET_ITEM(the_connections, i);
+    PyObject *wo = PyWeakref_GetObject(wr);
+    if (wo == (PyObject *)con || Py_IsNone(wo))
+    {
+      if (PyList_SetSlice(the_connections, i, i + 1, NULL))
+        apsw_write_unraisable(NULL);
+      if (Py_IsNone(wo))
+        continue;
+      return;
+    }
+    i++;
+  }
+}
+
+static int
+apsw_connection_add(Connection *con)
+{
+  PyObject *weakref = PyWeakref_NewRef((PyObject *)con, NULL);
+  if (!weakref)
+    return -1;
+  int res = PyList_Append(the_connections, weakref);
+  Py_DECREF(weakref);
+  return res;
 }
 
 /** .. method:: initialize() -> None
@@ -269,11 +334,12 @@ initialize(void)
   int res;
 
   res = sqlite3_initialize();
-  APSW_FAULT_INJECT(InitializeFail, , res = SQLITE_NOMEM);
-  SET_EXC(res, NULL);
 
-  if (res != SQLITE_OK)
+  if (res)
+  {
+    SET_EXC(res, NULL);
     return NULL;
+  }
 
   Py_RETURN_NONE;
 }
@@ -297,7 +363,7 @@ sqliteshutdown(void)
 {
   int res;
 
-  APSW_FAULT_INJECT(ShutdownFail, res = sqlite3_shutdown(), res = SQLITE_NOMEM);
+  res = sqlite3_shutdown();
   SET_EXC(res, NULL);
 
   if (res != SQLITE_OK)
@@ -336,16 +402,14 @@ apsw_logger(void *arg, int errcode, const char *message)
   PyGILState_STATE gilstate;
   PyObject *etype = NULL, *evalue = NULL, *etraceback = NULL;
   PyObject *res = NULL;
-  PyObject *msgaspystring = NULL;
 
   gilstate = PyGILState_Ensure();
+  MakeExistingException();
   assert(arg == logger_cb);
   assert(arg);
   PyErr_Fetch(&etype, &evalue, &etraceback);
 
-  msgaspystring = convertutf8string(message);
-  if (msgaspystring)
-    res = PyObject_CallFunction(arg, "iO", errcode, msgaspystring);
+  res = PyObject_CallFunction(arg, "is", errcode, message);
   if (!res)
   {
     AddTraceBackHere(__FILE__, __LINE__, "apsw_sqlite3_log_receiver",
@@ -358,7 +422,6 @@ apsw_logger(void *arg, int errcode, const char *message)
   else
     Py_DECREF(res);
 
-  Py_XDECREF(msgaspystring);
   if (etype || evalue || etraceback)
     PyErr_Restore(etype, evalue, etraceback);
   PyGILState_Release(gilstate);
@@ -368,12 +431,12 @@ static PyObject *
 config(PyObject *Py_UNUSED(self), PyObject *args)
 {
   int res, optdup;
-  long opt;
+  int opt;
 
   if (PyTuple_GET_SIZE(args) < 1 || !PyLong_Check(PyTuple_GET_ITEM(args, 0)))
     return PyErr_Format(PyExc_TypeError, "There should be at least one argument with the first being a number");
 
-  opt = PyLong_AsLong(PyTuple_GET_ITEM(args, 0));
+  opt = PyLong_AsInt(PyTuple_GET_ITEM(args, 0));
   if (PyErr_Occurred())
     return NULL;
 
@@ -382,7 +445,6 @@ config(PyObject *Py_UNUSED(self), PyObject *args)
   case SQLITE_CONFIG_SINGLETHREAD:
   case SQLITE_CONFIG_MULTITHREAD:
   case SQLITE_CONFIG_SERIALIZED:
-  case SQLITE_CONFIG_URI:
     if (!PyArg_ParseTuple(args, "i", &optdup))
       return NULL;
     assert(opt == optdup);
@@ -395,7 +457,7 @@ config(PyObject *Py_UNUSED(self), PyObject *args)
     if (!PyArg_ParseTuple(args, "i", &optdup))
       return NULL;
     assert(opt == optdup);
-    APSW_FAULT_INJECT(SCPHConfigFails, res = sqlite3_config((int)opt, &outval), res = SQLITE_FULL);
+    res = sqlite3_config((int)opt, &outval);
     if (res)
     {
       SET_EXC(res, NULL);
@@ -404,10 +466,12 @@ config(PyObject *Py_UNUSED(self), PyObject *args)
     return PyLong_FromLong(outval);
   }
 
+  case SQLITE_CONFIG_URI:
   case SQLITE_CONFIG_MEMSTATUS:
   case SQLITE_CONFIG_COVERING_INDEX_SCAN:
   case SQLITE_CONFIG_PMASZ:
   case SQLITE_CONFIG_STMTJRNL_SPILL:
+  case SQLITE_CONFIG_SORTERREF_SIZE:
   {
     int intval;
     if (!PyArg_ParseTuple(args, "ii", &optdup, &intval))
@@ -653,18 +717,16 @@ vfsnames(PyObject *Py_UNUSED(self))
   int res;
   sqlite3_vfs *vfs = sqlite3_vfs_find(0);
 
-  APSW_FAULT_INJECT(vfsnamesallocfail, result = PyList_New(0), result = PyErr_NoMemory());
+  result = PyList_New(0);
   if (!result)
     goto error;
 
   while (vfs)
   {
-    APSW_FAULT_INJECT(vfsnamesfails,
-                      str = convertutf8string(vfs->zName),
-                      str = PyErr_NoMemory());
+    str = convertutf8string(vfs->zName);
     if (!str)
       goto error;
-    APSW_FAULT_INJECT(vfsnamesappendfails, res = PyList_Append(result, str), (res = -1, PyErr_NoMemory()));
+    res = PyList_Append(result, str);
     if (res)
       goto error;
     Py_DECREF(str);
@@ -695,7 +757,7 @@ static PyObject *
 getapswexceptionfor(PyObject *Py_UNUSED(self), PyObject *args, PyObject *kwds)
 {
   int code = 0, i;
-  PyObject *result = NULL;
+  PyObject *result = NULL, *tmp = NULL;
 
   {
     static char *kwlist[] = {"code", NULL};
@@ -715,9 +777,23 @@ getapswexceptionfor(PyObject *Py_UNUSED(self), PyObject *args, PyObject *kwds)
   if (!result)
     return PyErr_Format(PyExc_ValueError, "%d is not a known error code", code);
 
-  PyObject_SetAttrString(result, "extendedresult", PyLong_FromLong(code));
-  PyObject_SetAttrString(result, "result", PyLong_FromLong(code & 0xff));
+  tmp = PyLong_FromLong(code);
+  if (!tmp)
+    goto error;
+  if (0 != PyObject_SetAttrString(result, "extendedresult", tmp))
+    goto error;
+  Py_DECREF(tmp);
+  tmp = PyLong_FromLong(code & 0xff);
+  if (!tmp)
+    goto error;
+  if (0 != PyObject_SetAttrString(result, "result", tmp))
+    goto error;
+  Py_DECREF(tmp);
   return result;
+error:
+  Py_XDECREF(tmp);
+  Py_CLEAR(result);
+  return NULL;
 }
 
 /** .. method:: complete(statement: str) -> bool
@@ -1209,7 +1285,7 @@ formatsqlvalue(PyObject *Py_UNUSED(self), PyObject *value)
       }
     }
 
-    STRING_NEW(formatsqlStrFail, strres, needed_chars, PyUnicode_MAX_CHAR_VALUE(value));
+    strres = PyUnicode_New(needed_chars, PyUnicode_MAX_CHAR_VALUE(value));
     if (!strres)
       return NULL;
     output_kind = PyUnicode_KIND(strres);
@@ -1262,11 +1338,11 @@ formatsqlvalue(PyObject *Py_UNUSED(self), PyObject *value)
     Py_ssize_t buflen;
     const unsigned char *bufferc;
 
-    GET_BUFFER(formatsqlHexBufFail, asrb, value, &buffer);
+    asrb = PyObject_GetBuffer(value, &buffer, PyBUF_SIMPLE);
     if (asrb == -1)
       return NULL;
 
-    STRING_NEW(formatsqlHexStrFail, strres, buffer.len * 2 + 3, 127);
+    strres = PyUnicode_New(buffer.len * 2 + 3, 127);
     if (!strres)
       goto bytesfinally;
 
@@ -1315,6 +1391,9 @@ apsw_log(PyObject *Py_UNUSED(self), PyObject *args, PyObject *kwds)
       return NULL;
   }
   sqlite3_log(errorcode, "%s", message); /* PYSQLITE_CALL not needed */
+
+  if (PyErr_Occurred())
+    return NULL;
 
   Py_RETURN_NONE;
 }
@@ -1518,7 +1597,13 @@ static PyObject *
 apsw_getattr(PyObject *module, PyObject *name)
 {
   PyObject *shellmodule = NULL, *res = NULL;
+#undef PyUnicode_AsUTF8
+  /* we can't do this because it messes up the import machinery */
   const char *cname = PyUnicode_AsUTF8(name);
+#include "faultinject.h"
+
+  if (!cname)
+    return NULL;
 
   if (strcmp(cname, "Shell") && strcmp(cname, "main"))
     return PyErr_Format(PyExc_AttributeError, "Unknown apsw attribute %R", name);
@@ -1585,6 +1670,7 @@ static PyMethodDef module_methods[] = {
      Apsw_fork_checker_DOC},
 #endif
     {"__getattr__", (PyCFunction)apsw_getattr, METH_O, "module getattr"},
+    {"connections", (PyCFunction)apsw_connections, METH_NOARGS, Apsw_connections_DOC},
     {0, 0, 0, 0} /* Sentinel */
 };
 
@@ -1603,10 +1689,7 @@ PyMODINIT_FUNC
 PyInit_apsw(void)
 {
   PyObject *m = NULL;
-  PyObject *thedict = NULL;
-  const char *mapping_name = NULL;
   PyObject *hooks;
-  unsigned int i;
 
   assert(sizeof(int) == 4);       /* we expect 32 bit ints */
   assert(sizeof(long long) == 8); /* we expect 64 bit long long */
@@ -1621,40 +1704,42 @@ PyInit_apsw(void)
   if (PyType_Ready(&ConnectionType) < 0 || PyType_Ready(&APSWCursorType) < 0 || PyType_Ready(&ZeroBlobBindType) < 0 || PyType_Ready(&APSWBlobType) < 0 || PyType_Ready(&APSWVFSType) < 0 || PyType_Ready(&APSWVFSFileType) < 0 || PyType_Ready(&APSWURIFilenameType) < 0 || PyType_Ready(&FunctionCBInfoType) < 0 || PyType_Ready(&APSWBackupType) < 0 || PyType_Ready(&SqliteIndexInfoType) < 0 || PyType_Ready(&apsw_no_change_object) < 0)
     goto fail;
 
-  m = apswmodule = PyModule_Create(&apswmoduledef);
+  m = apswmodule = PyModule_Create2(&apswmoduledef, PYTHON_API_VERSION);
 
   if (m == NULL)
     goto fail;
 
-  Py_INCREF(m);
+  tls_errmsg = PyDict_New();
+  if (!tls_errmsg)
+    goto fail;
+
+  the_connections = PyList_New(0);
+  if (!the_connections)
+    goto fail;
 
   if (init_exceptions(m))
     goto fail;
 
-  Py_INCREF(&ConnectionType);
-  PyModule_AddObject(m, "Connection", (PyObject *)&ConnectionType);
+/* we can't avoid leaks with failures until multi-phase initialisation is done */
+#define ADD(name, item)                                  \
+  do                                                     \
+  {                                                      \
+    if (PyModule_AddObject(m, #name, (PyObject *)&item)) \
+      goto fail;                                         \
+    Py_INCREF(&item);                                    \
+  } while (0)
 
-  Py_INCREF(&APSWCursorType);
-  PyModule_AddObject(m, "Cursor", (PyObject *)&APSWCursorType);
+  ADD(Connection, ConnectionType);
+  ADD(Cursor, APSWCursorType);
+  ADD(Blob, APSWBlobType);
+  ADD(Backup, APSWBackupType);
+  ADD(zeroblob, ZeroBlobBindType);
+  ADD(VFS, APSWVFSType);
+  ADD(VFSFile, APSWVFSFileType);
+  ADD(URIFilename, APSWURIFilenameType);
+  ADD(IndexInfo, SqliteIndexInfoType);
 
-  Py_INCREF(&APSWBlobType);
-  PyModule_AddObject(m, "Blob", (PyObject *)&APSWBlobType);
-
-  Py_INCREF(&APSWBackupType);
-  PyModule_AddObject(m, "Backup", (PyObject *)&APSWBackupType);
-
-  Py_INCREF(&ZeroBlobBindType);
-  PyModule_AddObject(m, "zeroblob", (PyObject *)&ZeroBlobBindType);
-
-  Py_INCREF(&APSWVFSType);
-  PyModule_AddObject(m, "VFS", (PyObject *)&APSWVFSType);
-  Py_INCREF(&APSWVFSFileType);
-  PyModule_AddObject(m, "VFSFile", (PyObject *)&APSWVFSFileType);
-  Py_INCREF(&APSWURIFilenameType);
-  PyModule_AddObject(m, "URIFilename", (PyObject *)&APSWURIFilenameType);
-
-  Py_INCREF(&SqliteIndexInfoType);
-  PyModule_AddObject(m, "IndexInfo", (PyObject *)&SqliteIndexInfoType);
+#undef ADD
 
   /** .. attribute:: connection_hooks
        :type: List[Callable[[Connection], None]]
@@ -1676,7 +1761,8 @@ PyInit_apsw(void)
   hooks = PyList_New(0);
   if (!hooks)
     goto fail;
-  PyModule_AddObject(m, "connection_hooks", hooks);
+  if (PyModule_AddObject(m, "connection_hooks", hooks))
+    goto fail;
 
   /** .. attribute:: SQLITE_VERSION_NUMBER
     :type: int
@@ -1688,7 +1774,8 @@ PyInit_apsw(void)
     :meth:`sqlitelibversion` to get the actual library version.
 
     */
-  PyModule_AddIntConstant(m, "SQLITE_VERSION_NUMBER", SQLITE_VERSION_NUMBER);
+  if (PyModule_AddIntConstant(m, "SQLITE_VERSION_NUMBER", SQLITE_VERSION_NUMBER))
+    goto fail;
 
   /** .. attribute:: using_amalgamation
     :type: bool
@@ -1703,10 +1790,12 @@ PyInit_apsw(void)
 
 #ifdef APSW_USE_SQLITE_AMALGAMATION
   Py_INCREF(Py_True);
-  PyModule_AddObject(m, "using_amalgamation", Py_True);
+  if (PyModule_AddObject(m, "using_amalgamation", Py_True))
+    goto fail;
 #else
   Py_INCREF(Py_False);
-  PyModule_AddObject(m, "using_amalgamation", Py_False);
+  if (PyModule_AddObject(m, "using_amalgamation", Py_False))
+    goto fail;
 #endif
 
   /** .. attribute:: no_change
@@ -1716,7 +1805,13 @@ PyInit_apsw(void)
     :meth:`VTTable.UpdateChangeRow`
   */
 
-  PyModule_AddObject(m, "no_change", Py_NewRef(&apsw_no_change_object));
+  if (PyModule_AddObject(m, "no_change", Py_NewRef(&apsw_no_change_object)))
+    goto fail;
+
+#ifdef APSW_TESTFIXTURES
+  if (PyModule_AddObject(m, "test_fixtures_present", Py_NewRef(Py_True)))
+    goto fail;
+#endif
 
   /**
 
@@ -1744,538 +1839,13 @@ modules etc. For example::
 
     */
 
-  /* add in some constants and also put them in a corresponding mapping dictionary */
-
-  {
-
-    /* sentinel should be a number that doesn't exist */
-#define SENTINEL -786343
-#define DICT(n) \
-  {             \
-    n, SENTINEL \
-  }
-#define END \
-  {         \
-    NULL, 0 \
-  }
-#define ADDINT(n) \
-  {               \
-#n, n         \
-  }
-
-    static const struct
-    {
-      const char *name;
-      const int value;
-    } integers[] = {
-        DICT("mapping_authorizer_return"),
-        ADDINT(SQLITE_DENY),
-        ADDINT(SQLITE_IGNORE),
-        ADDINT(SQLITE_OK),
-        END,
-
-        DICT("mapping_authorizer_function"),
-        ADDINT(SQLITE_CREATE_INDEX),
-        ADDINT(SQLITE_CREATE_TABLE),
-        ADDINT(SQLITE_CREATE_TEMP_INDEX),
-        ADDINT(SQLITE_CREATE_TEMP_TABLE),
-        ADDINT(SQLITE_CREATE_TEMP_TRIGGER),
-        ADDINT(SQLITE_CREATE_TEMP_VIEW),
-        ADDINT(SQLITE_CREATE_TRIGGER),
-        ADDINT(SQLITE_CREATE_VIEW),
-        ADDINT(SQLITE_DELETE),
-        ADDINT(SQLITE_DROP_INDEX),
-        ADDINT(SQLITE_DROP_TABLE),
-        ADDINT(SQLITE_DROP_TEMP_INDEX),
-        ADDINT(SQLITE_DROP_TEMP_TABLE),
-        ADDINT(SQLITE_DROP_TEMP_TRIGGER),
-        ADDINT(SQLITE_DROP_TEMP_VIEW),
-        ADDINT(SQLITE_DROP_TRIGGER),
-        ADDINT(SQLITE_DROP_VIEW),
-        ADDINT(SQLITE_INSERT),
-        ADDINT(SQLITE_PRAGMA),
-        ADDINT(SQLITE_READ),
-        ADDINT(SQLITE_SELECT),
-        ADDINT(SQLITE_TRANSACTION),
-        ADDINT(SQLITE_UPDATE),
-        ADDINT(SQLITE_ATTACH),
-        ADDINT(SQLITE_DETACH),
-        ADDINT(SQLITE_ALTER_TABLE),
-        ADDINT(SQLITE_REINDEX),
-        ADDINT(SQLITE_COPY),
-        ADDINT(SQLITE_ANALYZE),
-        ADDINT(SQLITE_CREATE_VTABLE),
-        ADDINT(SQLITE_DROP_VTABLE),
-        ADDINT(SQLITE_FUNCTION),
-        ADDINT(SQLITE_SAVEPOINT),
-        ADDINT(SQLITE_RECURSIVE),
-        END,
-
-        /* vtable best index constraints */
-        DICT("mapping_bestindex_constraints"),
-        ADDINT(SQLITE_INDEX_CONSTRAINT_EQ),
-        ADDINT(SQLITE_INDEX_CONSTRAINT_GT),
-        ADDINT(SQLITE_INDEX_CONSTRAINT_LE),
-        ADDINT(SQLITE_INDEX_CONSTRAINT_LT),
-        ADDINT(SQLITE_INDEX_CONSTRAINT_GE),
-        ADDINT(SQLITE_INDEX_CONSTRAINT_MATCH),
-        ADDINT(SQLITE_INDEX_CONSTRAINT_LIKE),
-        ADDINT(SQLITE_INDEX_CONSTRAINT_REGEXP),
-        ADDINT(SQLITE_INDEX_CONSTRAINT_GLOB),
-        ADDINT(SQLITE_INDEX_CONSTRAINT_ISNULL),
-        ADDINT(SQLITE_INDEX_CONSTRAINT_ISNOT),
-        ADDINT(SQLITE_INDEX_CONSTRAINT_ISNOTNULL),
-        ADDINT(SQLITE_INDEX_CONSTRAINT_IS),
-        ADDINT(SQLITE_INDEX_CONSTRAINT_NE),
-        ADDINT(SQLITE_INDEX_CONSTRAINT_FUNCTION),
-        ADDINT(SQLITE_INDEX_CONSTRAINT_OFFSET),
-        ADDINT(SQLITE_INDEX_CONSTRAINT_LIMIT),
-        END,
-
-        /* extended result codes */
-        DICT("mapping_extended_result_codes"),
-        ADDINT(SQLITE_IOERR_READ),
-        ADDINT(SQLITE_IOERR_SHORT_READ),
-        ADDINT(SQLITE_IOERR_WRITE),
-        ADDINT(SQLITE_IOERR_FSYNC),
-        ADDINT(SQLITE_IOERR_DIR_FSYNC),
-        ADDINT(SQLITE_IOERR_TRUNCATE),
-        ADDINT(SQLITE_IOERR_FSTAT),
-        ADDINT(SQLITE_IOERR_UNLOCK),
-        ADDINT(SQLITE_IOERR_RDLOCK),
-        ADDINT(SQLITE_IOERR_DELETE),
-        ADDINT(SQLITE_IOERR_BLOCKED),
-        ADDINT(SQLITE_IOERR_NOMEM),
-        ADDINT(SQLITE_IOERR_ACCESS),
-        ADDINT(SQLITE_IOERR_CHECKRESERVEDLOCK),
-        ADDINT(SQLITE_IOERR_LOCK),
-        ADDINT(SQLITE_IOERR_CLOSE),
-        ADDINT(SQLITE_IOERR_DIR_CLOSE),
-        ADDINT(SQLITE_LOCKED_SHAREDCACHE),
-        ADDINT(SQLITE_BUSY_RECOVERY),
-        ADDINT(SQLITE_CANTOPEN_NOTEMPDIR),
-        ADDINT(SQLITE_IOERR_SHMOPEN),
-        ADDINT(SQLITE_IOERR_SHMSIZE),
-        ADDINT(SQLITE_IOERR_SHMLOCK),
-        ADDINT(SQLITE_CORRUPT_VTAB),
-        ADDINT(SQLITE_IOERR_SEEK),
-        ADDINT(SQLITE_IOERR_SHMMAP),
-        ADDINT(SQLITE_READONLY_CANTLOCK),
-        ADDINT(SQLITE_READONLY_RECOVERY),
-        ADDINT(SQLITE_ABORT_ROLLBACK),
-        ADDINT(SQLITE_CANTOPEN_ISDIR),
-        ADDINT(SQLITE_CANTOPEN_FULLPATH),
-        ADDINT(SQLITE_IOERR_DELETE_NOENT),
-        ADDINT(SQLITE_CONSTRAINT_CHECK),
-        ADDINT(SQLITE_CONSTRAINT_COMMITHOOK),
-        ADDINT(SQLITE_CONSTRAINT_FOREIGNKEY),
-        ADDINT(SQLITE_CONSTRAINT_FUNCTION),
-        ADDINT(SQLITE_CONSTRAINT_NOTNULL),
-        ADDINT(SQLITE_CONSTRAINT_PRIMARYKEY),
-        ADDINT(SQLITE_CONSTRAINT_TRIGGER),
-        ADDINT(SQLITE_CONSTRAINT_UNIQUE),
-        ADDINT(SQLITE_CONSTRAINT_VTAB),
-        ADDINT(SQLITE_READONLY_ROLLBACK),
-        ADDINT(SQLITE_IOERR_MMAP),
-        ADDINT(SQLITE_NOTICE_RECOVER_ROLLBACK),
-        ADDINT(SQLITE_NOTICE_RECOVER_WAL),
-        ADDINT(SQLITE_BUSY_SNAPSHOT),
-        ADDINT(SQLITE_IOERR_GETTEMPPATH),
-        ADDINT(SQLITE_WARNING_AUTOINDEX),
-        ADDINT(SQLITE_CANTOPEN_CONVPATH),
-        ADDINT(SQLITE_IOERR_CONVPATH),
-        ADDINT(SQLITE_CONSTRAINT_ROWID),
-        ADDINT(SQLITE_READONLY_DBMOVED),
-        ADDINT(SQLITE_AUTH_USER),
-        ADDINT(SQLITE_IOERR_VNODE),
-        ADDINT(SQLITE_IOERR_AUTH),
-        ADDINT(SQLITE_OK_LOAD_PERMANENTLY),
-        ADDINT(SQLITE_IOERR_ROLLBACK_ATOMIC),
-        ADDINT(SQLITE_IOERR_COMMIT_ATOMIC),
-        ADDINT(SQLITE_IOERR_BEGIN_ATOMIC),
-        ADDINT(SQLITE_READONLY_CANTINIT),
-        ADDINT(SQLITE_ERROR_RETRY),
-        ADDINT(SQLITE_ERROR_MISSING_COLLSEQ),
-        ADDINT(SQLITE_READONLY_DIRECTORY),
-        ADDINT(SQLITE_LOCKED_VTAB),
-        ADDINT(SQLITE_CORRUPT_SEQUENCE),
-        ADDINT(SQLITE_CANTOPEN_DIRTYWAL),
-        ADDINT(SQLITE_ERROR_SNAPSHOT),
-        ADDINT(SQLITE_CONSTRAINT_PINNED),
-        ADDINT(SQLITE_OK_SYMLINK),
-        ADDINT(SQLITE_CANTOPEN_SYMLINK),
-        ADDINT(SQLITE_IOERR_DATA),
-        ADDINT(SQLITE_CORRUPT_INDEX),
-        ADDINT(SQLITE_BUSY_TIMEOUT),
-        ADDINT(SQLITE_IOERR_CORRUPTFS),
-        ADDINT(SQLITE_CONSTRAINT_DATATYPE),
-        ADDINT(SQLITE_NOTICE_RBU),
-        END,
-
-        /* error codes */
-        DICT("mapping_result_codes"),
-        ADDINT(SQLITE_OK),
-        ADDINT(SQLITE_ERROR),
-        ADDINT(SQLITE_INTERNAL),
-        ADDINT(SQLITE_PERM),
-        ADDINT(SQLITE_ABORT),
-        ADDINT(SQLITE_BUSY),
-        ADDINT(SQLITE_LOCKED),
-        ADDINT(SQLITE_NOMEM),
-        ADDINT(SQLITE_READONLY),
-        ADDINT(SQLITE_INTERRUPT),
-        ADDINT(SQLITE_IOERR),
-        ADDINT(SQLITE_CORRUPT),
-        ADDINT(SQLITE_FULL),
-        ADDINT(SQLITE_CANTOPEN),
-        ADDINT(SQLITE_PROTOCOL),
-        ADDINT(SQLITE_EMPTY),
-        ADDINT(SQLITE_SCHEMA),
-        ADDINT(SQLITE_CONSTRAINT),
-        ADDINT(SQLITE_MISMATCH),
-        ADDINT(SQLITE_MISUSE),
-        ADDINT(SQLITE_NOLFS),
-        ADDINT(SQLITE_AUTH),
-        ADDINT(SQLITE_FORMAT),
-        ADDINT(SQLITE_RANGE),
-        ADDINT(SQLITE_NOTADB),
-        ADDINT(SQLITE_NOTFOUND),
-        ADDINT(SQLITE_TOOBIG),
-        ADDINT(SQLITE_NOTICE),
-        ADDINT(SQLITE_WARNING),
-        /* you can't get these from apsw code but present for completeness */
-        ADDINT(SQLITE_DONE),
-        ADDINT(SQLITE_ROW),
-        END,
-
-        /* open flags */
-        DICT("mapping_open_flags"),
-        ADDINT(SQLITE_OPEN_READONLY),
-        ADDINT(SQLITE_OPEN_READWRITE),
-        ADDINT(SQLITE_OPEN_CREATE),
-        ADDINT(SQLITE_OPEN_DELETEONCLOSE),
-        ADDINT(SQLITE_OPEN_EXCLUSIVE),
-        ADDINT(SQLITE_OPEN_MAIN_DB),
-        ADDINT(SQLITE_OPEN_TEMP_DB),
-        ADDINT(SQLITE_OPEN_TRANSIENT_DB),
-        ADDINT(SQLITE_OPEN_MAIN_JOURNAL),
-        ADDINT(SQLITE_OPEN_TEMP_JOURNAL),
-        ADDINT(SQLITE_OPEN_SUBJOURNAL),
-        ADDINT(SQLITE_OPEN_NOMUTEX),
-        ADDINT(SQLITE_OPEN_FULLMUTEX),
-        ADDINT(SQLITE_OPEN_PRIVATECACHE),
-        ADDINT(SQLITE_OPEN_SHAREDCACHE),
-        ADDINT(SQLITE_OPEN_AUTOPROXY),
-        ADDINT(SQLITE_OPEN_WAL),
-        ADDINT(SQLITE_OPEN_URI),
-        ADDINT(SQLITE_OPEN_MEMORY),
-        ADDINT(SQLITE_OPEN_NOFOLLOW),
-        ADDINT(SQLITE_OPEN_SUPER_JOURNAL),
-        ADDINT(SQLITE_OPEN_EXRESCODE),
-        END,
-
-        /* limits */
-        DICT("mapping_limits"),
-        ADDINT(SQLITE_LIMIT_LENGTH),
-        ADDINT(SQLITE_LIMIT_SQL_LENGTH),
-        ADDINT(SQLITE_LIMIT_COLUMN),
-        ADDINT(SQLITE_LIMIT_EXPR_DEPTH),
-        ADDINT(SQLITE_LIMIT_COMPOUND_SELECT),
-        ADDINT(SQLITE_LIMIT_VDBE_OP),
-        ADDINT(SQLITE_LIMIT_FUNCTION_ARG),
-        ADDINT(SQLITE_LIMIT_ATTACHED),
-        ADDINT(SQLITE_LIMIT_LIKE_PATTERN_LENGTH),
-        ADDINT(SQLITE_LIMIT_VARIABLE_NUMBER),
-        ADDINT(SQLITE_LIMIT_TRIGGER_DEPTH),
-        ADDINT(SQLITE_LIMIT_WORKER_THREADS),
-        /* We don't include the MAX limits - see https://github.com/rogerbinns/apsw/issues/17 */
-        END,
-
-        DICT("mapping_config"),
-        ADDINT(SQLITE_CONFIG_SINGLETHREAD),
-        ADDINT(SQLITE_CONFIG_MULTITHREAD),
-        ADDINT(SQLITE_CONFIG_SERIALIZED),
-        ADDINT(SQLITE_CONFIG_MALLOC),
-        ADDINT(SQLITE_CONFIG_GETMALLOC),
-        ADDINT(SQLITE_CONFIG_SCRATCH),
-        ADDINT(SQLITE_CONFIG_PAGECACHE),
-        ADDINT(SQLITE_CONFIG_HEAP),
-        ADDINT(SQLITE_CONFIG_MEMSTATUS),
-        ADDINT(SQLITE_CONFIG_MUTEX),
-        ADDINT(SQLITE_CONFIG_GETMUTEX),
-        ADDINT(SQLITE_CONFIG_LOOKASIDE),
-        ADDINT(SQLITE_CONFIG_LOG),
-        ADDINT(SQLITE_CONFIG_GETPCACHE),
-        ADDINT(SQLITE_CONFIG_PCACHE),
-        ADDINT(SQLITE_CONFIG_URI),
-        ADDINT(SQLITE_CONFIG_PCACHE2),
-        ADDINT(SQLITE_CONFIG_GETPCACHE2),
-        ADDINT(SQLITE_CONFIG_COVERING_INDEX_SCAN),
-        ADDINT(SQLITE_CONFIG_SQLLOG),
-        ADDINT(SQLITE_CONFIG_MMAP_SIZE),
-        ADDINT(SQLITE_CONFIG_WIN32_HEAPSIZE),
-        ADDINT(SQLITE_CONFIG_PCACHE_HDRSZ),
-        ADDINT(SQLITE_CONFIG_PMASZ),
-        ADDINT(SQLITE_CONFIG_STMTJRNL_SPILL),
-        ADDINT(SQLITE_CONFIG_SMALL_MALLOC),
-        ADDINT(SQLITE_CONFIG_SORTERREF_SIZE),
-        ADDINT(SQLITE_CONFIG_MEMDB_MAXSIZE),
-        END,
-
-        DICT("mapping_db_config"),
-        ADDINT(SQLITE_DBCONFIG_LOOKASIDE),
-        ADDINT(SQLITE_DBCONFIG_ENABLE_FKEY),
-        ADDINT(SQLITE_DBCONFIG_ENABLE_TRIGGER),
-        ADDINT(SQLITE_DBCONFIG_ENABLE_FTS3_TOKENIZER),
-        ADDINT(SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION),
-        ADDINT(SQLITE_DBCONFIG_MAINDBNAME),
-        ADDINT(SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE),
-        ADDINT(SQLITE_DBCONFIG_ENABLE_QPSG),
-        ADDINT(SQLITE_DBCONFIG_TRIGGER_EQP),
-#ifdef SQLITE_DBCONFIG_MAX
-        /* hopefully this constant will be removed */
-        ADDINT(SQLITE_DBCONFIG_MAX),
-#endif
-        ADDINT(SQLITE_DBCONFIG_RESET_DATABASE),
-        ADDINT(SQLITE_DBCONFIG_DEFENSIVE),
-        ADDINT(SQLITE_DBCONFIG_WRITABLE_SCHEMA),
-        ADDINT(SQLITE_DBCONFIG_DQS_DML),
-        ADDINT(SQLITE_DBCONFIG_DQS_DDL),
-        ADDINT(SQLITE_DBCONFIG_LEGACY_ALTER_TABLE),
-        ADDINT(SQLITE_DBCONFIG_ENABLE_VIEW),
-        ADDINT(SQLITE_DBCONFIG_TRUSTED_SCHEMA),
-        ADDINT(SQLITE_DBCONFIG_LEGACY_FILE_FORMAT),
-        END,
-
-        DICT("mapping_status"),
-        ADDINT(SQLITE_STATUS_MEMORY_USED),
-        ADDINT(SQLITE_STATUS_PAGECACHE_USED),
-        ADDINT(SQLITE_STATUS_PAGECACHE_OVERFLOW),
-        ADDINT(SQLITE_STATUS_SCRATCH_USED),
-        ADDINT(SQLITE_STATUS_SCRATCH_OVERFLOW),
-        ADDINT(SQLITE_STATUS_MALLOC_SIZE),
-        ADDINT(SQLITE_STATUS_PARSER_STACK),
-        ADDINT(SQLITE_STATUS_PAGECACHE_SIZE),
-        ADDINT(SQLITE_STATUS_SCRATCH_SIZE),
-        ADDINT(SQLITE_STATUS_MALLOC_COUNT),
-        END,
-
-        DICT("mapping_db_status"),
-        ADDINT(SQLITE_DBSTATUS_LOOKASIDE_USED),
-        ADDINT(SQLITE_DBSTATUS_CACHE_USED),
-        ADDINT(SQLITE_DBSTATUS_MAX),
-        ADDINT(SQLITE_DBSTATUS_SCHEMA_USED),
-        ADDINT(SQLITE_DBSTATUS_STMT_USED),
-        ADDINT(SQLITE_DBSTATUS_LOOKASIDE_HIT),
-        ADDINT(SQLITE_DBSTATUS_LOOKASIDE_MISS_FULL),
-        ADDINT(SQLITE_DBSTATUS_LOOKASIDE_MISS_SIZE),
-        ADDINT(SQLITE_DBSTATUS_CACHE_HIT),
-        ADDINT(SQLITE_DBSTATUS_CACHE_MISS),
-        ADDINT(SQLITE_DBSTATUS_CACHE_WRITE),
-        ADDINT(SQLITE_DBSTATUS_DEFERRED_FKS),
-        ADDINT(SQLITE_DBSTATUS_CACHE_USED_SHARED),
-        ADDINT(SQLITE_DBSTATUS_CACHE_SPILL),
-        END,
-
-        DICT("mapping_locking_level"),
-        ADDINT(SQLITE_LOCK_NONE),
-        ADDINT(SQLITE_LOCK_SHARED),
-        ADDINT(SQLITE_LOCK_RESERVED),
-        ADDINT(SQLITE_LOCK_PENDING),
-        ADDINT(SQLITE_LOCK_EXCLUSIVE),
-        END,
-
-        DICT("mapping_access"),
-        ADDINT(SQLITE_ACCESS_EXISTS),
-        ADDINT(SQLITE_ACCESS_READWRITE),
-        ADDINT(SQLITE_ACCESS_READ),
-        END,
-
-        DICT("mapping_device_characteristics"),
-        ADDINT(SQLITE_IOCAP_ATOMIC),
-        ADDINT(SQLITE_IOCAP_ATOMIC512),
-        ADDINT(SQLITE_IOCAP_ATOMIC1K),
-        ADDINT(SQLITE_IOCAP_ATOMIC2K),
-        ADDINT(SQLITE_IOCAP_ATOMIC4K),
-        ADDINT(SQLITE_IOCAP_ATOMIC8K),
-        ADDINT(SQLITE_IOCAP_ATOMIC16K),
-        ADDINT(SQLITE_IOCAP_ATOMIC32K),
-        ADDINT(SQLITE_IOCAP_ATOMIC64K),
-        ADDINT(SQLITE_IOCAP_SAFE_APPEND),
-        ADDINT(SQLITE_IOCAP_SEQUENTIAL),
-        ADDINT(SQLITE_IOCAP_UNDELETABLE_WHEN_OPEN),
-        ADDINT(SQLITE_IOCAP_POWERSAFE_OVERWRITE),
-        ADDINT(SQLITE_IOCAP_IMMUTABLE),
-        ADDINT(SQLITE_IOCAP_BATCH_ATOMIC),
-        END,
-
-        DICT("mapping_sync"),
-        ADDINT(SQLITE_SYNC_NORMAL),
-        ADDINT(SQLITE_SYNC_FULL),
-        ADDINT(SQLITE_SYNC_DATAONLY),
-        END,
-
-        DICT("mapping_wal_checkpoint"),
-        ADDINT(SQLITE_CHECKPOINT_PASSIVE),
-        ADDINT(SQLITE_CHECKPOINT_FULL),
-        ADDINT(SQLITE_CHECKPOINT_RESTART),
-        ADDINT(SQLITE_CHECKPOINT_TRUNCATE),
-        END,
-
-        DICT("mapping_file_control"),
-        ADDINT(SQLITE_FCNTL_LOCKSTATE),
-        ADDINT(SQLITE_FCNTL_SIZE_HINT),
-        ADDINT(SQLITE_FCNTL_CHUNK_SIZE),
-        ADDINT(SQLITE_FCNTL_FILE_POINTER),
-        ADDINT(SQLITE_FCNTL_SYNC_OMITTED),
-        ADDINT(SQLITE_FCNTL_PERSIST_WAL),
-        ADDINT(SQLITE_FCNTL_WIN32_AV_RETRY),
-        ADDINT(SQLITE_FCNTL_OVERWRITE),
-        ADDINT(SQLITE_FCNTL_POWERSAFE_OVERWRITE),
-        ADDINT(SQLITE_FCNTL_VFSNAME),
-        ADDINT(SQLITE_FCNTL_PRAGMA),
-        ADDINT(SQLITE_FCNTL_BUSYHANDLER),
-        ADDINT(SQLITE_FCNTL_TEMPFILENAME),
-        ADDINT(SQLITE_FCNTL_MMAP_SIZE),
-        ADDINT(SQLITE_FCNTL_TRACE),
-        ADDINT(SQLITE_FCNTL_COMMIT_PHASETWO),
-        ADDINT(SQLITE_FCNTL_HAS_MOVED),
-        ADDINT(SQLITE_FCNTL_SYNC),
-        ADDINT(SQLITE_FCNTL_WIN32_SET_HANDLE),
-        ADDINT(SQLITE_FCNTL_LAST_ERRNO),
-        ADDINT(SQLITE_FCNTL_WAL_BLOCK),
-        ADDINT(SQLITE_FCNTL_GET_LOCKPROXYFILE),
-        ADDINT(SQLITE_FCNTL_SET_LOCKPROXYFILE),
-        ADDINT(SQLITE_FCNTL_RBU),
-        ADDINT(SQLITE_FCNTL_ZIPVFS),
-        ADDINT(SQLITE_FCNTL_JOURNAL_POINTER),
-        ADDINT(SQLITE_FCNTL_VFS_POINTER),
-        ADDINT(SQLITE_FCNTL_WIN32_GET_HANDLE),
-        ADDINT(SQLITE_FCNTL_PDB),
-        ADDINT(SQLITE_FCNTL_COMMIT_ATOMIC_WRITE),
-        ADDINT(SQLITE_FCNTL_ROLLBACK_ATOMIC_WRITE),
-        ADDINT(SQLITE_FCNTL_BEGIN_ATOMIC_WRITE),
-        ADDINT(SQLITE_FCNTL_LOCK_TIMEOUT),
-        ADDINT(SQLITE_FCNTL_DATA_VERSION),
-        ADDINT(SQLITE_FCNTL_SIZE_LIMIT),
-        ADDINT(SQLITE_FCNTL_CKPT_DONE),
-        ADDINT(SQLITE_FCNTL_CKPT_START),
-        ADDINT(SQLITE_FCNTL_RESERVE_BYTES),
-        ADDINT(SQLITE_FCNTL_EXTERNAL_READER),
-        ADDINT(SQLITE_FCNTL_CKSM_FILE),
-#ifdef SQLITE_FCNTL_RESET_CACHE
-        ADDINT(SQLITE_FCNTL_RESET_CACHE),
-#endif
-        END,
-
-        DICT("mapping_conflict_resolution_modes"),
-        ADDINT(SQLITE_ROLLBACK),
-        ADDINT(SQLITE_IGNORE),
-        ADDINT(SQLITE_FAIL),
-        ADDINT(SQLITE_ABORT),
-        ADDINT(SQLITE_REPLACE),
-        END,
-
-        DICT("mapping_virtual_table_configuration_options"),
-        ADDINT(SQLITE_VTAB_CONSTRAINT_SUPPORT),
-        ADDINT(SQLITE_VTAB_DIRECTONLY),
-        ADDINT(SQLITE_VTAB_INNOCUOUS),
-        END,
-
-        DICT("mapping_xshmlock_flags"),
-        ADDINT(SQLITE_SHM_EXCLUSIVE),
-        ADDINT(SQLITE_SHM_LOCK),
-        ADDINT(SQLITE_SHM_SHARED),
-        ADDINT(SQLITE_SHM_UNLOCK),
-        END,
-
-        DICT("mapping_virtual_table_scan_flags"),
-        ADDINT(SQLITE_INDEX_SCAN_UNIQUE),
-        END,
-
-        DICT("mapping_txn_state"),
-        ADDINT(SQLITE_TXN_NONE),
-        ADDINT(SQLITE_TXN_READ),
-        ADDINT(SQLITE_TXN_WRITE),
-        END,
-
-        DICT("mapping_prepare_flags"),
-        ADDINT(SQLITE_PREPARE_PERSISTENT),
-        ADDINT(SQLITE_PREPARE_NORMALIZE),
-        ADDINT(SQLITE_PREPARE_NO_VTAB),
-        END,
-
-        DICT("mapping_trace_codes"),
-        ADDINT(SQLITE_TRACE_STMT),
-        ADDINT(SQLITE_TRACE_PROFILE),
-        ADDINT(SQLITE_TRACE_ROW),
-        ADDINT(SQLITE_TRACE_CLOSE),
-        END,
-
-        DICT("mapping_statement_status"),
-        ADDINT(SQLITE_STMTSTATUS_FULLSCAN_STEP),
-        ADDINT(SQLITE_STMTSTATUS_SORT),
-        ADDINT(SQLITE_STMTSTATUS_AUTOINDEX),
-        ADDINT(SQLITE_STMTSTATUS_VM_STEP),
-        ADDINT(SQLITE_STMTSTATUS_REPREPARE),
-        ADDINT(SQLITE_STMTSTATUS_RUN),
-        ADDINT(SQLITE_STMTSTATUS_FILTER_MISS),
-        ADDINT(SQLITE_STMTSTATUS_FILTER_HIT),
-        ADDINT(SQLITE_STMTSTATUS_MEMUSED),
-        END,
-
-        DICT("mapping_function_flags"),
-        ADDINT(SQLITE_DETERMINISTIC),
-        ADDINT(SQLITE_DIRECTONLY),
-        ADDINT(SQLITE_SUBTYPE),
-        ADDINT(SQLITE_INNOCUOUS),
-        END
-
-    };
-
-    for (i = 0; i < sizeof(integers) / sizeof(integers[0]); i++)
-    {
-      const char *name = integers[i].name;
-      int value = integers[i].value;
-      PyObject *pyname;
-      PyObject *pyvalue;
-
-      /* should be at dict */
-      if (!thedict)
-      {
-        assert(value == SENTINEL);
-        assert(mapping_name == NULL);
-        mapping_name = name;
-        thedict = PyDict_New();
-        continue;
-      }
-      /* at END? */
-      if (!name)
-      {
-        assert(thedict);
-        PyModule_AddObject(m, mapping_name, thedict);
-        thedict = NULL;
-        mapping_name = NULL;
-        continue;
-      }
-      /* regular ADDINT */
-      PyModule_AddIntConstant(m, name, value);
-      pyname = PyUnicode_FromString(name);
-      pyvalue = PyLong_FromLong(value);
-      if (!pyname || !pyvalue)
-        goto fail;
-      PyDict_SetItem(thedict, pyname, pyvalue);
-      PyDict_SetItem(thedict, pyvalue, pyname);
-      Py_DECREF(pyname);
-      Py_DECREF(pyvalue);
-    }
-    /* should have ended with END so thedict should be NULL */
-    assert(thedict == NULL);
-  }
+  if (add_apsw_constants(m))
+    goto fail;
 
   PyModule_AddObject(m, "compile_options", get_compile_options());
   PyModule_AddObject(m, "keywords", get_keywords());
 
+  if (!PyErr_Occurred())
   {
     PyObject *mod = PyImport_ImportModule("collections.abc");
     if (mod)
@@ -2283,7 +1853,6 @@ modules etc. For example::
       collections_abc_Mapping = PyObject_GetAttrString(mod, "Mapping");
       Py_DECREF(mod);
     }
-    assert(collections_abc_Mapping);
   }
 
   if (!PyErr_Occurred())
@@ -2292,6 +1861,7 @@ modules etc. For example::
   }
 
 fail:
+  assert(PyErr_Occurred());
   Py_XDECREF(m);
   return NULL;
 }
@@ -2307,44 +1877,96 @@ PyInit___init__(void)
 #endif
 
 #ifdef APSW_TESTFIXTURES
+
+#define APSW_FAULT_CLEAR
+#include "faultinject.h"
+#define PyObject_CallFunction _PyObject_CallFunction_SizeT
+
+static int
+APSW_FaultInjectControl(const char *faultfunction, const char *filename, const char *funcname, int linenum, const char *args, PyObject **obj)
+{
+  PyObject *callable, *res;
+  PyObject *etype = NULL, *evalue = NULL, *etraceback = NULL;
+  PyErr_Fetch(&etype, &evalue, &etraceback);
+
+  callable = PySys_GetObject("apsw_fault_inject_control");
+  if (!callable || Py_IsNone(callable))
+  {
+    /* during interpreter shutdown the attribute becomes None */
+    static int whined;
+    if (!whined && !Py_IsNone(callable))
+    {
+      whined++;
+      fprintf(stderr, "Missing sys.apsw_fault_inject_control\n");
+    }
+    PyErr_Restore(etype, evalue, etraceback);
+    return 0x1FACADE;
+  }
+
+  res = PyObject_CallFunction(callable, "((sssis))", faultfunction,
+                              filename, funcname, linenum, args);
+  if (res)
+  {
+    if (PyLong_Check(res))
+    {
+      int overflow;
+      long value = PyLong_AsLongAndOverflow(res, &overflow);
+      if (!overflow && (value == 0x1FACADE || value == 0x2FACADE))
+      {
+        PyErr_Restore(etype, evalue, etraceback);
+        Py_DECREF(res);
+        return value;
+      }
+    }
+    PyErr_Restore(etype, evalue, etraceback);
+    *obj = res;
+    return 0;
+  }
+
+  assert(PyErr_Occurred());
+  /* we can't put any exception that was present at beginning of call back */
+  Py_XDECREF(etype);
+  Py_XDECREF(evalue);
+  Py_XDECREF(etraceback);
+
+  return 0;
+}
+
 static int
 APSW_Should_Fault(const char *name)
 {
   PyGILState_STATE gilstate;
-  PyObject *faultdict = NULL, *truthval = NULL, *value = NULL;
+  PyObject *res, *callable;
   PyObject *errsave1 = NULL, *errsave2 = NULL, *errsave3 = NULL;
-  int res = 0;
+  int callres = 0;
 
   gilstate = PyGILState_Ensure();
 
   PyErr_Fetch(&errsave1, &errsave2, &errsave3);
 
-  if (!PyObject_HasAttrString(apswmodule, "faultdict"))
+  callable = PySys_GetObject("apsw_should_fault");
+  if (!callable)
   {
-    PyObject *dict = PyDict_New();
-    if (dict)
-      PyModule_AddObject(apswmodule, "faultdict", dict);
+    static int whined;
+    if (!whined)
+    {
+      whined++;
+      fprintf(stderr, "Missing sys.apsw_should_fault\n");
+    }
+    goto end;
   }
+  res = PyObject_CallFunction(callable, "s(OOO)", name, OBJ(errsave1), OBJ(errsave2), OBJ(errsave3));
+  if (!res)
+    abort();
 
-  value = PyUnicode_FromString(name);
-
-  faultdict = PyObject_GetAttrString(apswmodule, "faultdict");
-
-  truthval = PyDict_GetItem(faultdict, value);
-  if (!truthval)
-    goto finally;
-
-  /* set false if present - one shot firing */
-  PyDict_SetItem(faultdict, value, Py_False);
-  res = PyObject_IsTrue(truthval);
-
-finally:
-  Py_XDECREF(value);
-  Py_XDECREF(faultdict);
+  assert(PyBool_Check(res));
+  assert(Py_IsTrue(res) || Py_IsFalse(res));
+  callres = Py_IsTrue(res);
+  Py_DECREF(res);
 
   PyErr_Restore(errsave1, errsave2, errsave3);
-
+end:
   PyGILState_Release(gilstate);
-  return res;
+  return callres;
 }
 #endif

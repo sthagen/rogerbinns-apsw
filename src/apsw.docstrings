@@ -70,6 +70,9 @@
 "\n" \
 "Calls: `sqlite3_config <https://sqlite.org/c3ref/config.html>`__\n" 
 
+#define  Apsw_connections_DOC "connections($self)\n--\n\napsw.connections() -> list[Connection]\n\n" \
+"Returns a list of the connections\n" 
+
 #define  Apsw_enablesharedcache_DOC "enablesharedcache($self,enable)\n--\n\napsw.enablesharedcache(enable: bool) -> None\n\n" \
 "If you use the same :class:`Connection` across threads or use\n" \
 "multiple :class:`connections <Connection>` accessing the same file,\n" \
@@ -601,8 +604,8 @@
 "then copying into buffer.\n" \
 "\n" \
 ":param buffer: A writable buffer like object.\n" \
-"               There is a bytearray type that is very useful.\n" \
-"               `arrays <https://docs.python.org/3/library/array.html>`__ also work.\n" \
+"               There is a :class:`bytearray` type that is very useful.\n" \
+"               :mod:`Arrays <array>` also work.\n" \
 "\n" \
 ":param offset: The position to start writing into the buffer\n" \
 "               defaulting to the beginning.\n" \
@@ -2280,6 +2283,10 @@
 "Note that while SQLite supports nulls in strings, their implementation\n" \
 "of sqlite3_expanded_sql stops at the first null.\n" \
 "\n" \
+"You will get :exc:`MemoryError` if SQLite ran out of memory, or if\n" \
+"the expanded string would exceed `SQLITE_LIMIT_LENGTH\n" \
+"<https://www.sqlite.org/c3ref/c_limit_attached.html>`__.\n" \
+"\n" \
 "Calls: `sqlite3_expanded_sql <https://sqlite.org/c3ref/expanded_sql.html>`__\n" 
 
 #define  Cursor_fetchall_DOC "fetchall($self)\n--\n\nCursor.fetchall() -> list[Tuple[SQLiteValue, ...]]\n\n" \
@@ -2887,9 +2894,10 @@
 
 #define  VFS_excepthook_DOC "excepthook($self,etype,evalue,etraceback)\n--\n\nVFS.excepthook(etype: type[BaseException], evalue: BaseException, etraceback: Optional[types.TracebackType]) -> Any\n\n" \
 "Called when there has been an exception in a :class:`VFS` routine.\n" \
-"The default implementation passes args to ``sys.excepthook`` and if that\n" \
-"fails then ``PyErr_Display``.  The three arguments correspond to\n" \
-"what ``sys.exc_info()`` would return.\n" 
+"The default implementation passes the exception information\n" \
+"to sqlite3_log, and the first non-error of\n" \
+":func:`sys.unraisablehook` and :func:`sys.excepthook`, falling back to\n" \
+"`PyErr_Display`.\n" 
 
 #define  VFS_init_DOC "__init__($self,name,base=None,makedefault=False,maxpathname=1024)\n--\n\nVFS.__init__(name: str, base: Optional[str] = None, makedefault: bool = False, maxpathname: int = 1024)\n\n" \
 ":param name: The name to register this vfs under.  If the name\n" \

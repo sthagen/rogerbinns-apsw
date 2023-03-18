@@ -86,10 +86,6 @@
 /* call from backup code */
 #define PYSQLITE_BACKUP_CALL(y) INUSE_CALL(_PYSQLITE_CALL_E(self->dest->db, y))
 
-/* used to decide if we will use int (4 bytes) or long long (8 bytes) */
-#define APSW_INT32_MIN (-2147483647 - 1)
-#define APSW_INT32_MAX 2147483647
-
 /*
    The default Python PyErr_WriteUnraisable is almost useless, and barely used
    by CPython.  It gives the developer no clue whatsoever where in
@@ -111,6 +107,8 @@ static void
 apsw_write_unraisable(PyObject *hookobject)
 {
   static int recursion_level;
+
+  assert(PyErr_Occurred());
 
   PyObject *err_type = NULL, *err_value = NULL, *err_traceback = NULL;
   PyObject *excepthook = NULL;
@@ -160,7 +158,7 @@ apsw_write_unraisable(PyObject *hookobject)
     PyErr_Clear();
     if (excepthook)
     {
-      result = PyObject_CallFunction(excepthook, "(OOO)", err_type ? err_type : Py_None, err_value ? err_value : Py_None, err_traceback ? err_traceback : Py_None);
+      result = PyObject_CallFunction(excepthook, "(OOO)", OBJ(err_type), OBJ(err_value), OBJ(err_traceback));
       if (result)
         goto finally;
     }
@@ -172,7 +170,7 @@ apsw_write_unraisable(PyObject *hookobject)
   {
     Py_INCREF(excepthook); /* borrowed reference from PySys_GetObject so we increment */
     PyErr_Clear();
-    result = PyObject_CallFunction(excepthook, "(OOO)", err_type ? err_type : Py_None, err_value ? err_value : Py_None, err_traceback ? err_traceback : Py_None);
+    result = PyObject_CallFunction(excepthook, "(OOO)", OBJ(err_type), OBJ(err_value), OBJ(err_traceback));
     if (result)
       goto finally;
     Py_CLEAR(excepthook);
@@ -183,12 +181,13 @@ apsw_write_unraisable(PyObject *hookobject)
   {
     Py_INCREF(excepthook); /* borrowed reference from PySys_GetObject so we increment */
     PyErr_Clear();
-    result = PyObject_CallFunction(excepthook, "(OOO)", err_type ? err_type : Py_None, err_value ? err_value : Py_None, err_traceback ? err_traceback : Py_None);
+    result = PyObject_CallFunction(excepthook, "(OOO)", OBJ(err_type), OBJ(err_value), OBJ(err_traceback));
     if (result)
       goto finally;
   }
 
-  /* remove any error from callback failure */
+  /* remove any error from callback failure since we'd have to call
+     ourselves to raise it! */
   PyErr_Clear();
   PyErr_Display(err_type, err_value, err_traceback);
 
@@ -202,17 +201,18 @@ finally:
   recursion_level--;
 }
 
+#undef convert_value_to_pyobject
 /* Converts sqlite3_value to PyObject.  Returns a new reference. */
 static PyObject *
 convert_value_to_pyobject(sqlite3_value *value, int in_constraint_possible, int no_change_possible)
 {
+#include "faultinject.h"
+
   int coltype = sqlite3_value_type(value);
   sqlite3_value *in_value;
 
   if (no_change_possible && sqlite3_value_nochange(value))
     return Py_NewRef(&apsw_no_change_object);
-
-  APSW_FAULT_INJECT(UnknownValueType, , coltype = 123456);
 
   switch (coltype)
   {
@@ -261,9 +261,6 @@ convert_value_to_pyobject(sqlite3_value *value, int in_constraint_possible, int 
 
   case SQLITE_BLOB:
     return PyBytes_FromStringAndSize(sqlite3_value_blob(value), sqlite3_value_bytes(value));
-
-  default:
-    return PyErr_Format(APSWException, "Unknown sqlite column type %d!", coltype);
   }
   /* can't get here */
   assert(0);
@@ -285,8 +282,6 @@ convert_column_to_pyobject(sqlite3_stmt *stmt, int col)
   int coltype;
 
   _PYSQLITE_CALL_V(coltype = sqlite3_column_type(stmt, col));
-
-  APSW_FAULT_INJECT(UnknownColumnType, , coltype = 12348);
 
   switch (coltype)
   {
@@ -321,9 +316,6 @@ convert_column_to_pyobject(sqlite3_stmt *stmt, int col)
     _PYSQLITE_CALL_V((data = sqlite3_column_blob(stmt, col), len = sqlite3_column_bytes(stmt, col)));
     return PyBytes_FromStringAndSize(data, len);
   }
-
-  default:
-    return PyErr_Format(APSWException, "Unknown sqlite column type %d!", coltype);
   }
   /* can't get here */
   assert(0);
@@ -371,12 +363,15 @@ convert_column_to_pyobject(sqlite3_stmt *stmt, int col)
     }                                                                      \
   } while (0)
 
+#undef apsw_strdup
 /* This adds double nulls on the end - needed if string is a filename
-   used near vfs as it puts extra info after the first null */
+   used near vfs as SQLite puts extra info after the first null */
 static char *apsw_strdup(const char *source)
 {
+#include "faultinject.h"
+
   size_t len = strlen(source);
-  char *res = PyMem_Malloc(len + 3);
+  char *res = PyMem_Calloc(1, len + 3);
   if (res)
   {
     res[len] = res[len + 1] = res[len + 2] = 0;

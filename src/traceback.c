@@ -1,7 +1,8 @@
 
 /* These are Python header files */
-
+#undef PyFrame_New
 #include "frameobject.h"
+#include "faultinject.h"
 
 /* Add a dummy frame to the traceback so the developer has a better idea of what C code was doing
 
@@ -26,17 +27,19 @@ static void AddTraceBackHere(const char *filename, int lineno, const char *funct
 
   va_start(localargsva, localsformat);
 
-  empty_dict = PyDict_New();
   /* we have to save and restore the error indicators otherwise intermediate code has no effect! */
   assert(PyErr_Occurred());
   PyErr_Fetch(&one, &two, &three);
+  empty_dict = PyDict_New();
+  if (!empty_dict)
+    goto end;
 
-  localargs = localsformat ? (Py_VaBuildValue((char *)localsformat, localargsva)) : NULL;
-  /* this will only happen due to error in Py_BuildValue, usually
-     because NULL was passed to O (PyObject*) format */
-  assert(!PyErr_Occurred());
   assert(!localsformat || localsformat[0] == '{');
-  assert(!localargs || PyDict_Check(localargs));
+  localargs = localsformat ? (Py_VaBuildValue((char *)localsformat, localargsva)) : NULL;
+  /* this will typically happen due to error in Py_BuildValue, usually
+     because NULL was passed to O (PyObject*) format */
+  if (PyErr_Occurred())
+    goto end;
 
   /* make the dummy code object */
   code = PyCode_NewEmpty(filename, functionname, lineno);
@@ -57,12 +60,15 @@ static void AddTraceBackHere(const char *filename, int lineno, const char *funct
   frame->f_lineno = lineno;
 #endif
 
+end:
+  /* try to report errors that happened above */
+  if (PyErr_Occurred())
+    apsw_write_unraisable(NULL);
   /* add dummy frame to traceback after restoring exception info */
   PyErr_Restore(one, two, three);
-  PyTraceBack_Here(frame);
+  if (frame)
+    PyTraceBack_Here(frame);
 
-  /* this epilogue deals with success or failure cases */
-end:
   va_end(localargsva);
   Py_XDECREF(localargs);
   Py_XDECREF(empty_dict);

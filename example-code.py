@@ -8,6 +8,7 @@ import time
 import apsw
 import apsw.ext
 import random
+from pathlib import Path
 
 # Note: this code uses Python's optional typing annotations.  You can
 # ignore them and do not need to use them
@@ -444,17 +445,17 @@ class Point(apsw.ext.SQLiteTypeAdapter):
     def __repr__(self) -> str:
         return f"Point({ self.x }, { self.y })"
 
-    def __eq__(self, other: Point) -> bool:
-        return isinstance(other, Point) and self.x == other.x and self.y == other.y
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, type(self)) and self.x == other.x and self.y == other.y
 
     def to_sqlite_value(self) -> str:
         # called to convert Point into something SQLite supports
         return f"{ self.x };{ self.y }"
 
     # This converter will be registered
-    @staticmethod
-    def convert_from_sqlite(value: str) -> Point:
-        return Point(*(float(part) for part in value.split(";")))
+    @classmethod
+    def convert_from_sqlite(cls, value: str) -> Point:
+        return cls(*(float(part) for part in value.split(";")))
 
 
 # An existing type
@@ -761,22 +762,23 @@ def get_files_info(directories: str,
                    ignore_symlinks: bool = True) -> Iterator[dict[str, Any]]:
     """Scan directories returning information about the files within"""
     for root in directories.split(sep):
-        for entry in os.scandir(root):
-            if entry.is_symlink() and ignore_symlinks:
-                continue
-            if entry.is_dir():
-                yield from get_files_info(os.path.join(root, entry.name), ignore_symlinks=ignore_symlinks)
-            elif entry.is_file():
-                s = entry.stat()
-                yield {
-                    **{
-                        "directory": root,
-                        "name": entry.name,
-                        "extension": os.path.splitext(entry.name)[1],
-                    },
-                    **{k: getattr(s, k)
-                       for k in get_files_info.stat_columns}
-                }
+        with os.scandir(root) as sd:
+            for entry in sd:
+                if entry.is_symlink() and ignore_symlinks:
+                    continue
+                if entry.is_dir():
+                    yield from get_files_info(os.path.join(root, entry.name), ignore_symlinks=ignore_symlinks)
+                elif entry.is_file():
+                    s = entry.stat()
+                    yield {
+                        **{
+                            "directory": root,
+                            "name": entry.name,
+                            "extension": os.path.splitext(entry.name)[1],
+                        },
+                        **{k: getattr(s, k)
+                        for k in get_files_info.stat_columns}
+                    }
 
 
 # which stat columns do we want?
@@ -888,10 +890,10 @@ obfudb = apsw.Connection("file:myobfudb?fast=speed&level=7&warp=on&another=true"
 obfudb.execute("create table foo(x,y); insert into foo values(1,2)")
 
 # Check it really is obfuscated on disk
-print("What is on disk", repr(open("myobfudb", "rb").read()[:20]))
+print("What is on disk", repr(Path("myobfudb").read_bytes()[:20]))
 
 # And unobfuscating it
-print("Unobfuscated disk", repr(obfuscate(open("myobfudb", "rb").read()[:20])))
+print("Unobfuscated disk", repr(obfuscate(Path("myobfudb").read_bytes()[:20])))
 
 # Tidy up
 obfudb.close()

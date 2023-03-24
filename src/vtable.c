@@ -562,7 +562,12 @@ SqliteIndexInfo_set_OrderByConsumed(SqliteIndexInfo *self, PyObject *value)
     return -1;
   }
 
-  self->index_info->orderByConsumed = PyObject_IsTrue(value);
+  self->index_info->orderByConsumed = PyObject_IsTrueStrict(value);
+  if(self->index_info->orderByConsumed == -1)
+  {
+    assert(PyErr_Occurred());
+    return -1;
+  }
 
   return 0;
 }
@@ -865,8 +870,7 @@ apswvtabCreateOrConnect(sqlite3 *db,
   if (!args)
     goto pyexception;
 
-  Py_INCREF((PyObject *)(vti->connection));
-  PyTuple_SET_ITEM(args, 0, (PyObject *)(vti->connection));
+  PyTuple_SET_ITEM(args, 0, Py_NewRef((PyObject *)(vti->connection)));
   for (i = 0; i < argc; i++)
   {
     PyObject *str;
@@ -925,8 +929,7 @@ apswvtabCreateOrConnect(sqlite3 *db,
 
   assert(res == SQLITE_OK);
   *pVTab = (sqlite3_vtab *)avi;
-  avi->vtable = vtable;
-  Py_INCREF(avi->vtable);
+  avi->vtable = Py_NewRef(vtable);
   avi = NULL;
   goto finally;
 
@@ -1470,7 +1473,7 @@ apswvtabBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *indexinfo)
     goto pyexception;
 
   /* do we have useful index information? */
-  if (res == Py_None)
+  if (Py_IsNone(res))
     goto finally;
 
   /* check we have a sequence */
@@ -1489,7 +1492,7 @@ apswvtabBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *indexinfo)
   if (!indices)
     goto pyexception;
 
-  if (indices != Py_None)
+  if (!Py_IsNone(indices))
   {
     if (!PySequence_Check(indices) || PySequence_Size(indices) != nconstraints)
     {
@@ -1510,7 +1513,7 @@ apswvtabBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *indexinfo)
         goto pyexception;
       j++;
       /* it can be None */
-      if (constraint == Py_None)
+      if (Py_IsNone(constraint))
       {
         Py_DECREF(constraint);
         continue;
@@ -1543,7 +1546,7 @@ apswvtabBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *indexinfo)
                          "self", vtable, "result", OBJ(res), "indices", OBJ(indices), "constraint", OBJ(constraint), "argvindex", OBJ(argvindex));
         goto constraintfail;
       }
-      omitv = PyObject_IsTrue(omit);
+      omitv = PyObject_IsTrueStrict(omit);
       if (omitv == -1)
         goto constraintfail;
       indexinfo->aConstraintUsage[i].argvIndex = PyLong_AsInt(argvindex) + 1;
@@ -1568,7 +1571,7 @@ apswvtabBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *indexinfo)
     PyObject *idxnum = PySequence_GetItem(res, 1);
     if (!idxnum)
       goto pyexception;
-    if (idxnum != Py_None)
+    if (!Py_IsNone(idxnum))
     {
       if (!PyLong_Check(idxnum))
       {
@@ -1590,7 +1593,7 @@ apswvtabBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *indexinfo)
     idxstr = PySequence_GetItem(res, 2);
     if (!idxstr)
       goto pyexception;
-    if (idxstr != Py_None)
+    if (!Py_IsNone(idxstr))
     {
       if (!PyUnicode_Check(idxstr))
       {
@@ -1626,9 +1629,9 @@ apswvtabBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *indexinfo)
     orderbyconsumed = PySequence_GetItem(res, 3);
     if (!orderbyconsumed)
       goto pyexception;
-    if (orderbyconsumed != Py_None)
+    if (!Py_IsNone(orderbyconsumed))
     {
-      iorderbyconsumed = PyObject_IsTrue(orderbyconsumed);
+      iorderbyconsumed = PyObject_IsTrueStrict(orderbyconsumed);
       if (iorderbyconsumed == -1)
       {
         Py_DECREF(orderbyconsumed);
@@ -1648,7 +1651,7 @@ apswvtabBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *indexinfo)
     estimatedcost = PySequence_GetItem(res, 4);
     if (!estimatedcost)
       goto pyexception;
-    if (estimatedcost != Py_None)
+    if (!Py_IsNone(estimatedcost))
     {
       festimatedcost = PyNumber_Float(estimatedcost);
       if (!festimatedcost)
@@ -1888,8 +1891,7 @@ apswvtabUpdate(sqlite3_vtab *pVtab, int argc, sqlite3_value **argv, sqlite3_int6
       goto pyexception;
     if (sqlite3_value_type(argv[1]) == SQLITE_NULL)
     {
-      newrowid = Py_None;
-      Py_INCREF(newrowid);
+      newrowid = Py_NewRef(Py_None);
     }
     else
     {
@@ -2031,7 +2033,7 @@ apswvtabFindFunction(sqlite3_vtab *pVtab, int nArg, const char *zName,
     goto error;
   }
 
-  if (res != Py_None)
+  if (!Py_IsNone(res))
   {
     if (!av->functions)
       av->functions = PyList_New(0);
@@ -2339,7 +2341,7 @@ apswvtabEof(sqlite3_vtab_cursor *pCursor)
   if (!res)
     goto pyexception;
 
-  sqliteres = PyObject_IsTrue(res);
+  sqliteres = PyObject_IsTrueStrict(res);
   if (sqliteres == 0 || sqliteres == 1)
     goto finally;
 

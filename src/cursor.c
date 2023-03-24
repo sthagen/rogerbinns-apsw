@@ -308,7 +308,7 @@ APSWCursor_dealloc(APSWCursor *self)
     apsw_write_unraisable(NULL);
 
   PyErr_Restore(one, two, three);
-  Py_TYPE(self)->tp_free((PyObject *)self);
+  Py_TpFree((PyObject *)self);
 }
 
 static PyObject *
@@ -353,8 +353,7 @@ APSWCursor_init(APSWCursor *self, PyObject *args, PyObject *kwargs)
     return -1;
   }
 
-  Py_INCREF(connection);
-  self->connection = (Connection *)connection;
+  self->connection = (Connection *)Py_NewRef(connection);
 
   return 0;
 }
@@ -394,10 +393,7 @@ APSWCursor_internal_getdescription(APSWCursor *self, int fmtnum)
   }
 
   if (self->description_cache[fmtnum])
-  {
-    Py_INCREF(self->description_cache[fmtnum]);
-    return self->description_cache[fmtnum];
-  }
+    return Py_NewRef(self->description_cache[fmtnum]);
 
   ncols = sqlite3_column_count(self->statement->vdbestatement);
   result = PyTuple_New(ncols);
@@ -445,8 +441,7 @@ APSWCursor_internal_getdescription(APSWCursor *self, int fmtnum)
     column = 0;
   }
 
-  Py_INCREF(result);
-  self->description_cache[fmtnum] = result;
+  self->description_cache[fmtnum] = Py_NewRef(result);
   return result;
 
 error:
@@ -586,7 +581,7 @@ APSWCursor_dobinding(APSWCursor *self, int arg, PyObject *obj)
 
   assert(!PyErr_Occurred());
 
-  if (obj == Py_None)
+  if (Py_IsNone(obj))
     PYSQLITE_CUR_CALL(res = sqlite3_bind_null(self->statement->vdbestatement, arg));
   else if (PyLong_Check(obj))
   {
@@ -632,7 +627,7 @@ APSWCursor_dobinding(APSWCursor *self, int arg, PyObject *obj)
   }
   else
   {
-    PyErr_Format(PyExc_TypeError, "Bad binding argument type supplied - argument #%d: type %s", (int)(arg + self->bindingsoffset), Py_TYPE(obj)->tp_name);
+    PyErr_Format(PyExc_TypeError, "Bad binding argument type supplied - argument #%d: type %s", (int)(arg + self->bindingsoffset), Py_TypeName(obj));
     return -1;
   }
   if (res != SQLITE_OK)
@@ -775,8 +770,7 @@ APSWCursor_doexectrace(APSWCursor *self, Py_ssize_t savedbindingsoffset)
   {
     if (APSWCursor_is_dict_binding(self->bindings))
     {
-      bindings = self->bindings;
-      Py_INCREF(self->bindings);
+      bindings = Py_NewRef(self->bindings);
     }
     else
     {
@@ -791,8 +785,7 @@ APSWCursor_doexectrace(APSWCursor *self, Py_ssize_t savedbindingsoffset)
   }
   else
   {
-    bindings = Py_None;
-    Py_INCREF(bindings);
+    bindings = Py_NewRef(Py_None);
   }
 
   retval = PyObject_CallFunction(exectrace, "ONN", self, sqlcmd, bindings);
@@ -802,7 +795,7 @@ APSWCursor_doexectrace(APSWCursor *self, Py_ssize_t savedbindingsoffset)
     assert(PyErr_Occurred());
     return -1;
   }
-  result = PyObject_IsTrue(retval);
+  result = PyObject_IsTrueStrict(retval);
   Py_DECREF(retval);
   assert(result == -1 || result == 0 || result == 1);
   if (result == -1)
@@ -1118,8 +1111,7 @@ APSWCursor_execute(APSWCursor *self, PyObject *args, PyObject *kwds)
     assert(PyErr_Occurred());
     return NULL;
   }
-  Py_INCREF(retval);
-  return retval;
+  return Py_NewRef(retval);
 }
 
 /** .. method:: executemany(statements: str, sequenceofbindings: Sequence[Bindings], *, can_cache: bool = True, prepare_flags: int = 0) -> Cursor
@@ -1190,8 +1182,7 @@ APSWCursor_executemany(APSWCursor *self, PyObject *args, PyObject *kwds)
   if (!next)
   {
     /* empty list */
-    Py_INCREF(self);
-    return (PyObject *)self;
+    return Py_NewRef((PyObject *)self);
   }
 
   if (APSWCursor_is_dict_binding(next))
@@ -1220,8 +1211,7 @@ APSWCursor_executemany(APSWCursor *self, PyObject *args, PyObject *kwds)
   }
   assert(!PyErr_Occurred());
 
-  self->emoriginalquery = statements;
-  Py_INCREF(self->emoriginalquery);
+  self->emoriginalquery = Py_NewRef(statements);
 
   self->bindingsoffset = 0;
   savedbindingsoffset = 0;
@@ -1249,8 +1239,7 @@ APSWCursor_executemany(APSWCursor *self, PyObject *args, PyObject *kwds)
     assert(PyErr_Occurred());
     return NULL;
   }
-  Py_INCREF(retval);
-  return retval;
+  return Py_NewRef(retval);
 }
 
 /** .. method:: close(force: bool = False) -> None
@@ -1347,7 +1336,7 @@ again:
     Py_DECREF(retval);
     if (!r2)
       return NULL;
-    if (r2 == Py_None)
+    if (Py_IsNone(r2))
     {
       Py_DECREF(r2);
       goto again;
@@ -1371,8 +1360,7 @@ APSWCursor_iter(APSWCursor *self)
   CHECK_USE(NULL);
   CHECK_CURSOR_CLOSED(NULL);
 
-  Py_INCREF(self);
-  return (PyObject *)self;
+  return Py_NewRef((PyObject *)self);
 }
 
 /** .. method:: setexectrace(callable: Optional[ExecTracer]) -> None
@@ -1446,8 +1434,7 @@ APSWCursor_getexectrace(APSWCursor *self)
   CHECK_CURSOR_CLOSED(NULL);
 
   ret = (self->exectrace) ? (self->exectrace) : Py_None;
-  Py_INCREF(ret);
-  return ret;
+  return Py_NewRef(ret);
 }
 
 /** .. method:: getrowtrace() -> Optional[RowTracer]
@@ -1466,8 +1453,7 @@ APSWCursor_getrowtrace(APSWCursor *self)
   CHECK_USE(NULL);
   CHECK_CURSOR_CLOSED(NULL);
   ret = (self->rowtrace) ? (self->rowtrace) : Py_None;
-  Py_INCREF(ret);
-  return ret;
+  return Py_NewRef(ret);
 }
 
 /** .. method:: getconnection() -> Connection
@@ -1481,8 +1467,7 @@ APSWCursor_getconnection(APSWCursor *self)
   CHECK_USE(NULL);
   CHECK_CURSOR_CLOSED(NULL);
 
-  Py_INCREF(self->connection);
-  return (PyObject *)self->connection;
+  return Py_NewRef((PyObject *)self->connection);
 }
 
 /** .. method:: fetchall() -> list[Tuple[SQLiteValue, ...]]
@@ -1544,10 +1529,7 @@ APSWCursor_get_exectrace_attr(APSWCursor *self)
   CHECK_CURSOR_CLOSED(NULL);
 
   if (self->exectrace)
-  {
-    Py_INCREF(self->exectrace);
-    return self->exectrace;
-  }
+    return Py_NewRef(self->exectrace);
   Py_RETURN_NONE;
 }
 
@@ -1557,17 +1539,14 @@ APSWCursor_set_exectrace_attr(APSWCursor *self, PyObject *value)
   CHECK_USE(-1);
   CHECK_CURSOR_CLOSED(-1);
 
-  if (value != Py_None && !PyCallable_Check(value))
+  if (!Py_IsNone(value) && !PyCallable_Check(value))
   {
     PyErr_Format(PyExc_TypeError, "exectrace expected a Callable");
     return -1;
   }
   Py_CLEAR(self->exectrace);
-  if (value != Py_None)
-  {
-    Py_INCREF(value);
-    self->exectrace = value;
-  }
+  if (!Py_IsNone(value))
+    self->exectrace = Py_NewRef(value);
   return 0;
 }
 
@@ -1595,10 +1574,7 @@ APSWCursor_get_rowtrace_attr(APSWCursor *self)
   CHECK_CURSOR_CLOSED(NULL);
 
   if (self->rowtrace)
-  {
-    Py_INCREF(self->rowtrace);
-    return self->rowtrace;
-  }
+    return Py_NewRef(self->rowtrace);
   Py_RETURN_NONE;
 }
 
@@ -1608,17 +1584,14 @@ APSWCursor_set_rowtrace_attr(APSWCursor *self, PyObject *value)
   CHECK_USE(-1);
   CHECK_CURSOR_CLOSED(-1);
 
-  if (value != Py_None && !PyCallable_Check(value))
+  if (!Py_IsNone(value) && !PyCallable_Check(value))
   {
     PyErr_Format(PyExc_TypeError, "rowtrace expected a Callable");
     return -1;
   }
   Py_CLEAR(self->rowtrace);
-  if (value != Py_None)
-  {
-    Py_INCREF(value);
-    self->rowtrace = value;
-  }
+  if (!Py_IsNone(value))
+    self->rowtrace = Py_NewRef(value);
   return 0;
 }
 
@@ -1633,8 +1606,7 @@ APSWCursor_getconnection_attr(APSWCursor *self)
   CHECK_USE(NULL);
   CHECK_CURSOR_CLOSED(NULL);
 
-  Py_INCREF(self->connection);
-  return (PyObject *)self->connection;
+  return Py_NewRef((PyObject *)self->connection);
 }
 
 /** .. attribute:: is_explain
@@ -1750,49 +1722,18 @@ static PyGetSetDef APSWCursor_getset[] = {
     {NULL, NULL, NULL, NULL, NULL}};
 
 static PyTypeObject APSWCursorType = {
-    PyVarObject_HEAD_INIT(NULL, 0) "apsw.Cursor",                                                /*tp_name*/
-    sizeof(APSWCursor),                                                                          /*tp_basicsize*/
-    0,                                                                                           /*tp_itemsize*/
-    (destructor)APSWCursor_dealloc,                                                              /*tp_dealloc*/
-    0,                                                                                           /*tp_print*/
-    0,                                                                                           /*tp_getattr*/
-    0,                                                                                           /*tp_setattr*/
-    0,                                                                                           /*tp_compare*/
-    0,                                                                                           /*tp_repr*/
-    0,                                                                                           /*tp_as_number*/
-    0,                                                                                           /*tp_as_sequence*/
-    0,                                                                                           /*tp_as_mapping*/
-    0,                                                                                           /*tp_hash */
-    0,                                                                                           /*tp_call*/
-    0,                                                                                           /*tp_str*/
-    0,                                                                                           /*tp_getattro*/
-    0,                                                                                           /*tp_setattro*/
-    0,                                                                                           /*tp_as_buffer*/
-    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HAVE_VERSION_TAG | Py_TPFLAGS_HAVE_GC, /*tp_flags*/
-    Cursor_class_DOC,                                                                            /* tp_doc */
-    (traverseproc)APSWCursor_tp_traverse,                                                        /* tp_traverse */
-    0,                                                                                           /* tp_clear */
-    0,                                                                                           /* tp_richcompare */
-    offsetof(APSWCursor, weakreflist),                                                           /* tp_weaklistoffset */
-    (getiterfunc)APSWCursor_iter,                                                                /* tp_iter */
-    (iternextfunc)APSWCursor_next,                                                               /* tp_iternext */
-    APSWCursor_methods,                                                                          /* tp_methods */
-    0,                                                                                           /* tp_members */
-    APSWCursor_getset,                                                                           /* tp_getset */
-    0,                                                                                           /* tp_base */
-    0,                                                                                           /* tp_dict */
-    0,                                                                                           /* tp_descr_get */
-    0,                                                                                           /* tp_descr_set */
-    0,                                                                                           /* tp_dictoffset */
-    (initproc)APSWCursor_init,                                                                   /* tp_init */
-    0,                                                                                           /* tp_alloc */
-    APSWCursor_new,                                                                              /* tp_new */
-    0,                                                                                           /* tp_free */
-    0,                                                                                           /* tp_is_gc */
-    0,                                                                                           /* tp_bases */
-    0,                                                                                           /* tp_mro */
-    0,                                                                                           /* tp_cache */
-    0,                                                                                           /* tp_subclasses */
-    0,                                                                                           /* tp_weaklist */
-    0,                                                                                           /* tp_del */
-    PyType_TRAILER};
+    PyVarObject_HEAD_INIT(NULL, 0)
+        .tp_name = "apsw.Cursor",
+    .tp_basicsize = sizeof(APSWCursor),
+    .tp_dealloc = (destructor)APSWCursor_dealloc,
+    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HAVE_GC,
+    .tp_doc = Cursor_class_DOC,
+    .tp_traverse = (traverseproc)APSWCursor_tp_traverse,
+    .tp_weaklistoffset = offsetof(APSWCursor, weakreflist),
+    .tp_iter = (getiterfunc)APSWCursor_iter,
+    .tp_iternext = (iternextfunc)APSWCursor_next,
+    .tp_methods = APSWCursor_methods,
+    .tp_getset = APSWCursor_getset,
+    .tp_init = (initproc)APSWCursor_init,
+    .tp_new = APSWCursor_new,
+};

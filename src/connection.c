@@ -143,7 +143,7 @@ FunctionCBInfo_dealloc(FunctionCBInfo *self)
   Py_CLEAR(self->scalarfunc);
   Py_CLEAR(self->aggregatefactory);
   Py_CLEAR(self->windowfactory);
-  Py_TYPE(self)->tp_free((PyObject *)self);
+  Py_TpFree((PyObject *)self);
 }
 
 /** .. class:: Connection
@@ -187,10 +187,10 @@ Connection_remove_dependent(Connection *self, PyObject *o)
   {
     PyObject *wr = PyList_GET_ITEM(self->dependents, i);
     PyObject *wo = PyWeakref_GetObject(wr);
-    if (wo == o || wo == Py_None)
+    if (Py_Is(wo, o) || Py_IsNone(wo))
     {
       PyList_SetSlice(self->dependents, i, i + 1, NULL);
-      if (wo == Py_None)
+      if (Py_IsNone(wo))
         continue;
       else
         return;
@@ -215,7 +215,7 @@ Connection_close_internal(Connection *self, int force)
   {
     PyObject *closeres, *item, *wr = PyList_GET_ITEM(self->dependents, 0);
     item = PyWeakref_GetObject(wr);
-    if (item == Py_None)
+    if (Py_IsNone(item))
     {
       Connection_remove_dependent(self, item);
       continue;
@@ -333,7 +333,7 @@ Connection_dealloc(Connection *self)
   assert(!self->dependents || PyList_GET_SIZE(self->dependents) == 0);
   Py_CLEAR(self->dependents);
 
-  Py_TYPE(self)->tp_free((PyObject *)self);
+  Py_TpFree((PyObject *)self);
 }
 
 static PyObject *
@@ -345,8 +345,7 @@ Connection_new(PyTypeObject *type, PyObject *Py_UNUSED(args), PyObject *Py_UNUSE
   if (self != NULL)
   {
     self->db = 0;
-    self->cursor_factory = (PyObject *)&APSWCursorType;
-    Py_INCREF(self->cursor_factory);
+    self->cursor_factory = Py_NewRef((PyObject *)&APSWCursorType);
     self->inuse = 0;
     self->dependents = PyList_New(0);
     self->stmtcache = 0;
@@ -440,11 +439,7 @@ Connection_init(Connection *self, PyObject *args, PyObject *kwds)
     goto pyexception;
 
   if (vfsused && vfsused->xAccess == apswvfs_xAccess)
-  {
-    PyObject *pyvfsused = (PyObject *)(vfsused->pAppData);
-    Py_INCREF(pyvfsused);
-    self->vfs = pyvfsused;
-  }
+    self->vfs = Py_NewRef((PyObject *)(vfsused->pAppData));
 
   /* record information */
   self->open_flags = PyLong_FromLong(flags);
@@ -634,8 +629,7 @@ Connection_backup(Connection *self, PyObject *args, PyObject *kwds)
     if (!s)
       goto thisfinally;
     PyTuple_SET_ITEM(args, 0, s);
-    PyTuple_SET_ITEM(args, 1, self->dependents);
-    Py_INCREF(self->dependents);
+    PyTuple_SET_ITEM(args, 1, Py_NewRef(self->dependents));
 
     PyErr_SetObject(ExcThreadingViolation, args);
 
@@ -690,9 +684,7 @@ Connection_backup(Connection *self, PyObject *args, PyObject *kwds)
   if (!apswbackup)
     goto finally;
 
-  APSWBackup_init(apswbackup, self, sourceconnection, backup);
-  Py_INCREF(self);
-  Py_INCREF(sourceconnection);
+  APSWBackup_init(apswbackup, (Connection *)Py_NewRef(self), (Connection *)Py_NewRef(sourceconnection), backup);
   backup = NULL;
 
   /* add to dependent lists */
@@ -1022,7 +1014,7 @@ updatecb(void *context, int updatetype, char const *databasename, char const *ta
 
   assert(self);
   assert(self->updatehook);
-  assert(self->updatehook != Py_None);
+  assert(!Py_IsNone(self->updatehook));
 
   gilstate = PyGILState_Ensure();
 
@@ -1107,7 +1099,7 @@ rollbackhookcb(void *context)
 
   assert(self);
   assert(self->rollbackhook);
-  assert(self->rollbackhook != Py_None);
+  assert(!Py_IsNone(self->rollbackhook));
 
   gilstate = PyGILState_Ensure();
 
@@ -1175,7 +1167,7 @@ profilecb(void *context, const char *statement, sqlite_uint64 runtime)
 
   assert(self);
   assert(self->profile);
-  assert(self->profile != Py_None);
+  assert(!Py_IsNone(self->profile));
 
   gilstate = PyGILState_Ensure();
 
@@ -1429,7 +1421,7 @@ commithookcb(void *context)
 
   assert(self);
   assert(self->commithook);
-  assert(self->commithook != Py_None);
+  assert(!Py_IsNone(self->commithook));
 
   gilstate = PyGILState_Ensure();
 
@@ -1443,11 +1435,12 @@ commithookcb(void *context)
   if (!retval)
     goto finally; /* abort hook due to exception */
 
-  ok = PyObject_IsTrue(retval);
+  ok = PyObject_IsTrueStrict(retval);
   assert(ok == -1 || ok == 0 || ok == 1);
   if (ok == -1)
   {
     ok = 1;
+    assert(PyErr_Occurred());
     goto finally; /* abort due to exception in return value */
   }
 
@@ -1515,7 +1508,7 @@ walhookcb(void *context, sqlite3 *db, const char *dbname, int npages)
 
   assert(self);
   assert(self->walhook);
-  assert(self->walhook != Py_None);
+  assert(!Py_IsNone(self->walhook));
   assert(self->db == db);
 
   gilstate = PyGILState_Ensure();
@@ -1623,12 +1616,13 @@ progresshandlercb(void *context)
   if (!retval)
     goto finally; /* abort due to exception */
 
-  ok = PyObject_IsTrue(retval);
+  ok = PyObject_IsTrueStrict(retval);
 
   assert(ok == -1 || ok == 0 || ok == 1);
   if (ok == -1)
   {
     ok = 1;
+    assert(PyErr_Occurred());
     goto finally; /* abort due to exception in result */
   }
 
@@ -1698,7 +1692,7 @@ authorizercb(void *context, int operation, const char *paramone, const char *par
 
   assert(self);
   assert(self->authorizer);
-  assert(self->authorizer != Py_None);
+  assert(!Py_IsNone(self->authorizer));
 
   gilstate = PyGILState_Ensure();
 
@@ -1742,7 +1736,7 @@ Connection_internal_set_authorizer(Connection *self, PyObject *callable)
   /* CHECK_USE and CHECK_CLOSED not needed because caller does them */
   int res = SQLITE_OK;
 
-  assert(callable != Py_None);
+  assert(!Py_IsNone(callable));
 
   PYSQLITE_CON_CALL(res = sqlite3_set_authorizer(self->db, callable ? authorizercb : NULL, callable ? self : NULL));
 
@@ -1754,10 +1748,7 @@ Connection_internal_set_authorizer(Connection *self, PyObject *callable)
 
   Py_CLEAR(self->authorizer);
   if (callable)
-  {
-    Py_INCREF(callable);
-    self->authorizer = callable;
-  }
+    self->authorizer = Py_NewRef(callable);
 
   return 0;
 }
@@ -2002,7 +1993,7 @@ busyhandlercb(void *context, int ncall)
   if (!retval)
     goto finally; /* abort due to exception */
 
-  result = PyObject_IsTrue(retval);
+  result = PyObject_IsTrueStrict(retval);
   assert(result == -1 || result == 0 || result == 1);
   Py_DECREF(retval);
 
@@ -2180,7 +2171,7 @@ Connection_deserialize(Connection *self, PyObject *args, PyObject *kwds)
 
   PyBuffer_Release(&contents);
 
-  if(!newcontents)
+  if (!newcontents)
   {
     res = SQLITE_NOMEM;
     PyErr_NoMemory();
@@ -2287,52 +2278,13 @@ Connection_loadextension(Connection *self, PyObject *args, PyObject *kwds)
 /* USER DEFINED FUNCTION CODE.*/
 static PyTypeObject FunctionCBInfoType =
     {
-        PyVarObject_HEAD_INIT(NULL, 0) "apsw.FunctionCBInfo",                   /*tp_name*/
-        sizeof(FunctionCBInfo),                                                 /*tp_basicsize*/
-        0,                                                                      /*tp_itemsize*/
-        (destructor)FunctionCBInfo_dealloc,                                     /*tp_dealloc*/
-        0,                                                                      /*tp_print*/
-        0,                                                                      /*tp_getattr*/
-        0,                                                                      /*tp_setattr*/
-        0,                                                                      /*tp_compare*/
-        0,                                                                      /*tp_repr*/
-        0,                                                                      /*tp_as_number*/
-        0,                                                                      /*tp_as_sequence*/
-        0,                                                                      /*tp_as_mapping*/
-        0,                                                                      /*tp_hash */
-        0,                                                                      /*tp_call*/
-        0,                                                                      /*tp_str*/
-        0,                                                                      /*tp_getattro*/
-        0,                                                                      /*tp_setattro*/
-        0,                                                                      /*tp_as_buffer*/
-        Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HAVE_VERSION_TAG, /*tp_flags*/
-        "FunctionCBInfo object",                                                /* tp_doc */
-        0,                                                                      /* tp_traverse */
-        0,                                                                      /* tp_clear */
-        0,                                                                      /* tp_richcompare */
-        0,                                                                      /* tp_weaklistoffset */
-        0,                                                                      /* tp_iter */
-        0,                                                                      /* tp_iternext */
-        0,                                                                      /* tp_methods */
-        0,                                                                      /* tp_members */
-        0,                                                                      /* tp_getset */
-        0,                                                                      /* tp_base */
-        0,                                                                      /* tp_dict */
-        0,                                                                      /* tp_descr_get */
-        0,                                                                      /* tp_descr_set */
-        0,                                                                      /* tp_dictoffset */
-        0,                                                                      /* tp_init */
-        0,                                                                      /* tp_alloc */
-        0,                                                                      /* tp_new */
-        0,                                                                      /* tp_free */
-        0,                                                                      /* tp_is_gc */
-        0,                                                                      /* tp_bases */
-        0,                                                                      /* tp_mro */
-        0,                                                                      /* tp_cache */
-        0,                                                                      /* tp_subclasses */
-        0,                                                                      /* tp_weaklist */
-        0,                                                                      /* tp_del */
-        PyType_TRAILER};
+        PyVarObject_HEAD_INIT(NULL, 0)
+            .tp_name = "apsw.FunctionCBInfo",
+        .tp_basicsize = sizeof(FunctionCBInfo),
+        .tp_dealloc = (destructor)FunctionCBInfo_dealloc,
+        .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
+        .tp_doc = "FunctionCBInfo object",
+};
 
 #undef allocfunccbinfo
 static FunctionCBInfo *
@@ -2368,7 +2320,7 @@ set_context_result(sqlite3_context *context, PyObject *obj)
      APSWCursor_dobinding.  If you fix anything here then do it there as
      well. */
 
-  if (obj == Py_None)
+  if (Py_IsNone(obj))
   {
     sqlite3_result_null(context);
     return 1;
@@ -2537,8 +2489,7 @@ getaggregatefunctioncontext(sqlite3_context *context)
     return aggfc;
 
   /* fill in with Py_None so we know it is valid */
-  aggfc->aggvalue = Py_None;
-  Py_INCREF(Py_None);
+  aggfc->aggvalue = Py_NewRef(Py_None);
 
   cbinfo = (FunctionCBInfo *)sqlite3_user_data(context);
   assert(cbinfo);
@@ -3185,8 +3136,7 @@ Connection_createscalarfunction(Connection *self, PyObject *args, PyObject *kwds
     cbinfo = allocfunccbinfo(name);
     if (!cbinfo)
       goto finally;
-    cbinfo->scalarfunc = callable;
-    Py_INCREF(callable);
+    cbinfo->scalarfunc = Py_NewRef(callable);
   }
 
   flags |= (deterministic ? SQLITE_DETERMINISTIC : 0);
@@ -3284,8 +3234,7 @@ Connection_createaggregatefunction(Connection *self, PyObject *args, PyObject *k
     if (!cbinfo)
       goto finally;
 
-    cbinfo->aggregatefactory = factory;
-    Py_INCREF(factory);
+    cbinfo->aggregatefactory = Py_NewRef(factory);
   }
 
   PYSQLITE_CON_CALL(
@@ -3674,7 +3623,7 @@ Connection_createmodule(Connection *self, PyObject *args, PyObject *kwds)
       return NULL;
   }
 
-  if (datasource != Py_None)
+  if (!Py_IsNone(datasource))
   {
     Py_INCREF(datasource);
     vti = PyMem_Calloc(1, sizeof(vtableinfo));
@@ -3871,8 +3820,7 @@ Connection_getexectrace(Connection *self)
   CHECK_CLOSED(self, NULL);
 
   ret = (self->exectrace) ? (self->exectrace) : Py_None;
-  Py_INCREF(ret);
-  return ret;
+  return Py_NewRef(ret);
 }
 
 /** .. method:: getrowtrace() -> Optional[RowTracer]
@@ -3890,8 +3838,7 @@ Connection_getrowtrace(Connection *self)
   CHECK_CLOSED(self, NULL);
 
   ret = (self->rowtrace) ? (self->rowtrace) : Py_None;
-  Py_INCREF(ret);
-  return ret;
+  return Py_NewRef(ret);
 }
 
 /** .. method:: __enter__() -> Connection
@@ -3931,13 +3878,13 @@ Connection_enter(Connection *self)
     return PyErr_NoMemory();
 
   /* exec tracing - we allow it to prevent */
-  if (self->exectrace && self->exectrace != Py_None)
+  if (self->exectrace && !Py_IsNone(self->exectrace))
   {
     int result;
     PyObject *retval = PyObject_CallFunction(self->exectrace, "OsO", self, sql, Py_None);
     if (!retval)
       goto error;
-    result = PyObject_IsTrue(retval);
+    result = PyObject_IsTrueStrict(retval);
     Py_DECREF(retval);
     if (result == -1)
     {
@@ -3959,8 +3906,7 @@ Connection_enter(Connection *self)
     return NULL;
 
   self->savepointlevel++;
-  Py_INCREF(self);
-  return (PyObject *)self;
+  return Py_NewRef((PyObject *)self);
 
 error:
   assert(PyErr_Occurred());
@@ -3991,7 +3937,7 @@ static int connection_trace_and_exec(Connection *self, int release, int sp, int 
     return -1;
   }
 
-  if (self->exectrace && self->exectrace != Py_None)
+  if (self->exectrace && !Py_IsNone(self->exectrace))
   {
     PyObject *result;
     PyObject *etype = NULL, *eval = NULL, *etb = NULL;
@@ -4050,7 +3996,7 @@ Connection_exit(Connection *self, PyObject *args, PyObject *kwds)
 
   /* try the commit first because it may fail in which case we'll need
      to roll it back - see issue 98 */
-  if (etype == Py_None && evalue == Py_None && etraceback == Py_None)
+  if (Py_IsNone(etype) && Py_IsNone(evalue) && Py_IsNone(etraceback))
   {
     res = connection_trace_and_exec(self, 1, sp, 0);
     if (res == -1)
@@ -4594,7 +4540,7 @@ Connection_drop_modules(Connection *self, PyObject *args, PyObject *kwds)
         goto finally;
       if (!PyUnicode_Check(s))
       {
-        PyErr_Format(PyExc_TypeError, "Expected sequence item #%zd to be str, not %s", i, Py_TYPE(s)->tp_name);
+        PyErr_Format(PyExc_TypeError, "Expected sequence item #%zd to be str, not %s", i, Py_TypeName(s));
         goto finally;
       }
       sc = PyUnicode_AsUTF8(s);
@@ -4698,8 +4644,7 @@ Connection_get_cursor_factory(Connection *self)
      that case we return None */
   if (!self->cursor_factory)
     Py_RETURN_NONE;
-  Py_INCREF(self->cursor_factory);
-  return self->cursor_factory;
+  return Py_NewRef(self->cursor_factory);
 }
 
 static int
@@ -4711,8 +4656,7 @@ Connection_set_cursor_factory(Connection *self, PyObject *value)
     return -1;
   }
   Py_CLEAR(self->cursor_factory);
-  Py_INCREF(value);
-  self->cursor_factory = value;
+  self->cursor_factory = Py_NewRef(value);
   return 0;
 }
 
@@ -4759,10 +4703,7 @@ Connection_get_exectrace_attr(Connection *self)
   CHECK_CLOSED(self, NULL);
 
   if (self->exectrace)
-  {
-    Py_INCREF(self->exectrace);
-    return self->exectrace;
-  }
+    return Py_NewRef(self->exectrace);
   Py_RETURN_NONE;
 }
 
@@ -4772,17 +4713,14 @@ Connection_set_exectrace_attr(Connection *self, PyObject *value)
   CHECK_USE(-1);
   CHECK_CLOSED(self, -1);
 
-  if (value != Py_None && !PyCallable_Check(value))
+  if (!Py_IsNone(value) && !PyCallable_Check(value))
   {
     PyErr_Format(PyExc_TypeError, "exectrace expected a Callable");
     return -1;
   }
   Py_CLEAR(self->exectrace);
   if (value != Py_None)
-  {
-    Py_INCREF(value);
-    self->exectrace = value;
-  }
+    self->exectrace = Py_NewRef(value);
   return 0;
 }
 
@@ -4811,10 +4749,7 @@ Connection_get_rowtrace_attr(Connection *self)
   CHECK_CLOSED(self, NULL);
 
   if (self->rowtrace)
-  {
-    Py_INCREF(self->rowtrace);
-    return self->rowtrace;
-  }
+    return Py_NewRef(self->rowtrace);
   Py_RETURN_NONE;
 }
 
@@ -4824,17 +4759,14 @@ Connection_set_rowtrace_attr(Connection *self, PyObject *value)
   CHECK_USE(-1);
   CHECK_CLOSED(self, -1);
 
-  if (value != Py_None && !PyCallable_Check(value))
+  if (!Py_IsNone(value) && !PyCallable_Check(value))
   {
     PyErr_Format(PyExc_TypeError, "rowtrace expected a Callable");
     return -1;
   }
   Py_CLEAR(self->rowtrace);
-  if (value != Py_None)
-  {
-    Py_INCREF(value);
-    self->rowtrace = value;
-  }
+  if (!Py_IsNone(value))
+    self->rowtrace = Py_NewRef(value);
   return 0;
 }
 
@@ -4876,10 +4808,7 @@ Connection_get_authorizer_attr(Connection *self)
   CHECK_CLOSED(self, NULL);
 
   if (self->authorizer)
-  {
-    Py_INCREF(self->authorizer);
-    return self->authorizer;
-  }
+    return Py_NewRef(self->authorizer);
   Py_RETURN_NONE;
 }
 
@@ -4889,12 +4818,12 @@ Connection_set_authorizer_attr(Connection *self, PyObject *value)
   CHECK_USE(-1);
   CHECK_CLOSED(self, -1);
 
-  if (value != Py_None && !PyCallable_Check(value))
+  if (!Py_IsNone(value) && !PyCallable_Check(value))
   {
     PyErr_Format(PyExc_TypeError, "authorizer expected a Callable or None");
     return -1;
   }
-  return Connection_internal_set_authorizer(self, (value != Py_None) ? value : NULL);
+  return Connection_internal_set_authorizer(self, (!Py_IsNone(value)) ? value : NULL);
 }
 
 /** .. attribute:: system_errno
@@ -5105,49 +5034,17 @@ static PyMethodDef Connection_methods[] = {
 
 static PyTypeObject ConnectionType =
     {
-        PyVarObject_HEAD_INIT(NULL, 0) "apsw.Connection",                                            /*tp_name*/
-        sizeof(Connection),                                                                          /*tp_basicsize*/
-        0,                                                                                           /*tp_itemsize*/
-        (destructor)Connection_dealloc,                                                              /*tp_dealloc*/
-        0,                                                                                           /*tp_print*/
-        0,                                                                                           /*tp_getattr*/
-        0,                                                                                           /*tp_setattr*/
-        0,                                                                                           /*tp_compare*/
-        0,                                                                                           /*tp_repr*/
-        0,                                                                                           /*tp_as_number*/
-        0,                                                                                           /*tp_as_sequence*/
-        0,                                                                                           /*tp_as_mapping*/
-        0,                                                                                           /*tp_hash */
-        0,                                                                                           /*tp_call*/
-        0,                                                                                           /*tp_str*/
-        0,                                                                                           /*tp_getattro*/
-        0,                                                                                           /*tp_setattro*/
-        0,                                                                                           /*tp_as_buffer*/
-        Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HAVE_VERSION_TAG | Py_TPFLAGS_HAVE_GC, /*tp_flags*/
-        Connection_class_DOC,                                                                        /* tp_doc */
-        (traverseproc)Connection_tp_traverse,                                                        /* tp_traverse */
-        0,                                                                                           /* tp_clear */
-        0,                                                                                           /* tp_richcompare */
-        offsetof(Connection, weakreflist),                                                           /* tp_weaklistoffset */
-        0,                                                                                           /* tp_iter */
-        0,                                                                                           /* tp_iternext */
-        Connection_methods,                                                                          /* tp_methods */
-        Connection_members,                                                                          /* tp_members */
-        Connection_getseters,                                                                        /* tp_getset */
-        0,                                                                                           /* tp_base */
-        0,                                                                                           /* tp_dict */
-        0,                                                                                           /* tp_descr_get */
-        0,                                                                                           /* tp_descr_set */
-        0,                                                                                           /* tp_dictoffset */
-        (initproc)Connection_init,                                                                   /* tp_init */
-        0,                                                                                           /* tp_alloc */
-        Connection_new,                                                                              /* tp_new */
-        0,                                                                                           /* tp_free */
-        0,                                                                                           /* tp_is_gc */
-        0,                                                                                           /* tp_bases */
-        0,                                                                                           /* tp_mro */
-        0,                                                                                           /* tp_cache */
-        0,                                                                                           /* tp_subclasses */
-        0,                                                                                           /* tp_weaklist */
-        0,                                                                                           /* tp_del */
-        PyType_TRAILER};
+        PyVarObject_HEAD_INIT(NULL, 0)
+            .tp_name = "apsw.Connection",
+        .tp_basicsize = sizeof(Connection),
+        .tp_dealloc = (destructor)Connection_dealloc,
+        .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HAVE_GC,
+        .tp_doc = Connection_class_DOC,
+        .tp_traverse = (traverseproc)Connection_tp_traverse,
+        .tp_weaklistoffset = offsetof(Connection, weakreflist),
+        .tp_methods = Connection_methods,
+        .tp_members = Connection_members,
+        .tp_getset = Connection_getseters,
+        .tp_init = (initproc)Connection_init,
+        .tp_new = Connection_new,
+};

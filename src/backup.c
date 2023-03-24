@@ -90,8 +90,7 @@ APSWBackup_init(APSWBackup *self, Connection *dest, Connection *source, sqlite3_
   self->dest = dest;
   self->source = source;
   self->backup = backup;
-  self->done = Py_False;
-  Py_INCREF(self->done);
+  self->done = Py_NewRef(Py_False);
   self->inuse = 0;
   self->weakreflist = NULL;
 }
@@ -155,7 +154,7 @@ APSWBackup_dealloc(APSWBackup *self)
 
   Py_CLEAR(self->done);
 
-  Py_TYPE(self)->tp_free((PyObject *)self);
+  Py_TpFree((PyObject *)self);
 }
 
 /** .. method:: step(npages: int = -1) -> bool
@@ -198,11 +197,10 @@ APSWBackup_step(APSWBackup *self, PyObject *args, PyObject *kwds)
 
   if (res == SQLITE_DONE)
   {
-    if (self->done != Py_True)
+    if (!Py_IsTrue(self->done))
     {
       Py_CLEAR(self->done);
-      self->done = Py_True;
-      Py_INCREF(self->done);
+      self->done = Py_NewRef(Py_True);
     }
     res = SQLITE_OK;
   }
@@ -213,8 +211,7 @@ APSWBackup_step(APSWBackup *self, PyObject *args, PyObject *kwds)
     return NULL;
   }
 
-  Py_INCREF(self->done);
-  return self->done;
+  return Py_NewRef(self->done);
 }
 
 /** .. method:: finish() -> None
@@ -325,8 +322,7 @@ APSWBackup_enter(APSWBackup *self)
   CHECK_USE(NULL);
   CHECK_BACKUP_CLOSED(NULL);
 
-  Py_INCREF(self);
-  return (PyObject *)self;
+  return Py_NewRef((PyObject *)self);
 }
 
 /** .. method:: __exit__(etype: Optional[type[BaseException]], evalue: Optional[BaseException], etraceback: Optional[types.TracebackType]) -> Optional[bool]
@@ -356,7 +352,7 @@ APSWBackup_exit(APSWBackup *self, PyObject *args, PyObject *kwds)
      close exception has more detail.  At the time of writing this
      code the step method only set an error code but not an error
      message */
-  setexc = APSWBackup_close_internal(self, etype != Py_None || evalue != Py_None || etraceback != Py_None);
+  setexc = APSWBackup_close_internal(self, !Py_IsNone(etype) || !Py_IsNone(evalue) || !Py_IsNone(etraceback));
 
   if (setexc)
   {
@@ -398,50 +394,14 @@ static PyMethodDef backup_methods[] = {
 
 static PyTypeObject APSWBackupType =
     {
-        PyVarObject_HEAD_INIT(NULL, 0) "apsw.Backup",                           /*tp_name*/
-        sizeof(APSWBackup),                                                     /*tp_basicsize*/
-        0,                                                                      /*tp_itemsize*/
-        (destructor)APSWBackup_dealloc,                                         /*tp_dealloc*/
-        0,                                                                      /*tp_print*/
-        0,                                                                      /*tp_getattr*/
-        0,                                                                      /*tp_setattr*/
-        0,                                                                      /*tp_compare*/
-        0,                                                                      /*tp_repr*/
-        0,                                                                      /*tp_as_number*/
-        0,                                                                      /*tp_as_sequence*/
-        0,                                                                      /*tp_as_mapping*/
-        0,                                                                      /*tp_hash */
-        0,                                                                      /*tp_call*/
-        0,                                                                      /*tp_str*/
-        0,                                                                      /*tp_getattro*/
-        0,                                                                      /*tp_setattro*/
-        0,                                                                      /*tp_as_buffer*/
-        Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HAVE_VERSION_TAG, /*tp_flags*/
-        Backup_class_DOC,                                                       /* tp_doc */
-        0,                                                                      /* tp_traverse */
-        0,                                                                      /* tp_clear */
-        0,                                                                      /* tp_richcompare */
-        offsetof(APSWBackup, weakreflist),                                      /* tp_weaklistoffset */
-        0,                                                                      /* tp_iter */
-        0,                                                                      /* tp_iternext */
-        backup_methods,                                                         /* tp_methods */
-        backup_members,                                                         /* tp_members */
-        backup_getset,                                                          /* tp_getset */
-        0,                                                                      /* tp_base */
-        0,                                                                      /* tp_dict */
-        0,                                                                      /* tp_descr_get */
-        0,                                                                      /* tp_descr_set */
-        0,                                                                      /* tp_dictoffset */
-        0,                                                                      /* tp_init */
-        0,                                                                      /* tp_alloc */
-        0,                                                                      /* tp_new */
-        0,                                                                      /* tp_free */
-        0,                                                                      /* tp_is_gc */
-        0,                                                                      /* tp_bases */
-        0,                                                                      /* tp_mro */
-        0,                                                                      /* tp_cache */
-        0,                                                                      /* tp_subclasses */
-        0,                                                                      /* tp_weaklist */
-        0,                                                                      /* tp_del */
-        PyType_TRAILER
+        PyVarObject_HEAD_INIT(NULL, 0)
+            .tp_name = "apsw.Backup",
+        .tp_basicsize = sizeof(APSWBackup),
+        .tp_dealloc = (destructor)APSWBackup_dealloc,
+        .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
+        .tp_doc = Backup_class_DOC,
+        .tp_weaklistoffset = offsetof(APSWBackup, weakreflist),
+        .tp_methods = backup_methods,
+        .tp_members = backup_members,
+        .tp_getset = backup_getset,
 };

@@ -645,7 +645,7 @@ apswvfspy_xOpen(APSWVFS *self, PyObject *args, PyObject *kwds)
       return NULL;
   }
 
-  if (name == Py_None)
+  if (Py_IsNone(name))
   {
     filename = NULL;
   }
@@ -888,7 +888,7 @@ apswvfs_xDlError(sqlite3_vfs *vfs, int nByte, char *zErrMsg)
 
   pyresult = Call_PythonMethodV((PyObject *)(vfs->pAppData), "xDlError", 0, "()");
 
-  if (pyresult && pyresult != Py_None)
+  if (pyresult && !Py_IsNone(pyresult))
   {
     if (PyUnicode_Check(pyresult))
     {
@@ -978,7 +978,7 @@ apswvfs_xRandomness(sqlite3_vfs *vfs, int nByte, char *zOut)
 
   pyresult = Call_PythonMethodV((PyObject *)(vfs->pAppData), "xRandomness", 1, "(i)", nByte);
 
-  if (pyresult && pyresult != Py_None)
+  if (pyresult && !Py_IsNone(pyresult))
   {
     int asrb;
     Py_buffer py3buffer;
@@ -1201,7 +1201,7 @@ apswvfs_xGetLastError(sqlite3_vfs *vfs, int nByte, char *zErrMsg)
   if (PyErr_Occurred())
     goto end;
 
-  if (item1 == Py_None)
+  if (Py_IsNone(item1))
     goto end;
 
   if (!PyUnicode_Check(item1))
@@ -1276,8 +1276,7 @@ apswvfspy_xGetLastError(APSWVFS *self)
   else
   {
     Py_CLEAR(text);
-    text = Py_None;
-    Py_INCREF(text);
+    text = Py_NewRef(Py_None);
   }
 
   res = PyTuple_New(2);
@@ -1442,7 +1441,7 @@ apswvfs_xNextSystemCall(sqlite3_vfs *vfs, const char *zName)
   pyresult = Call_PythonMethodV((PyObject *)(vfs->pAppData), "xNextSystemCall", 1, "(s)",
                                 zName);
 
-  if (pyresult && pyresult != Py_None)
+  if (pyresult && !Py_IsNone(pyresult))
   {
     if (PyUnicode_Check(pyresult))
     {
@@ -1497,10 +1496,7 @@ apswvfspy_xNextSystemCall(APSWVFS *self, PyObject *args, PyObject *kwds)
   if (zName)
     res = convertutf8string(zName);
   else
-  {
-    Py_INCREF(Py_None);
-    res = Py_None;
-  }
+    res = Py_NewRef(Py_None);
 
   if (PyErr_Occurred())
     AddTraceBackHere(__FILE__, __LINE__, "vfspy.xNextSystemCall", "{s:s}", "name", name);
@@ -1577,7 +1573,7 @@ APSWVFS_dealloc(APSWVFS *self)
 
   self->basevfs = self->containingvfs = NULL;
 
-  Py_TYPE(self)->tp_free((PyObject *)self);
+  Py_TpFree((PyObject *)self);
 }
 
 static PyObject *
@@ -1733,52 +1729,16 @@ static PyMethodDef APSWVFS_methods[] = {
 
 static PyTypeObject APSWVFSType =
     {
-        PyVarObject_HEAD_INIT(NULL, 0) "apsw.VFS",                              /*tp_name*/
-        sizeof(APSWVFS),                                                        /*tp_basicsize*/
-        0,                                                                      /*tp_itemsize*/
-        (destructor)APSWVFS_dealloc,                                            /*tp_dealloc*/
-        0,                                                                      /*tp_print*/
-        0,                                                                      /*tp_getattr*/
-        0,                                                                      /*tp_setattr*/
-        0,                                                                      /*tp_compare*/
-        0,                                                                      /*tp_repr*/
-        0,                                                                      /*tp_as_number*/
-        0,                                                                      /*tp_as_sequence*/
-        0,                                                                      /*tp_as_mapping*/
-        0,                                                                      /*tp_hash */
-        0,                                                                      /*tp_call*/
-        0,                                                                      /*tp_str*/
-        0,                                                                      /*tp_getattro*/
-        0,                                                                      /*tp_setattro*/
-        0,                                                                      /*tp_as_buffer*/
-        Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HAVE_VERSION_TAG, /*tp_flags*/
-        VFS_class_DOC,                                                          /* tp_doc */
-        0,                                                                      /* tp_traverse */
-        0,                                                                      /* tp_clear */
-        0,                                                                      /* tp_richcompare */
-        0,                                                                      /* tp_weaklistoffset */
-        0,                                                                      /* tp_iter */
-        0,                                                                      /* tp_iternext */
-        APSWVFS_methods,                                                        /* tp_methods */
-        0,                                                                      /* tp_members */
-        0,                                                                      /* tp_getset */
-        0,                                                                      /* tp_base */
-        0,                                                                      /* tp_dict */
-        0,                                                                      /* tp_descr_get */
-        0,                                                                      /* tp_descr_set */
-        0,                                                                      /* tp_dictoffset */
-        (initproc)APSWVFS_init,                                                 /* tp_init */
-        0,                                                                      /* tp_alloc */
-        APSWVFS_new,                                                            /* tp_new */
-        0,                                                                      /* tp_free */
-        0,                                                                      /* tp_is_gc */
-        0,                                                                      /* tp_bases */
-        0,                                                                      /* tp_mro */
-        0,                                                                      /* tp_cache */
-        0,                                                                      /* tp_subclasses */
-        0,                                                                      /* tp_weaklist */
-        0,                                                                      /* tp_del */
-        PyType_TRAILER};
+        PyVarObject_HEAD_INIT(NULL, 0)
+            .tp_name = "apsw.VFS",
+        .tp_basicsize = sizeof(APSWVFS),
+        .tp_dealloc = (destructor)APSWVFS_dealloc,
+        .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
+        .tp_doc = VFS_class_DOC,
+        .tp_methods = APSWVFS_methods,
+        .tp_init = (initproc)APSWVFS_init,
+        .tp_new = APSWVFS_new,
+};
 
 /** .. class:: VFSFile
 
@@ -1828,7 +1788,7 @@ APSWVFSFile_dealloc(APSWVFSFile *self)
     AddTraceBackHere(__FILE__, __LINE__, "APSWVFS File destructor", NULL);
     apsw_write_unraisable(NULL);
   }
-  Py_TYPE(self)->tp_free((PyObject *)self);
+  Py_TpFree((PyObject *)self);
 
   PyErr_Restore(a, b, c);
 }
@@ -2373,7 +2333,7 @@ apswvfsfile_xSectorSize(sqlite3_file *file)
   pyresult = Call_PythonMethodV(apswfile->file, "xSectorSize", 0, "()");
   if (!pyresult)
     result = MakeSqliteMsgFromPyException(NULL);
-  else if (pyresult != Py_None)
+  else if (!Py_IsNone(pyresult))
   {
     if (PyLong_Check(pyresult))
       result = PyLong_AsInt(pyresult); /* returns -1 on error/overflow */
@@ -2423,7 +2383,7 @@ apswvfsfile_xDeviceCharacteristics(sqlite3_file *file)
   pyresult = Call_PythonMethodV(apswfile->file, "xDeviceCharacteristics", 0, "()");
   if (!pyresult)
     result = MakeSqliteMsgFromPyException(NULL);
-  else if (pyresult != Py_None)
+  else if (!Py_IsNone(pyresult))
   {
     if (PyLong_Check(pyresult))
       result = PyLong_AsInt(pyresult); /* sets to -1 on error */
@@ -2584,13 +2544,13 @@ apswvfsfile_xFileControl(sqlite3_file *file, int op, void *pArg)
     result = MakeSqliteMsgFromPyException(NULL);
   else
   {
-    if (pyresult != Py_True && pyresult != Py_False)
+    if (!Py_IsTrue(pyresult) && !Py_IsFalse(pyresult))
     {
       PyErr_Format(PyExc_TypeError, "xFileControl must return True or False");
       result = SQLITE_ERROR;
     }
     else
-      result = (pyresult == Py_True) ? SQLITE_OK : SQLITE_NOTFOUND;
+      result = Py_IsTrue(pyresult) ? SQLITE_OK : SQLITE_NOTFOUND;
   }
 
   Py_XDECREF(pyresult);
@@ -2803,52 +2763,16 @@ static PyMethodDef APSWVFSFile_methods[] = {
 
 static PyTypeObject APSWVFSFileType =
     {
-        PyVarObject_HEAD_INIT(NULL, 0) "apsw.VFSFile",                          /*tp_name*/
-        sizeof(APSWVFSFile),                                                    /*tp_basicsize*/
-        0,                                                                      /*tp_itemsize*/
-        (destructor)APSWVFSFile_dealloc,                                        /*tp_dealloc*/
-        0,                                                                      /*tp_print*/
-        0,                                                                      /*tp_getattr*/
-        0,                                                                      /*tp_setattr*/
-        0,                                                                      /*tp_compare*/
-        0,                                                                      /*tp_repr*/
-        0,                                                                      /*tp_as_number*/
-        0,                                                                      /*tp_as_sequence*/
-        0,                                                                      /*tp_as_mapping*/
-        0,                                                                      /*tp_hash */
-        0,                                                                      /*tp_call*/
-        0,                                                                      /*tp_str*/
-        0,                                                                      /*tp_getattro*/
-        0,                                                                      /*tp_setattro*/
-        0,                                                                      /*tp_as_buffer*/
-        Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HAVE_VERSION_TAG, /*tp_flags*/
-        VFSFile_class_DOC,                                                      /* tp_doc */
-        0,                                                                      /* tp_traverse */
-        0,                                                                      /* tp_clear */
-        0,                                                                      /* tp_richcompare */
-        0,                                                                      /* tp_weaklistoffset */
-        0,                                                                      /* tp_iter */
-        0,                                                                      /* tp_iternext */
-        APSWVFSFile_methods,                                                    /* tp_methods */
-        0,                                                                      /* tp_members */
-        0,                                                                      /* tp_getset */
-        0,                                                                      /* tp_base */
-        0,                                                                      /* tp_dict */
-        0,                                                                      /* tp_descr_get */
-        0,                                                                      /* tp_descr_set */
-        0,                                                                      /* tp_dictoffset */
-        (initproc)APSWVFSFile_init,                                             /* tp_init */
-        0,                                                                      /* tp_alloc */
-        APSWVFSFile_new,                                                        /* tp_new */
-        0,                                                                      /* tp_free */
-        0,                                                                      /* tp_is_gc */
-        0,                                                                      /* tp_bases */
-        0,                                                                      /* tp_mro */
-        0,                                                                      /* tp_cache */
-        0,                                                                      /* tp_subclasses */
-        0,                                                                      /* tp_weaklist */
-        0,                                                                      /* tp_del */
-        PyType_TRAILER};
+        PyVarObject_HEAD_INIT(NULL, 0)
+            .tp_name = "apsw.VFSFile",
+        .tp_basicsize = sizeof(APSWVFSFile),
+        .tp_dealloc = (destructor)APSWVFSFile_dealloc,
+        .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
+        .tp_doc = VFSFile_class_DOC,
+        .tp_methods = APSWVFSFile_methods,
+        .tp_init = (initproc)APSWVFSFile_init,
+        .tp_new = APSWVFSFile_new,
+};
 
 /** .. class:: URIFilename
 
@@ -2958,49 +2882,10 @@ static PyMethodDef APSWURIFilenameMethods[] = {
 
 static PyTypeObject APSWURIFilenameType =
     {
-        PyVarObject_HEAD_INIT(NULL, 0) "apsw.URIFilename",                      /*tp_name*/
-        sizeof(APSWURIFilename),                                                /*tp_basicsize*/
-        0,                                                                      /*tp_itemsize*/
-        0,                                                                      /*tp_dealloc*/
-        0,                                                                      /*tp_print*/
-        0,                                                                      /*tp_getattr*/
-        0,                                                                      /*tp_setattr*/
-        0,                                                                      /*tp_compare*/
-        0,                                                                      /*tp_repr*/
-        0,                                                                      /*tp_as_number*/
-        0,                                                                      /*tp_as_sequence*/
-        0,                                                                      /*tp_as_mapping*/
-        0,                                                                      /*tp_hash */
-        0,                                                                      /*tp_call*/
-        0,                                                                      /*tp_str*/
-        0,                                                                      /*tp_getattro*/
-        0,                                                                      /*tp_setattro*/
-        0,                                                                      /*tp_as_buffer*/
-        Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HAVE_VERSION_TAG, /*tp_flags*/
-        URIFilename_class_DOC,                                                  /* tp_doc */
-        0,                                                                      /* tp_traverse */
-        0,                                                                      /* tp_clear */
-        0,                                                                      /* tp_richcompare */
-        0,                                                                      /* tp_weaklistoffset */
-        0,                                                                      /* tp_iter */
-        0,                                                                      /* tp_iternext */
-        APSWURIFilenameMethods,                                                 /* tp_methods */
-        0,                                                                      /* tp_members */
-        0,                                                                      /* tp_getset */
-        0,                                                                      /* tp_base */
-        0,                                                                      /* tp_dict */
-        0,                                                                      /* tp_descr_get */
-        0,                                                                      /* tp_descr_set */
-        0,                                                                      /* tp_dictoffset */
-        0,                                                                      /* tp_init */
-        0,                                                                      /* tp_alloc */
-        0,                                                                      /* tp_new */
-        0,                                                                      /* tp_free */
-        0,                                                                      /* tp_is_gc */
-        0,                                                                      /* tp_bases */
-        0,                                                                      /* tp_mro */
-        0,                                                                      /* tp_cache */
-        0,                                                                      /* tp_subclasses */
-        0,                                                                      /* tp_weaklist */
-        0,                                                                      /* tp_del */
-        PyType_TRAILER};
+        PyVarObject_HEAD_INIT(NULL, 0)
+            .tp_name = "apsw.URIFilename",
+        .tp_basicsize = sizeof(APSWURIFilename),
+        .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
+        .tp_doc = URIFilename_class_DOC,
+        .tp_methods = APSWURIFilenameMethods,
+};

@@ -8,7 +8,7 @@ static int
 argcheck_Optional_Callable(PyObject *object, void *vparam)
 {
     argcheck_Optional_Callable_param *param = (argcheck_Optional_Callable_param *)vparam;
-    if (object == Py_None)
+    if (Py_IsNone(object))
         *param->result = NULL;
     else if (PyCallable_Check(object))
         *param->result = object;
@@ -38,23 +38,18 @@ argcheck_bool(PyObject *object, void *vparam)
 {
     argcheck_bool_param *param = (argcheck_bool_param *)vparam;
 
-    int val;
-
-    if (!PyBool_Check(object) && !PyLong_Check(object))
-    {
-        PyErr_Format(PyExc_TypeError, "Function argument expected a bool: %s", param->message);
-        return 0;
-    }
-
-    val = PyObject_IsTrue(object);
+    int val = PyObject_IsTrueStrict(object);
     switch (val)
     {
-    case 0:
-    case 1:
+    case -1:
+        assert(PyErr_Occurred());
+        CHAIN_EXC(
+            PyErr_Format(PyExc_TypeError, "Function argument expected a bool: %s", param->message););
+        return 0;
+    default:
+        assert(val == 0 || val == 1);
         *param->result = val;
         return 1;
-    default:
-        return 0;
     }
 }
 
@@ -115,7 +110,7 @@ argcheck_Optional_str_URIFilename(PyObject *object, void *vparam)
 {
     argcheck_Optional_str_URIFilename_param *param = (argcheck_Optional_str_URIFilename_param *)vparam;
 
-    if (object == Py_None || PyUnicode_Check(object) || PyObject_IsInstance(object, (PyObject *)&APSWURIFilenameType))
+    if (Py_IsNone(object) || PyUnicode_Check(object) || PyObject_IsInstance(object, (PyObject *)&APSWURIFilenameType))
     {
         *param->result = object;
         return 1;
@@ -153,7 +148,7 @@ static int
 argcheck_Optional_Bindings(PyObject *object, void *vparam)
 {
     argcheck_Optional_Bindings_param *param = (argcheck_Optional_Bindings_param *)vparam;
-    if (object == Py_None)
+    if (Py_IsNone(object))
     {
         *param->result = NULL;
         return 1;

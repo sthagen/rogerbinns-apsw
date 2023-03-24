@@ -87,14 +87,13 @@ html_theme = 'sphinx_rtd_theme'
 html_theme_options = {
     "analytics_id": "G-2NR9GDCQLT",
     "style_external_links": True,
+    "prev_next_buttons_location": "both",
 }
 
 html_favicon = "favicon.ico"
 
 html_static_path = ['.static']
 html_last_updated_fmt = '%b %d, %Y'
-
-html_sidebars = {'**': ['searchbox.html', 'relations.html', 'localtoc.html', 'globaltoc.html', 'sourcelink.html']}
 
 # One page html
 singlehtml_sidebars = {"index": ["globaltoc.html"]}
@@ -120,7 +119,7 @@ pdf_stylesheets = ["sphinx", "a4"]
 pdf_fit_mode = "shrink"
 
 # latexpdf
-latex_engine = "xelatex"
+latex_engine = "lualatex"
 latex_logo = html_logo
 
 ### Extra gunk

@@ -154,9 +154,6 @@ typedef struct
 
 static void apsw_write_unraisable(PyObject *hookobject);
 
-/* Argument parsing helpers */
-#include "argparse.c"
-
 /* Augment tracebacks */
 #include "traceback.c"
 
@@ -165,6 +162,9 @@ static void apsw_write_unraisable(PyObject *hookobject);
 
 /* various utility functions and macros */
 #include "util.c"
+
+/* Argument parsing helpers */
+#include "argparse.c"
 
 /* Exceptions we can raise */
 #include "exceptions.c"
@@ -486,7 +486,7 @@ config(PyObject *Py_UNUSED(self), PyObject *args)
     PyObject *logger;
     if (!PyArg_ParseTuple(args, "iO", &optdup, &logger))
       return NULL;
-    if (logger == Py_None)
+    if (Py_IsNone(logger))
     {
       res = sqlite3_config((int)opt, NULL);
       if (res == SQLITE_OK)
@@ -502,8 +502,7 @@ config(PyObject *Py_UNUSED(self), PyObject *args)
       if (res == SQLITE_OK)
       {
         Py_CLEAR(logger_cb);
-        logger_cb = logger;
-        Py_INCREF(logger);
+        logger_cb = Py_NewRef(logger);
       }
     }
     break;
@@ -1229,7 +1228,7 @@ static PyObject *
 formatsqlvalue(PyObject *Py_UNUSED(self), PyObject *value)
 {
   /* NULL/None */
-  if (value == Py_None)
+  if (Py_IsNone(value))
     return PyUnicode_FromString("NULL");
 
   /* Integer */
@@ -1704,9 +1703,15 @@ PyInit_apsw(void)
   if (PyType_Ready(&ConnectionType) < 0 || PyType_Ready(&APSWCursorType) < 0 || PyType_Ready(&ZeroBlobBindType) < 0 || PyType_Ready(&APSWBlobType) < 0 || PyType_Ready(&APSWVFSType) < 0 || PyType_Ready(&APSWVFSFileType) < 0 || PyType_Ready(&APSWURIFilenameType) < 0 || PyType_Ready(&FunctionCBInfoType) < 0 || PyType_Ready(&APSWBackupType) < 0 || PyType_Ready(&SqliteIndexInfoType) < 0 || PyType_Ready(&apsw_no_change_object) < 0)
     goto fail;
 
-  apsw_unraisable_info_type = PyStructSequence_NewType(&apsw_unraisable_info);
-  if(!apsw_unraisable_info_type)
-    goto fail;
+  /* PyStructSequence_NewType is broken in some Pythons
+      https://github.com/python/cpython/issues/72895
+    You also can't call InitType2 more than once otherwise
+    internal errors are raised based on looking at the
+    refcount.
+  */
+  if (Py_REFCNT(&apsw_unraisable_info_type) == 0)
+    if (PyStructSequence_InitType2(&apsw_unraisable_info_type, &apsw_unraisable_info))
+      goto fail;
 
   m = apswmodule = PyModule_Create2(&apswmoduledef, PYTHON_API_VERSION);
 
@@ -1793,12 +1798,10 @@ PyInit_apsw(void)
     */
 
 #ifdef APSW_USE_SQLITE_AMALGAMATION
-  Py_INCREF(Py_True);
-  if (PyModule_AddObject(m, "using_amalgamation", Py_True))
+  if (PyModule_AddObject(m, "using_amalgamation", Py_NewRef(Py_True)))
     goto fail;
 #else
-  Py_INCREF(Py_False);
-  if (PyModule_AddObject(m, "using_amalgamation", Py_False))
+  if (PyModule_AddObject(m, "using_amalgamation", Py_NewRef(Py_False)))
     goto fail;
 #endif
 

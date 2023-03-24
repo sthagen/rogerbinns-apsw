@@ -227,6 +227,7 @@ returns = {
             sqlite3_table_column_metadata sqlite3_threadsafe
             sqlite3_trace_v2 sqlite3_vfs_register
             sqlite3_vfs_unregister sqlite3_vtab_config
+            sqlite3_vtab_in_next
             sqlite3_wal_autocheckpoint sqlite3_wal_checkpoint_v2
             """.split(),
     # py functions that return a number to indicate failure
@@ -234,7 +235,8 @@ returns = {
         PyType_Ready PyModule_AddObject PyModule_AddIntConstant PyLong_AsLong
         PyLong_AsLongLong PyObject_GetBuffer PyList_Append PyDict_SetItemString
         PyObject_SetAttrString _PyBytes_Resize PyDict_SetItem PyList_SetSlice
-        PyObject_IsTrue PySequence_Size PySet_Add
+        PyObject_IsTrue PySequence_Size PySet_Add PyObject_IsTrueStrict
+        PyStructSequence_InitType2
         """.split(),
 }
 

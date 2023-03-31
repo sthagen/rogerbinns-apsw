@@ -26,7 +26,7 @@ def exercise(example_code, expect_exception):
     def file_cleanup():
         if "apsw" in sys.modules:
             for c in sys.modules["apsw"].connections():
-                c.close()
+                c.close(True)
         for f in glob.glob(f"{ tmpdir.name }/dbfile-delme*") + glob.glob(f"{ tmpdir.name }/myobfudb*"):
             os.remove(f)
 
@@ -147,14 +147,20 @@ def exercise(example_code, expect_exception):
 
         class Table:
 
-            def BestIndexObject(self, iio):
+            def BestIndexObject(self, iio: apsw.IndexInfo):
                 apsw.ext.index_info_to_dict(iio)
                 for n in range(iio.nConstraint):
                     if iio.get_aConstraintUsage_in(n):
                         iio.set_aConstraintUsage_in(n, True)
                         iio.set_aConstraintUsage_argvIndex(n, 1)
                 iio.estimatedRows = 7
+                iio.orderByConsumed = False
+                iio.estimatedCost = 33
+
                 return True
+
+            def BestIndex(self, *args):
+                return (None, 23, "some string", True, 321321)
 
             def Open(self):
                 return Source.Cursor()
@@ -194,16 +200,22 @@ def exercise(example_code, expect_exception):
                 pass
 
     con.createmodule("vtable", Source(), use_bestindex_object=True, iVersion=3, eponymous=True)
+    con.createmodule("vtable2", Source(), use_bestindex_object=False, iVersion=3, eponymous=True)
     con.overloadfunction("vtf", 2)
     con.overloadfunction("vtf", 1)
     con.execute("select * from vtable where c2>2 and c1 in (1,2,3)")
     con.execute("create virtual table fred using vtable()")
-    con.execute("select vtf(c3) from fred where c3>5; select vtf(c2,c1) from fred where c3>5").fetchall()
+    con.execute("select vtf(c3) from fred where c3>5; select vtf(c2,c1) from fred where c3>5 order by c2").fetchall()
+    con.execute("select vtf(c3) from vtable2 where c3>5; select vtf(c2,c1) from vtable2 where c3>5 order by c2 desc, c1").fetchall()
     con.execute("delete from fred where c3>5")
     n = 2
     con.execute("insert into fred values(?,?,?,?)", [None, ' ' * n, b"aa" * n, 3.14 * n])
     con.execute("insert into fred(ROWID, c1) values (99, NULL)")
     con.execute("update fred set c2=c3 where rowid=3; update fred set rowid=990 where c2=2")
+
+    con.drop_modules(["something", "vtable2", "something else"])
+
+    con.drop_modules(None)
 
     def func(*args):
         return 3.14
@@ -277,7 +289,7 @@ def exercise(example_code, expect_exception):
         if callable(obj):
             obj()
 
-    con.execute("create table blobby(x); insert into blobby values(?)", (apsw.zeroblob(99), ))
+    con.execute("create table blobby(x); insert into blobby values(?)", (apsw.zeroblob(990), ))
     blob = con.blobopen("main", "blobby", "x", con.last_insert_rowid(), True)
     blob.write(b"hello world")
     blob.seek(80)
@@ -309,9 +321,9 @@ def exercise(example_code, expect_exception):
 
     con2 = apsw.Connection("")
     with con2.backup("main", con, "main") as backup:
-        backup.step(1)
-        backup.remaining
-        backup.pagecount
+        while backup.remaining:
+            backup.step(1)
+            backup.pagecount
     backup.finish()
     del con2
 
@@ -322,8 +334,11 @@ def exercise(example_code, expect_exception):
 
     class myvfs(apsw.VFS):
 
-        def __init__(self):
-            super().__init__("apswfivfs", "")
+        def __init__(self, name="apswfivfs", parent=""):
+            super().__init__(name, parent)
+
+        def xDelete(self, name, syncdir):
+            return super().xDelete(name, syncdir)
 
         def xOpen(self, name, flags):
             return myvfsfile(name, flags)
@@ -331,15 +346,26 @@ def exercise(example_code, expect_exception):
     class myvfsfile(apsw.VFSFile):
 
         def __init__(self, filename, flags):
-            super().__init__("", filename, flags)
+            super().__init__("apswfivfs2", filename, flags)
 
     vfsinstance = myvfs()
+    vfsinstance2 = myvfs("apswfivfs2", "apswfivfs")
+
+    try:
+        vfsinstance2.xDelete("no/such/file", True)
+    except apsw.IOError:
+        pass
+
+    vfsinstance2.xFullPathname("abc.txt")
+    vfsinstance2.xOpen(f"{ tmpdir.name }/dbfile-delme-vfstesting", [apsw.SQLITE_OPEN_CREATE | apsw.SQLITE_OPEN_DELETEONCLOSE, 0])
+    vfsinstance.xOpen(f"{ tmpdir.name }/dbfile-delme-vfstesting", [apsw.SQLITE_OPEN_CREATE | apsw.SQLITE_OPEN_DELETEONCLOSE, 0])
+
 
     file_cleanup()
 
     import apsw.tests
     apsw.tests.testtimeout = False
-    apsw.tests.vfstestdb(f"{ tmpdir.name }/dbfile-delme-vfswal", "apswfivfs", mode="wal")
+    apsw.tests.vfstestdb(f"{ tmpdir.name }/dbfile-delme-vfswal", "apswfivfs2", mode="wal")
 
     file_cleanup()
     apsw.tests.testtimeout = True
@@ -440,6 +466,11 @@ class Tester:
             if fname == "sqlite3_vtab_in_next":
                 self.expect_exception.append(ValueError)
                 return self.apsw_attr("SQLITE_TOOBIG")
+
+            # internal routine
+            if fname == "connection_trace_and_exec":
+                self.expect_exception.append(MemoryError)
+                return (-1, MemoryError, self.FAULTS)
 
             # pointers with 0 being failure
             if fname in {

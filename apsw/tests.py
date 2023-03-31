@@ -486,6 +486,8 @@ class APSW(unittest.TestCase):
                 two  Bananas COLLATE BreadFruit,
                 three [   ] NOT NULL);
             """)
+        self.assertRaises(TypeError, self.db.table_exists, 3, 4)
+        self.assertRaises(TypeError, self.db.column_metadata, 1, 2, 3)
         self.assertTrue(self.db.table_exists(None, "table1"))
         self.assertTrue(self.db.table_exists("main", "table1"))
         self.assertTrue(self.db.table_exists(None, "table2"))
@@ -498,6 +500,7 @@ class APSW(unittest.TestCase):
             ("three", ('   ', 'BINARY', True, False, False)),
         ):
             self.assertEqual(self.db.column_metadata(None, "table3", colname), expected)
+        self.assertRaises(apsw.SQLError, self.db.column_metadata, "not a db", "not a table", "not a column")
 
     def testConnectionNames(self):
         "Test Connection.db_names"
@@ -926,7 +929,9 @@ class APSW(unittest.TestCase):
 
         # tracing errors
         self.assertRaises(TypeError, setattr, c, "exectrace", 3)
+        self.assertRaises(TypeError, setattr, self.db, "exectrace", 3)
         self.assertRaises(TypeError, setattr, c, "rowtrace", 3)
+        self.assertRaises(TypeError, setattr, self.db, "rowtrace", 3)
         self.assertIsNone(c.rowtrace)
         xx = lambda *args: 1 / 0
         c.rowtrace = xx
@@ -1015,10 +1020,13 @@ class APSW(unittest.TestCase):
         class dict_subclass(dict):
             pass
 
+        class list_subclass(list):
+            pass
+
         self.assertRaises(TypeError, self.db.execute, "select :name", not_a_dict())
         self.assertEqual([(99, )], self.db.execute("select :name", dict_lookalike()).fetchall())
         # make sure these aren't detected as dict
-        for thing in (1, ), {1}, [1]:
+        for thing in (1, ), {1}, [1], list_subclass([1]):
             self.assertRaises(TypeError, self.db.execute("select :name", thing))
 
         self.assertRaises(TypeError, self.db.execute, "select :name", errors_be_here())
@@ -1198,7 +1206,6 @@ class APSW(unittest.TestCase):
             class Table:
 
                 def BestIndexObject(Self, o):
-                    self.assertRaises(OverflowError, setattr, o, "idxNum", 0x7fff_ffff * 0x1_000)
                     Source.indexinfo_saved = o
                     return Source.bio_callback(o)
 
@@ -1278,6 +1285,20 @@ class APSW(unittest.TestCase):
 
         # check out of bounds/setting etc
         def exercise(o):
+            self.assertRaises(OverflowError, setattr, o, "idxNum", 0x7fff_ffff * 0x1_000)
+            self.assertRaises(TypeError, setattr, o, "orderByConsumed", "not an int")
+            self.assertRaises(OverflowError, setattr, o, "idxFlags", 0x7fff_ffff * 0x1_000)
+            self.assertRaises(TypeError, setattr, o, "estimatedRows", "not an int")
+
+            self.assertRaises(TypeError, o.get_aConstraint_iColumn, "not an int")
+            self.assertRaises(TypeError, o.get_aConstraint_op, "not an int")
+            self.assertRaises(TypeError, o.get_aConstraint_usable, "not an int")
+            self.assertRaises(TypeError, o.get_aConstraint_collation, "not an int")
+            self.assertRaises(TypeError, o.get_aConstraint_rhs, "not an int")
+            self.assertRaises(TypeError, o.get_aOrderBy_iColumn, "not an int")
+            self.assertRaises(TypeError, o.get_aOrderBy_desc, "not an int")
+            self.assertRaises(TypeError, o.get_aConstraintUsage_in, "not an int")
+
             self.assertRaises(IndexError, o.set_aConstraintUsage_argvIndex, -1, 0)
             self.assertRaises(IndexError, o.set_aConstraintUsage_argvIndex, o.nConstraint, 0)
             self.assertRaises(OverflowError, o.set_aConstraintUsage_argvIndex, 2**(1 + sizeof_c_int), 0)
@@ -1561,7 +1582,10 @@ class APSW(unittest.TestCase):
         self.assertRaisesUnraisable(ZeroDivisionError, self.db.execute, "create table sptest_bam(x)")
         Source.ShadowName = lambda *args: "foo"
         self.assertRaisesUnraisable(TypeError, self.db.execute, "create table sptest_bam2(x)")
-        Source.ShadowName = lambda *args: False
+        Source.ShadowName = lambda *args: 3+4j
+        self.assertRaisesUnraisable(TypeError, self.db.execute, "create table sptest_bam3(x)")
+        Source.ShadowName = lambda *args: True
+        self.db.execute("create table sptest_bam4(x)")
 
         def clear_all():
             self.db.close()
@@ -2811,6 +2835,7 @@ class APSW(unittest.TestCase):
     def testInterruptHandling(self):
         "Verify interrupt function"
         # this is tested by having a user defined function make the interrupt
+        self.assertFalse(self.db.is_interrupted)
         c = self.db.cursor()
         c.execute("create table foo(x);begin")
         c.executemany("insert into foo values(?)", randomintegers(400))
@@ -2818,6 +2843,7 @@ class APSW(unittest.TestCase):
 
         def ih(*args):
             self.db.interrupt()
+            self.assertTrue(self.db.is_interrupted)
             return 7
 
         self.db.createscalarfunction("seven", ih)
@@ -2826,7 +2852,8 @@ class APSW(unittest.TestCase):
                 pass
         except apsw.InterruptError:
             pass
-        # ::TODO:: raise the interrupt from another thread
+        self.db.close(True)
+
 
     def testCommitHook(self):
         "Verify commit hooks"
@@ -4779,6 +4806,7 @@ class APSW(unittest.TestCase):
         "Verify statement cache integrity"
         self.db.close()
         self.db = apsw.Connection(TESTFILEPREFIX + "testdb", statementcachesize=scsize)
+        self.assertRaises(TypeError, self.db.cache_stats, include_entries="orange")
         actual = self.db.cache_stats()["size"]
         self.assertTrue(actual == scsize or (scsize > 0 and actual > 0))
         cur = self.db.cursor()
@@ -5413,6 +5441,8 @@ class APSW(unittest.TestCase):
                 check_module(n, n not in keep)
             check_module("madeup", True)
             names = keep
+        self.assertRaises(TypeError, self.db.drop_modules)
+        self.assertRaises(TypeError, self.db.drop_modules, ["one", 2, "three"])
 
     def testStatus(self):
         "Verify status function"
@@ -7405,6 +7435,7 @@ class APSW(unittest.TestCase):
         self.assertTrue(self.db.filename.endswith("testdb"))
         self.assertTrue(os.sep in self.db.filename)
         self.assertEqual(self.db.filename, self.db.db_filename("main"))
+        self.assertRaises(TypeError, self.db.db_filename, 3)
         self.db.cursor().execute("attach '%s' as foo" % (TESTFILEPREFIX + "testdb2", ))
         self.assertEqual(self.db.filename + "2", self.db.db_filename("foo"))
         self.assertTrue(self.db.filename_wal.startswith(self.db.filename))

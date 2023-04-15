@@ -12,7 +12,7 @@ Virtual File System (VFS)
 *************************
 
 SQLite 3.6 added `VFS functionality
-<https://sqlite.org/c3ref/vfs.html>`_ which defines the interface
+<https://sqlite.org/c3ref/vfs.html>`__ which defines the interface
 between the SQLite core and the underlying operating system. The
 majority of the functionality deals with files. APSW exposes this
 functionality letting you provide your own routines. You can also
@@ -1249,8 +1249,6 @@ end:
    This method is to return an integer error code and (optional) text describing
    the last error that happened in this thread.
 
-   .. note:: SQLite 3.12 changed the semantics in an incompatible way from
-        earlier versions.  You will need to rewrite earlier implementations.
 */
 static PyObject *
 apswvfspy_xGetLastError(APSWVFS *self)
@@ -1451,8 +1449,8 @@ apswvfs_xNextSystemCall(sqlite3_vfs *vfs, const char *zName)
   {
     if (PyUnicode_Check(pyresult))
     {
-      /* note this deliberately leaks memory due to SQLite semantics */
-      res = sqlite3_mprintf("%s", PyUnicode_AsUTF8(pyresult));
+      PyUnicode_InternInPlace(&pyresult);
+      res = PyUnicode_AsUTF8(pyresult);
     }
     else
       PyErr_Format(PyExc_TypeError, "You must return a string or None");
@@ -1473,13 +1471,6 @@ apswvfs_xNextSystemCall(sqlite3_vfs *vfs, const char *zName)
     name of the first system call.  In subsequent calls return the
     name after the one passed in.  If name is the last system call
     then return None.
-
-    .. note::
-
-      Because of internal SQLite implementation semantics memory will
-      be leaked on each call to this function.  Consequently you
-      should build up the list of call names once rather than
-      repeatedly doing it.
 
 */
 static PyObject *
@@ -1612,8 +1603,9 @@ APSWVFS_new(PyTypeObject *type, PyObject *Py_UNUSED(args), PyObject *Py_UNUSED(k
 
     :param maxpathname: The maximum length of database name in bytes when
         represented in UTF-8.  If a pathname is passed in longer than
-        this value then SQLite will not `be able to open it
-        <https://sqlite.org/src/tktview/c060923a5422590b3734eb92eae0c94934895b68>`__.
+        this value then SQLite will not `be able to open it.  If you are
+        using a base, then a value of zero will use the value from base.
+
 
     :raises ValueError: If *base* is not *None* and the named vfs is not
       currently registered.
@@ -1838,7 +1830,7 @@ APSWVFSFile_init(APSWVFSFile *self, PyObject *args, PyObject *kwds)
 {
   const char *vfs = NULL;
   PyObject *flags = NULL, *pyflagsin = NULL, *pyflagsout = NULL, *filename = NULL;
-  int xopenresult;
+  int xopenresult = -1;
   int res = -1; /* error */
   int flagsin;
   int flagsout = 0;
@@ -1902,14 +1894,12 @@ APSWVFSFile_init(APSWVFSFile *self, PyObject *args, PyObject *kwds)
     goto finally;
   xopenresult = vfstouse->xOpen(vfstouse, self->filename, file, (int)flagsin, &flagsout);
   Py_LeaveRecursiveCall();
+
   SET_EXC(xopenresult, NULL);
+  MakeExistingException();
+
   if (PyErr_Occurred())
-  {
-    /* just in case the result was ok, but there was a python level exception ... */
-    if (xopenresult == SQLITE_OK)
-      file->pMethods->xClose(file);
     goto finally;
-  }
 
   pyflagsout = PyLong_FromLong(flagsout);
   if (!pyflagsout)
@@ -1917,7 +1907,6 @@ APSWVFSFile_init(APSWVFSFile *self, PyObject *args, PyObject *kwds)
 
   if (-1 == PyList_SetItem(flags, 1, pyflagsout))
   {
-    file->pMethods->xClose(file);
     Py_DECREF(pyflagsout);
     goto finally;
   }
@@ -1929,12 +1918,18 @@ APSWVFSFile_init(APSWVFSFile *self, PyObject *args, PyObject *kwds)
   res = 0;
 
 finally:
-  assert(res == 0 || PyErr_Occurred());
   if (PyErr_Occurred())
     AddTraceBackHere(__FILE__, __LINE__, "vfsfile.init", "{s: O, s: O}", "args", OBJ(args), "kwargs", OBJ(kwds));
 
   if (res != 0 && file)
+  {
+    if (xopenresult == SQLITE_OK)
+      PRESERVE_EXC(file->pMethods->xClose(file));
+
     PyMem_Free(file);
+  }
+
+  assert((res == 0 && !PyErr_Occurred()) || (res != 0 && PyErr_Occurred()));
   return res;
 }
 

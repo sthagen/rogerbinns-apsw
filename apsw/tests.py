@@ -1097,7 +1097,15 @@ class APSW(unittest.TestCase):
 
         a = VFSA()
         b = VFSB()
-        self.assertRaises(apsw.SQLError, self.assertRaisesUnraisable, apsw.SQLError, apsw.Connection, "testdb", vfs="vfsa")
+        sys.setrecursionlimit(40)
+        print("The message about RecursionError is expected, and what is being tested", file=sys.stderr)
+        self.assertRaises(apsw.SQLError,
+                          self.assertRaisesUnraisable,
+                          apsw.SQLError,
+                          apsw.Connection,
+                          "testdb",
+                          vfs="vfsa")
+        sys.setrecursionlimit(1000)
 
     def testTypes(self):
         "Check type information is maintained"
@@ -4783,7 +4791,53 @@ class APSW(unittest.TestCase):
         self.assertRaises(TypeError, apsw.unregister_vfs, "3", 3)
         self.assertRaises(ValueError, apsw.unregister_vfs, "4342345324")
 
+    def testIssue431(self):
+        "All applicable constants for config/status calls"
+        self.assertEqual(0, self.db.config(apsw.SQLITE_DBCONFIG_TRIGGER_EQP, -1))
+        self.db.execute("create table foo(x)")
+        self.assertTrue(self.db.table_exists("main", "foo"))
+        self.db.config(apsw.SQLITE_DBCONFIG_RESET_DATABASE, 1)
+        self.db.execute("VACUUM")
+        self.db.config(apsw.SQLITE_DBCONFIG_RESET_DATABASE, 0)
+        self.assertFalse(self.db.table_exists("main", "foo"))
+
+    def testCursorGet(self):
+        "Cursor.get"
+        for query, expected in (("select 3,4", (3, 4)), ("select 3; select 4", [3, 4]), ("select 3,4; select 4,5", [
+            (3, 4), (4, 5)
+        ]), ("select 3,4; select 5", [(3, 4), 5]), ("select 3", 3)):
+            self.assertEqual(self.db.execute(query).get, expected)
+
+        q = "select ?"
+        b = [(i, ) for i in range(10)]
+        self.assertEqual(self.db.executemany(q, b).get, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+
+        self.assertEqual(self.db.execute("/* comment */").get, None)
+
+        # second query is deliberate syntax error
+        cur = self.db.execute("select 3 ; select 3 +")
+        self.assertRaises(apsw.SQLError, getattr, cur, "get")
+
+        # a query where all results are exhausted
+        cur = self.db.cursor()
+        cur.execute("select 3").fetchall()
+        self.assertEqual(cur.get, None)
+
+    def testConnectionPragma(self):
+        "Connection.pragma"
+        self.assertRaises(TypeError, self.db.pragma)
+        self.assertRaises(TypeError, self.db.pragma, 3)
+        self.assertRaises(TypeError, self.db.pragma, "three", "four", "five")
+        self.assertRaises(TypeError, self.db.pragma, "three", 4 + 3j)
+        self.assertEqual(self.db.pragma("journal_mode"), "delete")
+        self.assertEqual(self.db.pragma("journal_mode", "wal"), "wal")
+        self.assertEqual(self.db.pragma("user_version"), 0)
+        self.db.pragma("user_version", 7)
+        self.assertEqual(self.db.pragma("user_version"), 7)
+        self.assertRaises(apsw.SQLError, self.db.pragma, "user_version", "abc\0def")
+
     def testSleep(self):
+        "apsw.sleep"
         apsw.sleep(1)
         apsw.sleep(-1)
         self.assertRaises(OverflowError, apsw.sleep, 2_500_000_000)
@@ -5258,6 +5312,7 @@ class APSW(unittest.TestCase):
         self.db = None
         gc.collect()
         self.assertRaises(apsw.MisuseError, apsw.config, apsw.SQLITE_CONFIG_MEMSTATUS, True)
+        self.assertEqual(0, len(apsw.connections()))
         apsw.shutdown()
         try:
             self.assertRaises(TypeError, apsw.config)
@@ -5271,7 +5326,16 @@ class APSW(unittest.TestCase):
             x = 0x7fffffff
             self.assertRaises(OverflowError, apsw.config, x * x * x * x)
             self.assertTrue(apsw.config(apsw.SQLITE_CONFIG_PCACHE_HDRSZ) >= 0)
+            self.assertRaises(TypeError, apsw.config, apsw.SQLITE_CONFIG_PCACHE_HDRSZ, "extra")
             apsw.config(apsw.SQLITE_CONFIG_PMASZ, -1)
+            self.assertRaises(TypeError, apsw.config, apsw.SQLITE_CONFIG_MMAP_SIZE, "3")
+            self.assertRaises(TypeError, apsw.config, apsw.SQLITE_CONFIG_MMAP_SIZE, 3, "3")
+            self.assertRaises(OverflowError, apsw.config, apsw.SQLITE_CONFIG_MMAP_SIZE, 2**65, 2**65)
+            apsw.config(apsw.SQLITE_CONFIG_MMAP_SIZE, 2**63 - 1, 2**63 - 1)
+            self.assertRaises(TypeError, apsw.config, apsw.SQLITE_CONFIG_MEMDB_MAXSIZE, "3")
+            self.assertRaises(TypeError, apsw.config, apsw.SQLITE_CONFIG_MEMDB_MAXSIZE, 3, "3")
+            self.assertRaises(OverflowError, apsw.config, apsw.SQLITE_CONFIG_MEMDB_MAXSIZE, 2**65)
+            apsw.config(apsw.SQLITE_CONFIG_MEMDB_MAXSIZE, 2**63 - 1)
         finally:
             # put back to normal
             apsw.config(apsw.SQLITE_CONFIG_SERIALIZED)
@@ -5897,6 +5961,9 @@ class APSW(unittest.TestCase):
 
         testdb = vfstestdb
 
+        # some coverage related stuff
+        self.assertRaises(TypeError, apsw.VFSFile, "", 3, [0, 0])
+
         # Check basic functionality and inheritance - make an obfuscated provider
 
         # obfusvfs code
@@ -5985,9 +6052,6 @@ class APSW(unittest.TestCase):
 
         ### Detailed vfs testing
 
-        # xRandomness is tested first. The method is called once after sqlite initializes
-        # and only the default vfs is called.  Consequently we have a helper test method
-        # but it is only available when using testfixtures and the amalgamation
         self.db = None
         gc.collect()
 

@@ -6,7 +6,24 @@ Change History
 next
 ====
 
+Added :meth:`Connection.pragma` to execute pragmas, not format query
+strings, and get results. (:issue:`432`)
+
+Added :attr:`Cursor.get` returning query results with the
+least amount of structure.  (:issue:`389`)
+
+Ensure that all applicable options are implemented for
+:func:`apsw.config`, :meth:`Connection.config` and similar.
+(:issue:`431`)
+
 Added :func:`apsw.sleep` (:issue:`419`)
+
+Strings for :meth:`apsw.VFS.xNextSystemCall` are `interned
+<https://docs.python.org/3/c-api/unicode.html#c.PyUnicode_InternInPlace>`__
+avoiding memory leaks. (:issue:`430`)
+
+Detect unbound recursion not handled by CPython, and handle better.
+(:issue:`425`)
 
 3.41.2.0
 ========

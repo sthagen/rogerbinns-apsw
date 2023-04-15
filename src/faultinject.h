@@ -29,6 +29,7 @@ APSW_FaultInjectControl(const char *faultfunction, const char *filename, const c
 #undef PyFrame_New
 #undef PyIter_Next
 #undef PyList_Append
+#undef PyList_GetItem
 #undef PyList_New
 #undef PyList_SetItem
 #undef PyList_SetSlice
@@ -72,6 +73,7 @@ APSW_FaultInjectControl(const char *faultfunction, const char *filename, const c
 #undef PyType_Ready
 #undef PyUnicode_AsUTF8
 #undef PyUnicode_AsUTF8AndSize
+#undef PyUnicode_FromFormat
 #undef PyUnicode_FromString
 #undef PyUnicode_FromStringAndSize
 #undef PyUnicode_New
@@ -82,6 +84,7 @@ APSW_FaultInjectControl(const char *faultfunction, const char *filename, const c
 #undef allocfunccbinfo
 #undef apsw_strdup
 #undef connection_trace_and_exec
+#undef convert_column_to_pyobject
 #undef convert_value_to_pyobject
 #undef convertutf8string
 #undef get_window_function_context
@@ -388,6 +391,21 @@ APSW_FaultInjectControl(const char *faultfunction, const char *filename, const c
         _res = (typeof (_res))18;                                                                               \
     }                                                                                                           \
     _res;                                                                                                       \
+})
+#define PyList_GetItem(...) \
+({                                                                                                               \
+    __auto_type _res = 0 ? PyList_GetItem(__VA_ARGS__) : 0;                                                      \
+                                                                                                                 \
+    _res = (typeof (_res))APSW_FaultInjectControl("PyList_GetItem", __FILE__, __func__, __LINE__, #__VA_ARGS__); \
+                                                                                                                 \
+    if ((typeof (_res))0x1FACADE == _res)                                                                        \
+       _res = PyList_GetItem(__VA_ARGS__);                                                                       \
+    else if ((typeof(_res))0x2FACADE == _res)                                                                    \
+    {                                                                                                            \
+        PyList_GetItem(__VA_ARGS__);                                                                             \
+        _res = (typeof (_res))18;                                                                                \
+    }                                                                                                            \
+    _res;                                                                                                        \
 })
 #define PyList_New(...) \
 ({                                                                                                           \
@@ -1036,6 +1054,21 @@ APSW_FaultInjectControl(const char *faultfunction, const char *filename, const c
     }                                                                                                                     \
     _res;                                                                                                                 \
 })
+#define PyUnicode_FromFormat(...) \
+({                                                                                                                     \
+    __auto_type _res = 0 ? PyUnicode_FromFormat(__VA_ARGS__) : 0;                                                      \
+                                                                                                                       \
+    _res = (typeof (_res))APSW_FaultInjectControl("PyUnicode_FromFormat", __FILE__, __func__, __LINE__, #__VA_ARGS__); \
+                                                                                                                       \
+    if ((typeof (_res))0x1FACADE == _res)                                                                              \
+       _res = PyUnicode_FromFormat(__VA_ARGS__);                                                                       \
+    else if ((typeof(_res))0x2FACADE == _res)                                                                          \
+    {                                                                                                                  \
+        PyUnicode_FromFormat(__VA_ARGS__);                                                                             \
+        _res = (typeof (_res))18;                                                                                      \
+    }                                                                                                                  \
+    _res;                                                                                                              \
+})
 #define PyUnicode_FromString(...) \
 ({                                                                                                                     \
     __auto_type _res = 0 ? PyUnicode_FromString(__VA_ARGS__) : 0;                                                      \
@@ -1186,6 +1219,21 @@ APSW_FaultInjectControl(const char *faultfunction, const char *filename, const c
         _res = (typeof (_res))18;                                                                                           \
     }                                                                                                                       \
     _res;                                                                                                                   \
+})
+#define convert_column_to_pyobject(...) \
+({                                                                                                                           \
+    __auto_type _res = 0 ? convert_column_to_pyobject(__VA_ARGS__) : 0;                                                      \
+                                                                                                                             \
+    _res = (typeof (_res))APSW_FaultInjectControl("convert_column_to_pyobject", __FILE__, __func__, __LINE__, #__VA_ARGS__); \
+                                                                                                                             \
+    if ((typeof (_res))0x1FACADE == _res)                                                                                    \
+       _res = convert_column_to_pyobject(__VA_ARGS__);                                                                       \
+    else if ((typeof(_res))0x2FACADE == _res)                                                                                \
+    {                                                                                                                        \
+        convert_column_to_pyobject(__VA_ARGS__);                                                                             \
+        _res = (typeof (_res))18;                                                                                            \
+    }                                                                                                                        \
+    _res;                                                                                                                    \
 })
 #define convert_value_to_pyobject(...) \
 ({                                                                                                                          \

@@ -216,7 +216,7 @@ statementcache_prepare_internal(StatementCache *sc, const char *utf8, Py_ssize_t
      length passed to sqlite3_prepare */
 
   assert(0 == utf8[utf8size]);
-  /* note that prepare can return ok while a python level occurred that couldn't be reported */
+  /* note that prepare can return ok while a python level exception occurred that couldn't be reported */
   PYSQLITE_SC_CALL(res = sqlite3_prepare_v3(sc->db, utf8, utf8size + 1, options->prepare_flags, &vdbestatement, &tail));
   if (res != SQLITE_OK || PyErr_Occurred())
   {
@@ -271,7 +271,7 @@ statementcache_prepare_internal(StatementCache *sc, const char *utf8, Py_ssize_t
   statement->uses = 1;
   memcpy(&statement->options, options, sizeof(APSWStatementOptions));
 
-  if (tail == orig_tail && !statementcache_hasmore(statement))
+  if (vdbestatement && tail == orig_tail && !statementcache_hasmore(statement))
   {
     /* no subsequent queries, so use sqlite's copy of the utf8
        providing we didn't grab additional whitespace */

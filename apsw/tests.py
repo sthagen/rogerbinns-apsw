@@ -10,6 +10,7 @@ import typing
 import itertools
 import inspect
 import struct
+import contextlib
 
 
 def ShouldFault(name, pending_exception):
@@ -4801,6 +4802,23 @@ class APSW(unittest.TestCase):
         self.db.config(apsw.SQLITE_DBCONFIG_RESET_DATABASE, 0)
         self.assertFalse(self.db.table_exists("main", "foo"))
 
+    def testIssue433(self):
+        "Comments and exec tracing"
+        p = None
+        def et(cursor, sql, bindings):
+            nonlocal p
+            p = (cursor, sql, bindings)
+            return False
+
+        cur = self.db.cursor()
+        cur.exectrace=et
+
+        for query in ("-- foo", "select 3;;;; "):
+            with contextlib.suppress(apsw.ExecTraceAbort):
+                cur.execute(query)
+            self.assertEqual(p[1], query)
+            self.assertEqual(p[0].has_vdbe, "select" in query)
+
     def testCursorGet(self):
         "Cursor.get"
         for query, expected in (("select 3,4", (3, 4)), ("select 3; select 4", [3, 4]), ("select 3,4; select 4,5", [
@@ -8557,7 +8575,8 @@ insert into xxblah values(3);
         isnotempty(fh[2])
         self.assertTrue(len(get(fh[2]).split("\n")) < 5)
         reset()
-        cmd(".exceptions on\nsyntax error;")
+        s.db.createscalarfunction("make_error", lambda: 1/0)
+        cmd(".exceptions on\nselect make_error();")
         s.cmdloop()
         isempty(fh[1])
         isnotempty(fh[2])

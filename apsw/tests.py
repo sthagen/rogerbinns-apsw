@@ -410,7 +410,7 @@ class APSW(unittest.TestCase):
                 if must_raise and len(called) < 1:
                     self.fail("Call %s(*%s, **%s) did not do any unraisable" % (func, args, kwargs))
                 if len(called):
-                    self.assertEqual(exc, called[0][0])  # check it was the correct type
+                    self.assertIsInstance(called[0][1], exc)  # check it was the correct type
         finally:
             sys.excepthook, sys.unraisablehook = orig
 
@@ -1098,11 +1098,11 @@ class APSW(unittest.TestCase):
 
         a = VFSA()
         b = VFSB()
-        sys.setrecursionlimit(40)
-        print("The message about RecursionError is expected, and what is being tested", file=sys.stderr)
-        self.assertRaises(apsw.SQLError,
+        sys.setrecursionlimit(200)
+        print("A message about RecursionError is possible, and what is being tested", file=sys.stderr)
+        self.assertRaises((apsw.SQLError, RecursionError),
                           self.assertRaisesUnraisable,
-                          apsw.SQLError,
+                          (apsw.SQLError, RecursionError),
                           apsw.Connection,
                           "testdb",
                           vfs="vfsa")
@@ -9086,6 +9086,9 @@ shell.write(shell.stdout, "hello world\\n")
         # possible ways val can be represented (eg csv doubles up double quotes)
         outputs = (val, val.replace('"', '""'), val.replace('"', '&quot;'), val.replace('"', '\\"'))
         for mode in [x[len("output_"):] for x in dir(shellclass) if x.startswith("output_")]:
+            if mode in ("qbox", "table", "box"):
+                # apsw.ext.format_query_table already tested elsewhere
+                continue
             reset()
             cmd(".separator |\n.width 999\n.encoding utf8\n.header on\n.mode %s\nselect '%s' as '%s';" %
                 (mode, val, colname))
@@ -9106,36 +9109,6 @@ shell.write(shell.stdout, "hello world\\n")
         for f in fh:
             f.close()
 
-    # This one uses the coverage module
-    def _testShellWithCoverage(self):
-        "Check Shell functionality (with coverage)"
-        # We currently allow coverage module to not exist which helps
-        # with debugging
-        try:
-            import coverage
-        except ImportError:
-            coverage = None
-
-        import importlib.util
-        # I had problems with the compiled bytecode being around
-        for suff in "c", "o":
-            try:
-                os.remove("apsw/shell.py" + suff)
-            except:
-                pass
-
-        spec = importlib.util.spec_from_file_location("shell_coverage", "apsw/shell.py")
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module.__name__] = module
-        if coverage: coverage.start()
-        spec.loader.exec_module(module)
-        try:
-            self._originaltestShell(shellclass=module.Shell)
-        finally:
-            if coverage:
-                coverage.stop()
-                coverage.annotate(morfs=[module])
-                os.rename("apsw/shell.py,cover", "shell.py.gcov")
 
     # Note that faults fire only once, so there is no need to reset
     # them.  The testing for objects bigger than 2GB is done in

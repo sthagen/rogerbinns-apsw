@@ -1,6 +1,6 @@
 
 SQLITEVERSION=3.41.2
-APSWSUFFIX=.1
+APSWSUFFIX=.2
 
 RELEASEDATE="26 March 2023"
 
@@ -21,7 +21,7 @@ GENDOCS = \
 
 .PHONY : help all tagpush clean doc docs build_ext build_ext_debug coverage pycoverage test test_debug fulltest linkcheck unwrapped \
 		 publish stubtest showsymbols compile-win setup-wheel source_nocheck source release pydebug pyvalgrind valgrind valgrind1 \
-		 fossil
+		 fossil doc-depends dev-depends docs-no-fetch
 
 help: ## Show this help
 	@egrep -h '\s##\s' $(MAKEFILE_LIST) | sort | \
@@ -43,7 +43,9 @@ clean: ## Cleans up everything
 
 doc: docs ## Builds all the doc
 
-docs: build_ext $(GENDOCS) doc/example.rst doc/.static doc/typing.rstgen
+docs: build_ext docs-no-fetch
+
+docs-no-fetch: $(GENDOCS) doc/example.rst doc/.static doc/typing.rstgen
 	env PYTHONPATH=. $(PYTHON) tools/docmissing.py
 	env PYTHONPATH=. $(PYTHON) tools/docupdate.py $(VERSION)
 	make PYTHONPATH="`pwd`" VERSION=$(VERSION) RELEASEDATE=$(RELEASEDATE) -C doc clean html epub
@@ -60,6 +62,12 @@ doc/typing.rstgen: src/apswtypes.py tools/types2rst.py
 
 doc/.static:
 	mkdir -p doc/.static
+
+doc-depends: ## pip installs packages needed to build doc
+	$(PYTHON) -m pip install --user -U --break-system-packages --upgrade-strategy eager sphinx sphinx_rtd_theme
+
+dev-depends: ## pip installs packages useful for development (none are necessary)
+	$(PYTHON) -m pip install --user -U --break-system-packages --upgrade-strategy eager yapf mypy pdbpp coverage
 
 # This is probably gnu make specific but only developers use this makefile
 $(GENDOCS): doc/%.rst: src/%.c tools/code2rst.py

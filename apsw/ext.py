@@ -1133,6 +1133,8 @@ def generate_series_sqlite(start=None, stop=0xffffffff, step=1):
     istep = int(step)
     if istart != start or istop != stop or istep != step:
         raise TypeError("generate_series_sqlite only works with integers")
+    if step == 0:
+        step = 1
     if step > 0:
         while start <= stop:
             yield (start, )
@@ -1141,9 +1143,6 @@ def generate_series_sqlite(start=None, stop=0xffffffff, step=1):
         while stop >= start:
             yield (stop, )
             stop += step
-    else:
-        # SQLite doesn't error on step==0
-        pass
 
 
 generate_series_sqlite.columns = ("value", )

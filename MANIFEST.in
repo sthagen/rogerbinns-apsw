@@ -2,12 +2,8 @@
 
 include src/*.c
 include src/faultinject.h
-include src/apswtypes.py
 include src/apswversion.h
 include src/apsw.docstrings
-
-# See https://github.com/rogerbinns/apsw/issues/89
-include MANIFEST.in
 
 # other files
 include apsw/__init__.pyi
@@ -24,3 +20,5 @@ include setup.py
 
 # Long description comes from this
 include README.rst
+
+include setup.apsw

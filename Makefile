@@ -1,8 +1,8 @@
 
-SQLITEVERSION=3.41.2
-APSWSUFFIX=.4
+SQLITEVERSION=3.42.0
+APSWSUFFIX=.0
 
-RELEASEDATE="26 March 2023"
+RELEASEDATE="18 May 2023"
 
 VERSION=$(SQLITEVERSION)$(APSWSUFFIX)
 VERDIR=apsw-$(VERSION)
@@ -27,7 +27,7 @@ help: ## Show this help
 	@egrep -h '\s##\s' $(MAKEFILE_LIST) | sort | \
 	awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-all: src/apswversion.h src/apsw.docstrings apsw/__init__.pyi test docs ## Update generated files, build, test, make doc
+all: src/apswversion.h src/apsw.docstrings apsw/__init__.pyi src/constants.c test docs ## Update generated files, build, test, make doc
 
 tagpush: ## Tag with version and push
 	git tag -af $(SQLITEVERSION)$(APSWSUFFIX)
@@ -40,6 +40,7 @@ clean: ## Cleans up everything
 	for i in 'vgcore.*' '.coverage' '*.pyc' '*.pyo' '*~' '*.o' '*.so' '*.dll' '*.pyd' '*.gcov' '*.gcda' '*.gcno' '*.orig' '*.tmp' 'testdb*' 'testextension.sqlext' ; do \
 		find . -type f -name "$$i" -print0 | xargs -0t --no-run-if-empty rm -f ; done
 	rm -f doc/typing.rstgen doc/example.rst $(GENDOCS)
+	-rm -rf sqlite3/
 
 doc: docs ## Builds all the doc
 
@@ -214,7 +215,8 @@ setup-wheel:  ## Ensures all Python Windows version have wheel support
 	c:/python36-64/python -m pip install --upgrade wheel setuptools
 
 
-source_nocheck: docs src/apswversion.h
+source_nocheck: src/apswversion.h
+	env APSW_NO_GA=t $(MAKE) doc
 	$(PYTHON) setup.py sdist --formats zip --add-doc
 
 source: source_nocheck # Make the source and then check it builds and tests correctly.  This will catch missing files etc

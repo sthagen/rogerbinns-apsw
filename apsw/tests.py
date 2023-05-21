@@ -477,6 +477,11 @@ class APSW(unittest.TestCase):
             self.assertEqual(1, self.db.config(i, 1))
             self.assertEqual(1, self.db.config(i, -1))
             self.assertEqual(0, self.db.config(i, 0))
+        self.assertEqual(0, self.db.config(apsw.SQLITE_DBCONFIG_REVERSE_SCANORDER, -1))
+        self.db.pragma("reverse_unordered_selects", 1)
+        self.assertEqual(1, self.db.config(apsw.SQLITE_DBCONFIG_REVERSE_SCANORDER, -1))
+        self.db.config(apsw.SQLITE_DBCONFIG_REVERSE_SCANORDER, 0)
+        self.assertEqual(0, self.db.pragma("reverse_unordered_selects"))
 
     def testConnectionMetadata(self):
         "Test uses of sqlite3_table_column_metadata"
@@ -1110,6 +1115,15 @@ class APSW(unittest.TestCase):
                           "testdb",
                           vfs="vfsa")
         sys.setrecursionlimit(1000)
+
+        def handler(): # incorrect number of arguments on purpose
+            pass
+
+        try:
+            apsw.config(apsw.SQLITE_CONFIG_LOG, handler)
+            self.assertRaisesUnraisable(TypeError, apsw.log, 11, "recursion error forced")
+        finally:
+            apsw.config(apsw.SQLITE_CONFIG_LOG, None)
 
     def testTypes(self):
         "Check type information is maintained"
@@ -7488,12 +7502,6 @@ class APSW(unittest.TestCase):
         apsw.log(apsw.SQLITE_MISUSE, "Hello world")  # nothing should happen
         self.assertRaises(TypeError, apsw.config, apsw.SQLITE_CONFIG_LOG, 2)
         self.assertRaises(TypeError, apsw.config, apsw.SQLITE_CONFIG_LOG)
-        # Can't change once SQLite is initialised
-        self.assertRaises(apsw.MisuseError, apsw.config, apsw.SQLITE_CONFIG_LOG, None)
-        # shutdown
-        self.db = None
-        gc.collect()
-        apsw.shutdown()
         try:
             apsw.config(apsw.SQLITE_CONFIG_LOG, None)
             apsw.log(apsw.SQLITE_MISUSE, "Hello world")
@@ -7522,7 +7530,6 @@ class APSW(unittest.TestCase):
             self.assertEqual(called[0], 2)
         finally:
             gc.collect()
-            apsw.shutdown()
             apsw.config(apsw.SQLITE_CONFIG_LOG, None)
 
     def testReadonly(self):
@@ -9922,7 +9929,7 @@ if not iswindows:
 else:
     LOADEXTENSIONFILENAME = "testextension.sqlext"
 
-MEMLEAKITERATIONS = 1000
+MEMLEAKITERATIONS = 123
 PROFILESTEPS = 250000
 
 

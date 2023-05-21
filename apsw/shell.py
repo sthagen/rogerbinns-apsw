@@ -344,9 +344,6 @@ OPTIONS include:
     ### but also by random other pieces of code.
     ###
 
-    _binary_type = bytes
-    _basestring = str
-
     # bytes that are ok in C strings - no need for quoting
     _printable = [
         ord(x) for x in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789~!@#$%^&*()`_-+={}[]:;,.<>/?|"
@@ -354,7 +351,7 @@ OPTIONS include:
 
     def _fmt_c_string(self, v):
         "Format as a C string including surrounding double quotes"
-        if isinstance(v, self._basestring):
+        if isinstance(v, str):
             op = ['"']
             for c in v:
                 if c == "\\":
@@ -373,7 +370,7 @@ OPTIONS include:
             return "".join(op)
         elif v is None:
             return '"' + self.nullvalue + '"'
-        elif isinstance(v, self._binary_type):
+        elif isinstance(v, bytes):
             o = lambda x: x
             fromc = chr
             res = ['"']
@@ -399,7 +396,7 @@ OPTIONS include:
 
     def _fmt_json_value(self, v):
         "Format a value."
-        if isinstance(v, self._basestring):
+        if isinstance(v, str):
             # we assume utf8 so only some characters need to be escaed
             op = ['"']
             for c in v:
@@ -428,7 +425,7 @@ OPTIONS include:
             return "".join(op)
         elif v is None:
             return 'null'
-        elif isinstance(v, self._binary_type):
+        elif isinstance(v, bytes):
             o = base64.encodebytes(v).decode("ascii")
             if o[-1] == "\n":
                 o = o[:-1]
@@ -441,9 +438,9 @@ OPTIONS include:
         "Format as python literal"
         if v is None:
             return "None"
-        elif isinstance(v, self._basestring):
+        elif isinstance(v, str):
             return repr(v)
-        elif isinstance(v, self._binary_type):
+        elif isinstance(v, bytes):
             res = ['b"']
             for i in v:
                 if i in self._printable:
@@ -474,9 +471,9 @@ OPTIONS include:
         "Regular text formatting"
         if v is None:
             return self.nullvalue
-        elif isinstance(v, self._basestring):
+        elif isinstance(v, str):
             return v
-        elif isinstance(v, self._binary_type):
+        elif isinstance(v, bytes):
             # sqlite gives back raw bytes!
             return "<Binary data>"
         else:
@@ -787,6 +784,8 @@ Enter SQL statements terminated with a ";"
                 try:
                     command = self.getcompleteline()
                     if command is None:  # EOF
+                        if self.interactive:
+                            self.write(self.stdout, "\n")
                         return
                     self.process_complete_line(command)
                 except:
@@ -2931,6 +2930,20 @@ Enter SQL statements terminated with a ";"
                             res.append(w)
         return res
 
+    # completion for the dot commands are messy because some take
+    # variable numbers of parameters and the meanings of the
+    # parameters differ depending on how many there are.  so
+    # we make some effort for some of the commands
+    _command_params = {
+        "bail": bool,
+        "echo": bool,
+        "exceptions": bool,
+        "explain": bool,
+        "header": bool,
+        "timer": bool,
+    }
+    _command_params["headers"] = _command_params["header"]
+
     _builtin_commands = None
 
     def complete_command(self, line, token, beg, end):
@@ -2946,11 +2959,28 @@ Enter SQL statements terminated with a ";"
             self._builtin_commands = [
                 "." + x[len("command_"):] for x in dir(self) if x.startswith("command_") and x != "command_headers"
             ]
-        if beg == 0:
-            # some commands don't need a space because they take no
-            # params but who cares?
+
+        t = self._get_prev_tokens(line, end)
+        if len(t) <= 1 and token:
             return [x + " " for x in self._builtin_commands if x.startswith(token)]
-        return None
+
+        if t[0] in {"colour", "color"}:
+            completions = list(self._colours.keys())
+        elif t[0] in {"mode"}:
+            if not self._output_modes:
+                self._cache_output_modes()
+            completions = self._output_modes
+        elif t[0] == "help":
+            completions = [v[1:] for v in self._builtin_commands] + ["all"]
+        elif self._command_params.get(t[0], None) is bool:
+            completions = ["on", "off", "ON", "OFF"]
+        elif t[0] in self._command_params:
+            completions = self._command_params[t[0]]
+        else:
+            return None
+
+        return [v for v in sorted(completions) if v.startswith(token)]
+
 
     def get_resource_usage(self):
         """Return a dict of various numbers (ints or floats).  The
@@ -3061,9 +3091,9 @@ Enter SQL statements terminated with a ";"
             c = self.colour
             if val is None:
                 return self.vnull + formatted + self.vnull_
-            if isinstance(val, Shell._basestring):
+            if isinstance(val, str):
                 return self.vstring + formatted + self.vstring_
-            if isinstance(val, Shell._binary_type):
+            if isinstance(val, bytes):
                 return self.vblob + formatted + self.vblob_
             # must be a number - we don't distinguish between float/int
             return self.vnumber + formatted + self.vnumber_

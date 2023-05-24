@@ -10,6 +10,8 @@ import sys
 import apsw
 import shlex
 import os
+import io
+import inspect
 import csv
 import re
 import textwrap
@@ -18,7 +20,8 @@ import codecs
 import base64
 import argparse
 import contextlib
-import io
+import traceback
+import gc
 
 from typing import TextIO, Optional
 
@@ -79,7 +82,13 @@ class Shell:
         types of errors doesn't matter."""
         pass
 
-    def __init__(self, stdin: Optional[TextIO] = None, stdout=None, stderr=None, encoding: str = "utf8", args=None, db=None):
+    def __init__(self,
+                 stdin: Optional[TextIO] = None,
+                 stdout=None,
+                 stderr=None,
+                 encoding: str = "utf8",
+                 args=None,
+                 db=None):
         """Create instance, set defaults and do argument processing."""
         # The parameter doc has to be in main class doc as sphinx
         # ignores any described here
@@ -109,15 +118,11 @@ class Shell:
 
         # other stuff
         self.set_encoding(encoding)
-        if stdin is None: stdin = sys.stdin
-        if stdout is None: stdout = sys.stdout
-        if stderr is None: stderr = sys.stderr
-        self.stdin = stdin
-        self.stdout = stdout
-        self._original_stdout = stdout
-        self.stderr = stderr
+        self.stdin = stdin or sys.stdin
+        self._original_stdout = self.stdout = stdout or sys.stdout
+        self.stderr = stderr or sys.stderr
 
-        # default to qbox output
+        # default to box output
         if self._using_a_terminal() and hasattr(self, "output_box"):
             self.output = self.output_box
             self.box_options = {
@@ -125,7 +130,7 @@ class Shell:
                 "string_sanitize": 1,
                 "null": "NULL",
                 "truncate": 4096,
-                "text_width": 0,
+                "text_width": self._terminal_width(),
                 "use_unicode": True
             }
 
@@ -144,7 +149,7 @@ class Shell:
         if args:
             try:
                 self.process_args(args)
-            except:
+            except Exception:
                 if len(self._input_descriptions):
                     self._input_descriptions.append("Processing command line arguments")
                 self.handle_exception()
@@ -550,7 +555,6 @@ OPTIONS include:
         fixdata = lambda x: x
 
         if header:
-            import io
             s = io.StringIO()
             kwargs = {}
             if self.separator == ",":
@@ -692,7 +696,6 @@ OPTIONS include:
         "Outputs using line drawing and auto sizing columns"
         if self._fqt_kwargs is None:
             # figure out default args
-            import inspect
             sig = inspect.signature(apsw.ext.format_query_table)
             self._fqt_kwargs = {
                 k: v.default
@@ -702,12 +705,7 @@ OPTIONS include:
         kwargs = self._fqt_kwargs.copy()
         kwargs.update(self.box_options)
         if kwargs["text_width"] < 1:
-            kwargs["text_width"] = 80
-            if self.interactive:
-                try:
-                    kwargs["text_width"] = os.get_terminal_size(self.stdout.fileno()).columns
-                except Exception:
-                    pass
+            kwargs["text_width"] = self._terminal_width()
 
         kwargs.update({"colour": self.colour != self._colours["off"]})
 
@@ -733,22 +731,26 @@ OPTIONS include:
     ### Various routines
     ###
 
-    def cmdloop(self, intro=None):
+    def cmdloop(self, intro=None, transient=None):
         """Runs the main interactive command loop.
 
         :param intro: Initial text banner to display instead of the
            default.  Make sure you newline terminate it.
+        :param transient: Additional message about being connected to
+          a transient in memory database
         """
         if intro is None:
-            intro = """
-SQLite version %s (APSW %s)
+            intro = f"""
+SQLite version { apsw.sqlitelibversion() } (APSW { apsw.apswversion() })
 Enter ".help" for instructions
-Enter SQL statements terminated with a ";"
-""" % (apsw.sqlitelibversion(), apsw.apswversion())
+"""
             intro = intro.lstrip()
         if self.interactive and intro:
             c = self.colour
             self.write(self.stdout, c.intro + intro + c.intro_)
+            if not self.dbfilename:
+                transient = transient or "Connected to a transient in-memory database.\n"
+                self.write(self.stdout, c.transient + transient + c.transient_)
 
         using_readline = False
         try:
@@ -760,14 +762,7 @@ Enter SQL statements terminated with a ";"
                 using_readline = True
                 try:
                     readline.read_history_file(os.path.expanduser(self.history_file))
-                except:
-                    # We only expect IOError here but if the history
-                    # file does not exist and this code has been
-                    # compiled into the module it is possible to get
-                    # an IOError that doesn't match the IOError from
-                    # Python parse time resulting in an IOError
-                    # exception being raised.  Consequently we just
-                    # catch all exceptions.
+                except IOError:
                     pass
         except ImportError:
             pass
@@ -846,7 +841,7 @@ Enter SQL statements terminated with a ";"
                     for k, v in vars:
                         try:
                             v = repr(v)[:80]
-                        except:
+                        except Exception:
                             v = "<Unable to convert to string>"
                         self.write(self.stderr, "%10s = %s\n" % (k, v))
                 self.write(self.stderr, "\n%s: %s\n" % (eclass, repr(eval)))
@@ -924,8 +919,8 @@ Enter SQL statements terminated with a ";"
                         fixws(query[offset:][:35].decode("utf8"))
                     print("  ", before + after, file=self.stderr)
                     print("   " + (" " * len(before)) + "^--- error here", file=self.stderr)
-                    qd[4]._handle_exception_saw_this = True
-                    raise qd[4]
+                qd[4]._handle_exception_saw_this = True
+                raise qd[4]
             timing_start = self.get_resource_usage()
 
             column_names = None
@@ -1023,14 +1018,24 @@ Enter SQL statements terminated with a ";"
         """
         self.bail = self._boolean_command("bail", cmd)
 
+    def command_cd(self, cmd):
+        """cd ?DIR: Changes current directory
+
+        If no directory suppliend then change to home directory"""
+        if len(cmd) > 1:
+            raise self.Error("Too many directories")
+        d = cmd and cmd[0] or os.path.expanduser("~")
+        if not os.path.isdir(d):
+            raise self.Error(f"'{ d }' is not a directory")
+        os.chdir(d)
+
     def command_colour(self, cmd=[]):
         """colour SCHEME: Selects a colour scheme
 
-        Residents of both countries that have not adopted the metric
-        system may also spell this command without a 'u'.  If using a
-        colour terminal in interactive mode then output is
+        If using a colour terminal in interactive mode then output is
         automatically coloured to make it more readable.  Use 'off' to
-        turn off colour, and no name or 'default' for the default.
+        turn off colour, and no name or 'default' for the default colour
+        scheme.
         """
         if len(cmd) > 1:
             raise self.Error("Too many colour schemes")
@@ -1097,7 +1102,7 @@ Enter SQL statements terminated with a ";"
         outputstrencoding = getattr(self.stdout, "encoding", "ascii")
         try:
             codecs.lookup(outputstrencoding)
-        except:
+        except Exception:
             outputstrencoding = "ascii"
 
         def unicodify(s):
@@ -1411,16 +1416,14 @@ Enter SQL statements terminated with a ";"
         self.exceptions = self._boolean_command("exceptions", cmd)
 
     def command_exit(self, cmd):
-        """exit:Exit this program"""
-        if len(cmd):
-            raise self.Error("Exit doesn't take any parameters")
-        sys.exit(0)
-
-    def command_quit(self, cmd):
-        """quit:Exit this program"""
-        if len(cmd):
-            raise self.Error("Quit doesn't take any parameters")
-        sys.exit(0)
+        """exit ?CODE?: Exit this program"""
+        if len(cmd) > 1:
+            raise self.Error("Too many parameters for exit")
+        try:
+            c = 0 if not cmd else int(cmd[0])
+        except ValueError:
+            raise self.Error(f"{ cmd[0] } isn't an exit code")
+        sys.exit(c)
 
     def command_explain(self, cmd):
         """explain ON|OFF: Set output mode suitable for explain (default OFF)
@@ -1678,13 +1681,13 @@ Enter SQL statements terminated with a ";"
                     raise self.Error("row %d has %d columns but should have %d" % (row, len(line), ncols))
                 try:
                     cur.execute(sql, line)
-                except:
+                except Exception:
                     self.write(self.stderr, "Error inserting row %d" % (row, ))
                     raise
                 row += 1
             self.db.execute("COMMIT")
 
-        except:
+        except Exception:
             if final:
                 self.db.execute(final)
             raise
@@ -1837,7 +1840,7 @@ Enter SQL statements terminated with a ";"
                         possibles.append((format.copy(), ncols, lines, datas))
                 except UnicodeDecodeError:
                     encodingissue = True
-                except:
+                except Exception:
                     s = str(sys.exc_info()[1])
                     if s not in errors:
                         errors.append(s)
@@ -1890,7 +1893,7 @@ Enter SQL statements terminated with a ";"
 
             c.execute("COMMIT")
             self.write(self.stdout, "Auto-import into table \"%s\" complete\n" % (tablename, ))
-        except:
+        except Exception:
             if final:
                 self.db.execute(final)
             raise
@@ -1965,10 +1968,19 @@ Enter SQL statements terminated with a ";"
             raise self.Error("load takes one or two parameters")
         try:
             self.db.enableloadextension(True)
-        except:
+        except Exception:
             raise self.Error("Extension loading is not supported")
 
         self.db.loadextension(*cmd)
+
+    def log_handler(self, code, message):
+        code = f"( { code } - { apsw.mapping_result_codes.get(code, 'unknown') } ) "
+        self.write(self.stderr, self.colour.error + code + message + "\n" + self.colour.error_ )
+
+    def command_log(self, cmd):
+        "log ON|OFF: Shows SQLite log messages"
+        setting = self._boolean_command("bail", cmd)
+        apsw.config(apsw.SQLITE_CONFIG_LOG, self.log_handler if setting else None)
 
     _output_modes = None
 
@@ -2054,8 +2066,14 @@ Enter SQL statements terminated with a ";"
                        action="store_true",
                        dest="use_unicode",
                        help="Use ascii line drawing like +=-+ ")
-        p.add_argument("--word-wrap", action="store_true", dest="word_wrap", help="Wrap text at word boundaries [%(default)s]")
-        p.add_argument("--no-word-wrap", action="store_false", dest="word_wrap", help="Wrap at column width ignoring words")
+        p.add_argument("--word-wrap",
+                       action="store_true",
+                       dest="word_wrap",
+                       help="Wrap text at word boundaries [%(default)s]")
+        p.add_argument("--no-word-wrap",
+                       action="store_false",
+                       dest="word_wrap",
+                       help="Wrap at column width ignoring words")
         text = io.StringIO()
         try:
             with contextlib.redirect_stderr(text):
@@ -2139,7 +2157,6 @@ Enter SQL statements terminated with a ";"
                             break
                         # under windows tag alongs can delay being able to
                         # delete after we have closed the file
-                        import gc
                         gc.collect(2)
                         time.sleep(.05 * retry)
                 else:
@@ -2252,10 +2269,8 @@ Enter SQL statements terminated with a ";"
                         if line is None:
                             break
                         self.process_complete_line(line)
-                except:
-                    eval = sys.exc_info()[1]
-                    if not isinstance(eval, SystemExit):
-                        self._append_input_description()
+                except Exception:
+                    self._append_input_description()
                     raise
 
             finally:
@@ -2433,7 +2448,7 @@ Enter SQL statements terminated with a ";"
             raise self.Error("timeout takes a number")
         try:
             t = int(cmd[0])
-        except:
+        except ValueError:
             raise self.Error("%s is not a number" % (cmd[0], ))
         self.db.setbusytimeout(t)
 
@@ -2448,11 +2463,26 @@ Enter SQL statements terminated with a ";"
         if self._boolean_command("timer", cmd):
             try:
                 self.get_resource_usage()
-            except:
+            except Exception:
                 raise self.Error("Timing not supported by this Python version/platform")
             self.timer = True
         else:
             self.timer = False
+
+    def command_version(self, cmd):
+        "version: Displays SQLite, APSW, and Python version information"
+        if cmd:
+            raise self.Error("No parameters taken")
+        versions = {
+            "SQLite": f"{ apsw.sqlitelibversion() } { apsw.sqlite3_sourceid() }",
+            "Python": f"{ sys.version } - { sys.executable }",
+            "APSW": apsw.apswversion(),
+            "APSW file": apsw.__file__,
+            "Amalgamation": apsw.using_amalgamation,
+        }
+        maxw=max(len(k) for k in versions)
+        for k, v in versions.items():
+            self.write(self.stdout, " "*(maxw-len(k)) + f"{ k }  { v}\n")
 
     def command_width(self, cmd):
         """width NUM NUM ...: Set the column widths for "column" mode
@@ -2467,36 +2497,23 @@ Enter SQL statements terminated with a ";"
         for i in cmd:
             try:
                 w.append(int(i))
-            except:
+            except ValueError:
                 raise self.Error("'%s' is not a valid number" % (i, ))
         self.widths = w
 
     def _terminal_width(self):
         """Works out the terminal width which is used for word wrapping
         some output (eg .help)"""
+
+        w = 80
         try:
-            if sys.platform == "win32":
-                import ctypes, struct
-                h = ctypes.windll.kernel32.GetStdHandle(-12)  # -12 is stderr
-                buf = ctypes.create_string_buffer(22)
-                if ctypes.windll.kernel32.GetConsoleScreenBufferInfo(h, buf):
-                    _, _, _, _, _, left, top, right, bottom, _, _ = struct.unpack("hhhhHhhhhhh", buf.raw)
-                    return right - left
-                raise Exception()
-            else:
-                # posix
-                import struct, fcntl, termios
-                s = struct.pack('HHHH', 0, 0, 0, 0)
-                x = fcntl.ioctl(2, termios.TIOCGWINSZ, s)
-                return struct.unpack('HHHH', x)[1]
-        except:
-            try:
-                v = int(os.getenv("COLUMNS"))
-                if v < 10:
-                    return 80
-                return v
-            except:
-                return 80
+            # we don't use shutil version because it can't be passed a
+            # file descriptor
+            if self.stdout.isatty():
+                w = os.get_terminal_size(self.stdout.fileno()).columns
+        except Exception:
+            pass
+        return w
 
     def push_output(self):
         """Saves the current output settings onto a stack.  See
@@ -2596,11 +2613,6 @@ Enter SQL statements terminated with a ";"
             else:
                 line = self.stdin.readline()  # includes newline unless last line of file doesn't have one
             self.input_line_number += 1
-            if sys.version_info < (3, 0):
-                if type(line) != unicode:
-                    enc = getattr(self.stdin, "encoding", self.encoding[0])
-                    if not enc: enc = self.encoding[0]
-                    line = line.decode(enc)
         except EOFError:
             return None
         if len(line) == 0:  # always a \n on the end normally so this is EOF
@@ -2705,10 +2717,9 @@ Enter SQL statements terminated with a ";"
                     self.completions = self.complete_command(line, token, beg, end)
                 else:
                     self.completions = self.complete_sql(line, token, beg, end)
-            except:
+            except Exception:
                 # Readline swallows any exceptions we raise.  We
                 # shouldn't be raising any so this is to catch that
-                import traceback
                 traceback.print_exc()
                 raise
 
@@ -2981,7 +2992,6 @@ Enter SQL statements terminated with a ";"
 
         return [v for v in sorted(completions) if v.startswith(token)]
 
-
     def get_resource_usage(self):
         """Return a dict of various numbers (ints or floats).  The
         .timer command shows the difference between before and after
@@ -3137,6 +3147,8 @@ Enter SQL statements terminated with a ";"
                                         error_=d.bold_ + d.fg_,
                                         intro=d.fg_blue + d.bold,
                                         intro_=d.bold_ + d.fg_,
+                                        transient=d.fg_green,
+                                        transient_=d.fg_,
                                         summary=d.fg_blue + d.bold,
                                         summary_=d.bold_ + d.fg_,
                                         header=d.underline,
@@ -3156,7 +3168,7 @@ Enter SQL statements terminated with a ";"
         del n
         del x
         del v
-    except:
+    except Exception:
         pass
 
 
@@ -3188,7 +3200,6 @@ def main() -> None:
             pass
         else:
             # Where did this exception come from?
-            import traceback
             traceback.print_exc()
         sys.exit(1)
 

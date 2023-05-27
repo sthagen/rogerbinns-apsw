@@ -8597,9 +8597,9 @@ insert into xxblah values(3);
         # deliberately leave exceptions on
 
         ###
-        ### Command - exit & quit
+        ### Command - exit
         ###
-        for i in ".exit", ".quit":
+        for i in (".exit",):
             reset()
             cmd(i)
             self.assertRaises(SystemExit, s.cmdloop)
@@ -8677,8 +8677,8 @@ insert into xxblah values(3);
         # screw up terminal width
         origtw = s._terminal_width
 
-        def tw(*args):
-            return 7
+        def tw(minimum):
+            return minimum
 
         s._terminal_width = tw
         reset()

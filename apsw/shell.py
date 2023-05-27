@@ -94,6 +94,7 @@ class Shell:
         # ignores any described here
         self.exceptions = False
         self.history_file = "~/.sqlite_history"
+        self.bindings = {}
         self._db = None
         self.dbfilename = None
         if db:
@@ -130,7 +131,7 @@ class Shell:
                 "string_sanitize": 1,
                 "null": "NULL",
                 "truncate": 4096,
-                "text_width": self._terminal_width(),
+                "text_width": self._terminal_width(32),
                 "use_unicode": True
             }
 
@@ -705,7 +706,7 @@ OPTIONS include:
         kwargs = self._fqt_kwargs.copy()
         kwargs.update(self.box_options)
         if kwargs["text_width"] < 1:
-            kwargs["text_width"] = self._terminal_width()
+            kwargs["text_width"] = self._terminal_width(32)
 
         kwargs.update({"colour": self.colour != self._colours["off"]})
 
@@ -872,6 +873,10 @@ Enter ".help" for instructions
             pass
         except apsw.Error as e:
             return (sql[:len(saved)], sql[len(saved):], str(e), e.error_offset, e)
+        except KeyError as e:
+            var = e.args[0]
+            return (None, None, f"No binding present for '{ var }' - use .parameter set { var } VALUE to provide one",
+                    -1, e)
         return (sql[:len(saved)], sql[len(saved):], None, None)
 
     def process_sql(self, sql, bindings=None, internal=False, summary=None):
@@ -901,15 +906,15 @@ Enter ".help" for instructions
                 s = s[:4096] + "..."
             return s
 
+        if not internal and bindings is None:
+            bindings = self.bindings
+
         while sql.strip():
             qd = self._query_details(sql, bindings)
             sql = qd[1]
             if not internal:
                 if self.echo:
-                    if bindings:
-                        self.write(self.stderr, "%s [%s]\n" % (fmt_sql(qd[0]), bindings))
-                    else:
-                        self.write(self.stderr, fmt_sql(qd[0]) + "\n")
+                    self.write(self.stderr, fmt_sql(qd[0]) + "\n")
             if qd[2]:
                 self.write(self.stderr, f"{ self.colour.error }{ qd[2] }{ self.colour.error_}\n")
                 if qd[3] >= 0:
@@ -953,21 +958,26 @@ Enter ".help" for instructions
             if self.timer:
                 self.display_timing(timing_start, self.get_resource_usage())
 
-    def process_command(self, cmd):
-        """Processes a dot command.  It is split into parts using the
-        `shlex.split
-        <http://docs.python.org/library/shlex.html#shlex.split>`__
-        function which is roughly the same method used by Unix/POSIX
+    def process_command(self, command):
+        """Processes a dot command.
+
+        It is split into parts using :func:`shlex.split`
+        which is roughly the same method used by Unix/POSIX
         shells.
         """
         if self.echo:
-            self.write(self.stderr, cmd + "\n")
-        cmd = shlex.split(cmd)
+            self.write(self.stderr, command + "\n")
+        cmd = shlex.split(command)
         assert cmd[0][0] == "."
         cmd[0] = cmd[0][1:]
         fn = getattr(self, "command_" + cmd[0], None)
         if not fn:
             raise self.Error("Unknown command \"%s\".  Enter \".help\" for help" % (cmd[0], ))
+        # special handling for .parameter set because we need the value to preserve quoting
+        # '33' and 33 are different
+        if len(cmd) > 3 and cmd[0] == "parameter" and cmd[1] == "set":
+            pos = command.index(cmd[2], command.index("set") + 4) + len(cmd[2]) + 1
+            cmd = cmd[:3] + [command[pos:]]
         res = fn(cmd[1:])
 
     ###
@@ -1547,19 +1557,24 @@ Enter ".help" for instructions
                 if len(multi.strip()) == 0:  # All whitespace
                     multi = None
                 else:
-                    multi = multi.strip("\n")
-                    # we need to keep \n\n as a newline but turn all others into spaces
-                    multi = multi.replace("\n\n", "\x00")
-                    multi = multi.replace("\n", " ")
-                    multi = multi.replace("\x00", "\n\n")
-                    multi = multi.split("\n\n")
+                    # break into paragraphs
+                    lines = multi.strip("\n").split("\n")
+                    # make whitespace only lines be empty
+                    for i in range(len(lines)):
+                        if not lines[i].strip():
+                            lines[i] = ""
+                    multi = [lines[0]]
+                    for l in lines[1:]:
+                        if multi[-1] and l and l.lstrip() == l:
+                            multi[-1] += " " + l
+                        else:
+                            multi.append(l)
+
                 self._help_info[c] = ('.' + firstline[0].strip(), firstline[1].strip(), multi)
 
         self.write(self.stderr, "\n")
 
-        tw = self._terminal_width()
-        if tw < 32:
-            tw = 32
+        tw = self._terminal_width(32)
         if len(cmd) == 0:
             commands = list(self._help_info.keys())
             commands.sort()
@@ -1606,8 +1621,6 @@ Enter ".help" for instructions
                     # detailed message
                     for i, para in enumerate(hi[2]):
                         out.append(textwrap.fill(para, tw) + "\n")
-                        if i < len(hi[2]) - 1:
-                            out.append("\n")
                 # if not first one then print separator header
                 if command != cmd[0]:
                     self.write(self.stderr, "\n" + "=" * tw + "\n")
@@ -1634,11 +1647,8 @@ Enter ".help" for instructions
         values into that and then use casting.
 
           CREATE TEMPORARY TABLE import(a,b,c);
-
           .import filename import
-
           CREATE TABLE final AS SELECT cast(a as BLOB), cast(b as INTEGER), cast(c as CHAR) from import;
-
           DROP TABLE import;
 
         You can also get more sophisticated using the SQL CASE
@@ -1975,7 +1985,7 @@ Enter ".help" for instructions
 
     def log_handler(self, code, message):
         code = f"( { code } - { apsw.mapping_result_codes.get(code, 'unknown') } ) "
-        self.write(self.stderr, self.colour.error + code + message + "\n" + self.colour.error_ )
+        self.write(self.stderr, self.colour.error + code + message + "\n" + self.colour.error_)
 
     def command_log(self, cmd):
         "log ON|OFF: Shows SQLite log messages"
@@ -2206,6 +2216,48 @@ Enter ".help" for instructions
                 old.close()
         finally:
             self._out_colour()
+
+    def command_parameter(self, cmd):
+        """parameter CMD ...:  Maintain named bindings you can use in your queries.
+
+        Specify a subcommand:
+
+           list            -- shows current bindings
+           clear           -- deletes all bindings
+           unset NAME      -- deletes named binding
+           set NAME VALUE  -- sets binding to VALUE
+
+        The value must be a valid SQL literal.  For example
+        3 will be an integer 3 while '3' will be a string.
+        """
+        if cmd:
+            if len(cmd) == 1 and cmd[0] in {"clear", "init"}:
+                self.bindings = {}
+                return
+            if len(cmd) == 1 and cmd[0] == "list":
+                if not self.bindings:
+                    self.write(self.stdout, "No parameters set\n")
+                    return
+                w = min(10, max(len(k) for k in self.bindings.keys()) + 1)
+                for k, v in sorted(self.bindings.items()):
+                    self.write(self.stdout, k + " " * (w - len(k)))
+                    self.write(self.stdout, self.colour.colour_value(v, apsw.format_sql_value(v)))
+                    self.write(self.stdout, "\n")
+                return
+            if len(cmd) == 2 and cmd[0] == "unset":
+                try:
+                    del self.bindings[cmd[1]]
+                    return
+                except KeyError:
+                    raise self.Error(f"'{ cmd[1] }' is not in parameters")
+            if len(cmd) == 3 and cmd[0] == "set":
+                try:
+                    v = self.db.execute(f"select ({ cmd[2] })").get
+                except Exception:
+                    raise self.Error(f"Does not appear to be a valid SQLite value: { cmd[2] }")
+                self.bindings[cmd[1]] = v
+                return
+        raise self.Error(".parameter command not understood.  Use .help parameter to get usage")
 
     def command_print(self, cmd):
         """print STRING: print the literal STRING
@@ -2480,9 +2532,9 @@ Enter ".help" for instructions
             "APSW file": apsw.__file__,
             "Amalgamation": apsw.using_amalgamation,
         }
-        maxw=max(len(k) for k in versions)
+        maxw = max(len(k) for k in versions)
         for k, v in versions.items():
-            self.write(self.stdout, " "*(maxw-len(k)) + f"{ k }  { v}\n")
+            self.write(self.stdout, " " * (maxw - len(k)) + f"{ k }  { v}\n")
 
     def command_width(self, cmd):
         """width NUM NUM ...: Set the column widths for "column" mode
@@ -2501,7 +2553,7 @@ Enter ".help" for instructions
                 raise self.Error("'%s' is not a valid number" % (i, ))
         self.widths = w
 
-    def _terminal_width(self):
+    def _terminal_width(self, minimum):
         """Works out the terminal width which is used for word wrapping
         some output (eg .help)"""
 
@@ -2513,7 +2565,7 @@ Enter ".help" for instructions
                 w = os.get_terminal_size(self.stdout.fileno()).columns
         except Exception:
             pass
-        return w
+        return max(w, minimum)
 
     def push_output(self):
         """Saves the current output settings onto a stack.  See
@@ -2975,6 +3027,8 @@ Enter ".help" for instructions
         if len(t) <= 1 and token:
             return [x + " " for x in self._builtin_commands if x.startswith(token)]
 
+        completions = []
+
         if t[0] in {"colour", "color"}:
             completions = list(self._colours.keys())
         elif t[0] in {"mode"}:
@@ -2983,14 +3037,17 @@ Enter ".help" for instructions
             completions = self._output_modes
         elif t[0] == "help":
             completions = [v[1:] for v in self._builtin_commands] + ["all"]
+        elif t[0] == "parameter":
+            if len(t) == 1 or (len(t) == 2 and token):
+                completions = ["clear", "list", "unset ", "set "]
+            elif len(t) >= 2 and t[1] == "unset" and (len(t) == 2 or token):
+                completions = list(self.bindings.keys())
         elif self._command_params.get(t[0], None) is bool:
             completions = ["on", "off", "ON", "OFF"]
         elif t[0] in self._command_params:
             completions = self._command_params[t[0]]
-        else:
-            return None
 
-        return [v for v in sorted(completions) if v.startswith(token)]
+        return [v for v in sorted(completions) if v.startswith(token) and v != token]
 
     def get_resource_usage(self):
         """Return a dict of various numbers (ints or floats).  The

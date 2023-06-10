@@ -1195,7 +1195,7 @@ finally:
   <https://sqlite.org/c3ref/profile.html>`__
 
 
--* sqlite3_trace_v2
+  -* sqlite3_trace_v2
 */
 
 static PyObject *
@@ -3460,10 +3460,10 @@ Connection_filecontrol(Connection *self, PyObject *args, PyObject *kwds)
       return NULL;
   }
 
-  PYSQLITE_CON_CALL(res = sqlite3_file_control(self->db, dbname, op, pointer));
+  PYSQLITE_VOID_CALL(res = sqlite3_file_control(self->db, dbname, op, pointer));
 
   if (res != SQLITE_OK && res != SQLITE_NOTFOUND)
-    SET_EXC(res, self->db);
+    SET_EXC(res, NULL);
 
   if (PyErr_Occurred())
     return NULL;
@@ -4030,6 +4030,13 @@ Connection_exit(Connection *self, PyObject *args, PyObject *kwds)
     :param op: A `configuration operation
       <https://sqlite.org/c3ref/c_dbconfig_enable_fkey.html>`__
     :param args: Zero or more arguments as appropriate for *op*
+
+    This is how to get the fkey setting::
+
+      val = config(apsw.SQLITE_DBCONFIG_ENABLE_FKEY, -1)
+
+    A parameter of zero would turn it off, 1 turns on, and negative
+    leaves unaltered.  The effective value is always returned.
 
     -* sqlite3_db_config
 */
@@ -4645,6 +4652,90 @@ finally:
   Py_RETURN_NONE;
 }
 
+/** .. method:: read(schema: str, which: int, offset: int, amount: int) -> tuple[bool, bytes]
+
+  Invokes the underlying VFS method to read data from the database.  It
+  is strongly recommended to read aligned complete pages, since that is
+  only what SQLite does.
+
+  `schema` is `main`, `temp`, or the name of an attached database.
+
+  `which` is 0 for the database file, 1 for the journal.
+
+  The return value is a tuple of a boolean indicating a complete read if
+  True, and the bytes read which will always be the amount requested
+  in size.
+
+  `SQLITE_IOERR_SHORT_READ` will give a `False` value for the boolean,
+  and there is no way of knowing how much was read.
+
+  Implemented using `SQLITE_FCNTL_FILE_POINTER` and `SQLITE_FCNTL_JOURNAL_POINTER`.
+  Errors will usually be generic `SQLITE_ERROR` with no message.
+
+  -* sqlite3_file_control
+*/
+static PyObject *
+Connection_read(Connection *self, PyObject *args, PyObject *kwds)
+{
+  const char *schema = NULL;
+  int amount, which, opcode;
+  sqlite3_int64 offset;
+  int res;
+  sqlite3_file *fp = NULL;
+  PyObject *bytes = NULL;
+
+  CHECK_USE(NULL);
+  CHECK_CLOSED(self, NULL);
+
+  {
+    static char *kwlist[] = {"schema", "which", "offset", "amount", NULL};
+    Connection_read_CHECK;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "siLi:" Connection_read_USAGE, kwlist, &schema, &which, &offset, &amount))
+      return NULL;
+  }
+
+  switch (which)
+  {
+  case 0:
+    opcode = SQLITE_FCNTL_FILE_POINTER;
+    break;
+  case 1:
+    opcode = SQLITE_FCNTL_JOURNAL_POINTER;
+    break;
+  default:
+    return PyErr_Format(PyExc_ValueError, "Unexpected value for which %d", which);
+  }
+
+  if (amount < 1)
+    return PyErr_Format(PyExc_ValueError, "amount needs to be greater than zero, not %d", amount);
+
+  if (offset < 0)
+    return PyErr_Format(PyExc_ValueError, "offset needs to non-negative, not %lld", offset);
+
+  bytes = PyBytes_FromStringAndSize(NULL, amount);
+  if (!bytes)
+    goto error;
+
+  PYSQLITE_VOID_CALL(res = sqlite3_file_control(self->db, schema, opcode, &fp));
+  if (res != SQLITE_OK || !fp || !fp->pMethods || !fp->pMethods->xRead)
+  {
+    SET_EXC(res ? res : SQLITE_ERROR, NULL); /* errmsg is not set by file control */
+    goto error;
+  }
+  PYSQLITE_VOID_CALL(res = fp->pMethods->xRead(fp, PyBytes_AS_STRING(bytes), amount, offset));
+  if (res != SQLITE_OK && res != SQLITE_IOERR_SHORT_READ)
+  {
+    SET_EXC(res, NULL);
+    goto error;
+  }
+
+  return Py_BuildValue("ON", (res == SQLITE_OK) ? Py_True : Py_False, bytes);
+
+error:
+  Py_XDECREF(bytes);
+  return NULL;
+}
+
 /** .. attribute:: filename
   :type: str
 
@@ -5098,6 +5189,7 @@ static PyMethodDef Connection_methods[] = {
     {"vtab_config", (PyCFunction)Connection_vtab_config, METH_VARARGS | METH_KEYWORDS, Connection_vtab_config_DOC},
     {"vtab_on_conflict", (PyCFunction)Connection_vtab_on_conflict, METH_NOARGS, Connection_vtab_on_conflict_DOC},
     {"pragma", (PyCFunction)Connection_pragma, METH_VARARGS | METH_KEYWORDS, Connection_pragma_DOC},
+    {"read", (PyCFunction)Connection_read, METH_VARARGS | METH_KEYWORDS, Connection_read_DOC},
     {0, 0, 0, 0} /* Sentinel */
 };
 

@@ -464,6 +464,15 @@ class APSW(unittest.TestCase):
         self.assertRaises(TypeError, self.db.filecontrol, "main", 1001, "foo")
         self.assertRaises(OverflowError, self.db.filecontrol, "main", 1001, 45236748972389749283)
         self.assertEqual(self.db.filecontrol("main", 1001, 25), False)
+        self.assertRaises(apsw.SQLError, self.db.read, "kljlkjlkj", 0, 0, 10)
+        self.assertRaises(ValueError, self.db.read, "kljlkjlkj", 0, -1, -1)
+        self.assertRaises(ValueError, self.db.read, "kljlkjlkj", 0, 0, -1)
+        self.assertRaises(ValueError, self.db.read, "main", 77, 0, 1)
+        self.assertEqual((False, b"\0" * 10), self.db.read("main", 0, 50 * 1024 * 1024, 10))
+        # db and journal are empty unless we do something
+        self.db.execute("create table foo(x); begin immediate; insert into foo values(3); insert into foo values(4)")
+        self.assertEqual((True, b'SQLite format 3'), self.db.read("main", 0, 0, 15))
+        self.assertTrue(any(b != 0 for b in self.db.read("main", 1, 0, 15)[1]))
 
     def testConnectionConfig(self):
         "Test Connection.config function"
@@ -1109,14 +1118,13 @@ class APSW(unittest.TestCase):
         sys.setrecursionlimit(200)
         print("A message about RecursionError is possible, and what is being tested", file=sys.stderr)
         self.assertRaises((apsw.SQLError, RecursionError),
-                          self.assertRaisesUnraisable,
-                          (apsw.SQLError, RecursionError),
+                          self.assertRaisesUnraisable, (apsw.SQLError, RecursionError),
                           apsw.Connection,
                           "testdb",
                           vfs="vfsa")
         sys.setrecursionlimit(1000)
 
-        def handler(): # incorrect number of arguments on purpose
+        def handler():  # incorrect number of arguments on purpose
             pass
 
         try:
@@ -4822,13 +4830,14 @@ class APSW(unittest.TestCase):
     def testIssue433(self):
         "Comments and exec tracing"
         p = None
+
         def et(cursor, sql, bindings):
             nonlocal p
             p = (cursor, sql, bindings)
             return False
 
         cur = self.db.cursor()
-        cur.exectrace=et
+        cur.exectrace = et
 
         for query in ("-- foo", "select 3;;;; "):
             with contextlib.suppress(apsw.ExecTraceAbort):
@@ -8587,7 +8596,7 @@ insert into xxblah values(3);
         isnotempty(fh[2])
         self.assertTrue(len(get(fh[2]).split("\n")) < 5)
         reset()
-        s.db.createscalarfunction("make_error", lambda: 1/0)
+        s.db.createscalarfunction("make_error", lambda: 1 / 0)
         cmd(".exceptions on\nselect make_error();")
         s.cmdloop()
         isempty(fh[1])
@@ -8599,7 +8608,7 @@ insert into xxblah values(3);
         ###
         ### Command - exit
         ###
-        for i in (".exit",):
+        for i in (".exit", ):
             reset()
             cmd(i)
             self.assertRaises(SystemExit, s.cmdloop)
@@ -9121,7 +9130,6 @@ shell.write(shell.stdout, "hello world\\n")
         for f in fh:
             f.close()
 
-
     # Note that faults fire only once, so there is no need to reset
     # them.  The testing for objects bigger than 2GB is done in
     # testLargeObjects
@@ -9466,8 +9474,9 @@ shell.write(shell.stdout, "hello world\\n")
         self.assertEqual(vals, {i for i in range(1, 10 + 1)})
         vals = {row[0] for row in self.db.execute("select value from g2(1, 10, 2)")}
         self.assertEqual(vals, {i for i in range(1, 10 + 1, 2)})
-        self.assertEqual(self.db.execute("select *,start,stop from g2(1,10) where step=0").get,
-                         self.db.execute("select *,start,stop from g2(1,10) where step=1").get)
+        self.assertEqual(
+            self.db.execute("select *,start,stop from g2(1,10) where step=0").get,
+            self.db.execute("select *,start,stop from g2(1,10) where step=1").get)
         self.assertRaises(ValueError, self.db.execute, "select * from g2 where stop=10 and step=1")
         self.assertRaises(TypeError, self.db.execute, "select * from g2(0.1, 1, 1)")
 
@@ -9817,6 +9826,7 @@ SELECT group_concat(rtrim(t),x'0a') FROM a;
         import multiprocessing
         val = multiprocessing.Value("i", 0)
         p = multiprocessing.Process(target=childtest, args=[val] + list(child))
+        self.suppressWarning("DeprecationWarning") # we are deliberately forking
         p.start()
         p.join()
         self.assertEqual(1, val.value)  # did child complete ok?

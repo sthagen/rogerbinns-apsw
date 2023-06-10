@@ -21,7 +21,6 @@ import base64
 import argparse
 import contextlib
 import traceback
-import gc
 
 from typing import TextIO, Optional
 
@@ -47,9 +46,7 @@ class Shell:
     SQLite.
 
     You can inherit from this class to embed in your own code and user
-    interface.  Internally everything is handled as unicode.
-    Conversions only happen at the point of input or output which you
-    can override in your own code.
+    interface.
 
     Errors and diagnostics are only ever sent to error output
     (self.stderr) and never to the regular output (self.stdout).  This
@@ -101,10 +98,13 @@ class Shell:
             self.db = db, db.filename
         else:
             self.db = None, None
+        # keep a reference around allowing switching connections
+        self.db_references = set()
         self.prompt = "sqlite> "
         self.moreprompt = "    ..> "
         self.separator = "|"
         self.bail = False
+        self.changes = False
         self.echo = False
         self.timer = False
         self.header = False
@@ -112,9 +112,9 @@ class Shell:
         self.output = self.output_list
         self._output_table = self._fmt_sql_identifier("table")
         self.widths = []
-        # do we truncate output in list mode?  (explain doesn't, regular does)
+        # do we truncate output in list mode?
         self.truncate = True
-        # a stack of previous outputs. turning on explain saves previous, off restores
+        # a stack of previous outputs
         self._output_stack = []
 
         # other stuff
@@ -143,6 +143,7 @@ class Shell:
         self._using_readline = False
         self._input_stack = []
         self.input_line_number = 0
+        self._calculate_output_modes()
         self.push_input()
         self.push_output()
         self._input_descriptions = []
@@ -160,8 +161,8 @@ class Shell:
             self.interactive = self._using_a_terminal()
 
     def _using_a_terminal(self):
-        return getattr(self.stdin, "isatty", False) and self.stdin.isatty() and getattr(self.stdout, "isatty",
-                                                                                        False) and self.stdout.isatty()
+        return getattr(self.stdin, "isatty", None) and self.stdin.isatty() and getattr(self.stdout, "isatty",
+                                                                                       None) and self.stdout.isatty()
 
     def _ensure_db(self):
         "The database isn't opened until first use.  This function ensures it is now open."
@@ -319,9 +320,10 @@ class Shell:
         "Returns the usage message.  Make sure it is newline terminated"
 
         msg = """
-Usage: program [OPTIONS] FILENAME [SQL|CMD] [SQL|CMD]...
+Usage: python3 -m apsw [OPTIONS] FILENAME [SQL|CMD] [SQL|CMD]...
 FILENAME is the name of a SQLite database. A new database is
-created if the file does not exist.
+created if the file does not exist. If omitted or an empty
+string then an in-memory database is created.
 OPTIONS include:
    -init filename       read/process named file
    -echo                print commands before execution
@@ -859,10 +861,12 @@ Enter ".help" for instructions
         # but Py 3.6 doesn't have them
         cur = self.db.cursor()
         saved = sql
+        explain = None
 
         def et(cursor, statement, bindings):
-            nonlocal saved
+            nonlocal saved, explain
             saved = statement
+            explain = cursor.is_explain
             return False
 
         cur.exectrace = et
@@ -872,12 +876,12 @@ Enter ".help" for instructions
         except apsw.ExecTraceAbort:
             pass
         except apsw.Error as e:
-            return (sql[:len(saved)], sql[len(saved):], str(e), e.error_offset, e)
+            return (sql[:len(saved)], sql[len(saved):], str(e), e.error_offset, e, explain)
         except KeyError as e:
             var = e.args[0]
             return (None, None, f"No binding present for '{ var }' - use .parameter set { var } VALUE to provide one",
-                    -1, e)
-        return (sql[:len(saved)], sql[len(saved):], None, None)
+                    -1, e, explain)
+        return (sql[:len(saved)], sql[len(saved):], None, None, explain)
 
     def process_sql(self, sql, bindings=None, internal=False, summary=None):
         """Processes SQL text consisting of one or more statements
@@ -896,6 +900,8 @@ Enter ".help" for instructions
           printed after the last row.  An example usage is the .find
           command which shows table names.
         """
+
+        changes_start = self.db.totalchanges()
 
         def fixws(s: str):
             return re.sub(r"\s", " ", s, flags=re.UNICODE)
@@ -926,6 +932,20 @@ Enter ".help" for instructions
                     print("   " + (" " * len(before)) + "^--- error here", file=self.stderr)
                 qd[4]._handle_exception_saw_this = True
                 raise qd[4]
+
+            if qd[4] == 1:  # explain
+                self.push_output()
+                self.header = True
+                self.widths = [-4, 13, 4, 4, 4, 13, 2, 13]
+                self.truncate = False
+                self.output = self.output_column
+            elif qd[4] == 2:  # explain query plan
+                self.push_output()
+                self.header = True
+                self.widths = [-4, -6, 22]
+                self.truncate = False
+                self.output = self.output_column
+
             timing_start = self.get_resource_usage()
 
             column_names = None
@@ -940,10 +960,16 @@ Enter ".help" for instructions
             for row in cur.execute(qd[0], bindings):
                 if column_names is None:
                     column_names = [h for h, d in cur.getdescription()]
+                    if qd[4] == 2:
+                        del column_names[2]
                     if summary:
                         self._output_summary(summary[0])
                     if rows is None:
                         self.output(True, column_names)
+                if qd[4] == 2:
+                    row = list(row)
+                    del row[2]
+                    row = tuple(row)
                 if rows is None:
                     self.output(False, row)
                 else:
@@ -957,6 +983,15 @@ Enter ".help" for instructions
 
             if self.timer:
                 self.display_timing(timing_start, self.get_resource_usage())
+
+            if qd[4]:
+                self.pop_output()
+
+        changes = self.db.totalchanges() - changes_start
+        if not internal and changes and self.changes:
+            text = ("changes: " + self.colour.colour_value(changes, str(changes)) + "\t" + "total changes: " +
+                    self.colour.colour_value(self.db.totalchanges(), str(self.db.totalchanges())) + "\n")
+            self.write(self.stdout, text)
 
     def process_command(self, command):
         """Processes a dot command.
@@ -978,6 +1013,11 @@ Enter ".help" for instructions
         if len(cmd) > 3 and cmd[0] == "parameter" and cmd[1] == "set":
             pos = command.index(cmd[2], command.index("set") + 4) + len(cmd[2]) + 1
             cmd = cmd[:3] + [command[pos:]]
+        # special handling for shell because we want to preserve the text exactly
+        if cmd[0] == "shell":
+            rest = command[command.index("shell") + 6:].strip()
+            if rest:
+                cmd = [cmd[0], rest]
         res = fn(cmd[1:])
 
     ###
@@ -1031,13 +1071,58 @@ Enter ".help" for instructions
     def command_cd(self, cmd):
         """cd ?DIR: Changes current directory
 
-        If no directory suppliend then change to home directory"""
+        If no directory supplied then change to home directory"""
         if len(cmd) > 1:
             raise self.Error("Too many directories")
         d = cmd and cmd[0] or os.path.expanduser("~")
         if not os.path.isdir(d):
             raise self.Error(f"'{ d }' is not a directory")
         os.chdir(d)
+
+    def command_changes(self, cmd):
+        """changes ON|OFF: Show changes from last SQL and total changes (default OFF)
+
+        After executing SQL that makes changes, the number of affected
+        rows is displayed as well as a running count of all changes.
+        """
+        self.changes = self._boolean_command("changes", cmd)
+
+    def command_close(self, cmd):
+        """close: Closes the current database"""
+        if len(cmd):
+            raise self.Error("Unexpected arguments")
+        self.db.close()
+
+    def command_connection(self, cmd):
+        """connection ?NUMBER?: List connections, or switch active connection
+
+        This covers all connections, not just those started in this
+        shell.  Closed connections are not shown.
+        """
+        self.db_references.add(self.db)
+        dbs = []
+        for c in apsw.connections():
+            try:
+                c.filename
+            except apsw.ConnectionClosedError:
+                continue
+            dbs.append(c)
+
+        if len(cmd) == 0:
+            for i, c in enumerate(dbs):
+                sel = "*" if self.db is c else " "
+                co = self.colour
+                self.write(
+                    self.stdout,
+                    f"{ co.bold}{ sel }{ co.bold_} { co.vnumber }{ i: 2}{ co.vnumber_ } - ({ c.open_vfs }) \"{ co.vstring }{ c.filename }{ co.vstring_ }\"\n"
+                )
+        elif len(cmd) == 1:
+            c = dbs[int(cmd[0])]
+            if self.db is not c:
+                self._db = c
+                self.dbfilename = c.filename
+        else:
+            raise self.Error("Too many arguments")
 
     def command_colour(self, cmd=[]):
         """colour SCHEME: Selects a colour scheme
@@ -1073,6 +1158,76 @@ Enter ".help" for instructions
         finally:
             self.pop_output()
 
+    def command_dbconfig(self, cmd):
+        """dbconfig ?NAME VALUE?: Show all dbconfig, or set a specific one
+
+        With no arguments lists all settings.  Supply a name and integer value
+        to change.  For example:
+
+            .dbconfig enable_fkey 1
+        """
+        ignore = {
+            "SQLITE_DBCONFIG_MAINDBNAME", "SQLITE_DBCONFIG_LOOKASIDE", "SQLITE_DBCONFIG_MAX",
+            "SQLITE_DBCONFIG_STMT_SCANSTATUS"
+        }
+        if len(cmd) == 0:
+            outputs = {}
+            for k in apsw.mapping_db_config:
+                if type(k) is not str or k in ignore:
+                    continue
+                pretty = k[len("SQLITE_DBCONFIG_"):].lower()
+                outputs[pretty] = self.db.config(getattr(apsw, k), -1)
+            w = max(len(k) for k in outputs.keys())
+            for k, v in outputs.items():
+                self.write(self.stdout, " " * (w - len(k)))
+                self.write(self.stdout, k + ":  ")
+                self.write(self.stdout, self.colour.colour_value(v, apsw.format_sql_value(v)))
+                self.write(self.stdout, "\n")
+            return
+        elif len(cmd) != 2:
+            raise self.Error("Expected zero or two parameters")
+        key = "SQLITE_DBCONFIG_" + cmd[0].upper()
+        if key not in apsw.mapping_db_config:
+            raise self.Error(f"Unknown config option { key }")
+        v = self.db.config(getattr(apsw, key), int(cmd[1]))
+        self.write(self.stdout, cmd[0].lower() + ": ")
+        self.write(self.stdout, self.colour.colour_value(v, apsw.format_sql_value(v)))
+        self.write(self.stdout, "\n")
+
+    def command_dbinfo(self, cmd):
+        """dbinfo ?NAME?: Shows summary and file information about the database
+
+        This includes the numbers of tables, indices etc, as well as fields from
+        the files as returned by :func:`apsw.ext.dbinfo`.
+
+        NAME defaults to 'main', and can be the attached name of a database.
+        """
+        if len(cmd) > 1:
+            raise self.Error("too many parameters")
+        schema = cmd[0] if cmd else "main"
+
+        def total(t):
+            return self.db.execute(f"select count(*) from [{ schema }].sqlite_schema where type='{ t }'").get
+
+        outputs = {
+            "number of tables": total("table"),
+            "number of indexes": total("index"),
+            "number of triggers": total("trigger"),
+            "number of views": total("view"),
+            "schema size": int(self.db.execute(f"select total(length(sql)) from [{ schema }].sqlite_schema").get),
+        }
+        for i in apsw.ext.dbinfo(self.db, schema):
+            if not i:
+                continue
+            outputs.update(dataclasses.asdict(i))
+
+        w = max(len(k) for k in outputs.keys())
+        for k, v in outputs.items():
+            self.write(self.stdout, " " * (w - len(k)))
+            self.write(self.stdout, k + ":  ")
+            self.write(self.stdout, self.colour.colour_value(v, apsw.format_sql_value(v)))
+            self.write(self.stdout, "\n")
+
     def command_dump(self, cmd):
         """dump ?TABLE? [TABLE...]: Dumps all or specified tables in SQL text format
 
@@ -1090,7 +1245,7 @@ Enter ".help" for instructions
         information.  For example if you create a FTS3 table named
         *recipes* then it also creates *recipes_content*,
         *recipes_segdir* etc.  Consequently to dump this example
-        correctly use::
+        correctly use:
 
            .dump recipes recipes_%
 
@@ -1406,8 +1561,6 @@ Enter ".help" for instructions
 
         This command affects files opened after setting the encoding
         as well as imports.
-
-        See the online APSW documentation for more details.
         """
         if len(cmd) != 1:
             raise self.Error("Encoding takes one argument")
@@ -1426,7 +1579,7 @@ Enter ".help" for instructions
         self.exceptions = self._boolean_command("exceptions", cmd)
 
     def command_exit(self, cmd):
-        """exit ?CODE?: Exit this program"""
+        """exit ?CODE?: Exit this program with optional exit code"""
         if len(cmd) > 1:
             raise self.Error("Too many parameters for exit")
         try:
@@ -1435,27 +1588,6 @@ Enter ".help" for instructions
             raise self.Error(f"{ cmd[0] } isn't an exit code")
         sys.exit(c)
 
-    def command_explain(self, cmd):
-        """explain ON|OFF: Set output mode suitable for explain (default OFF)
-
-        Explain shows the underlying SQLite virtual machine code for a
-        statement.  You need to prefix the SQL with explain.  For example:
-
-           explain select * from table;
-
-        This output mode formats the explain output nicely.  If you do
-        '.explain OFF' then the output mode and settings in place when
-        you did '.explain ON' are restored.
-        """
-        if len(cmd) == 0 or self._boolean_command("explain", cmd):
-            self.push_output()
-            self.header = True
-            self.widths = [4, 13, 4, 4, 4, 13, 2, 13]
-            self.truncate = False
-            self.output = self.output_column
-        else:
-            self.pop_output()
-
     def command_find(self, cmd):
         """find what ?TABLE?: Searches all columns of all tables for a value
 
@@ -1463,14 +1595,14 @@ Enter ".help" for instructions
         for example to find a string or any references to an id.
 
         You can specify a like pattern to limit the search to a subset
-        of tables (eg specifying 'CUSTOMER%' for all tables beginning
+        of tables (eg specifying CUSTOMER% for all tables beginning
         with CUSTOMER).
 
         The what value will be treated as a string and/or integer if
-        possible.  If what contains % or _ then it is also treated as
+        possible.  If what contains '%' or '_' then it is also treated as
         a like pattern.
 
-        This command will take a long time to execute needing to read
+        This command can take a long time to execute needing to scan
         all of the relevant tables.
         """
         if len(cmd) < 1 or len(cmd) > 2:
@@ -1546,8 +1678,6 @@ Enter ".help" for instructions
                 else:
                     multi = textwrap.dedent(parts[1])
                 if c == "mode":
-                    if not self._output_modes:
-                        self._cache_output_modes()
                     firstline[1] = firstline[1] + " " + " ".join(self._output_modes)
                     multi = multi + "\n\n" + "\n\n".join(self._output_modes_detail)
                 if c == "colour":
@@ -1644,11 +1774,12 @@ Enter ".help" for instructions
           https://sqlite.org/datatype3.html
 
         Another alternative is to create a temporary table, insert the
-        values into that and then use casting.
+        values into that and then use casting.:
 
           CREATE TEMPORARY TABLE import(a,b,c);
           .import filename import
-          CREATE TABLE final AS SELECT cast(a as BLOB), cast(b as INTEGER), cast(c as CHAR) from import;
+          CREATE TABLE final AS SELECT cast(a as BLOB), cast(b as INTEGER),
+               cast(c as CHAR) from import;
           DROP TABLE import;
 
         You can also get more sophisticated using the SQL CASE
@@ -1716,9 +1847,8 @@ Enter ".help" for instructions
 
         The import command requires that you precisely pre-setup the
         table and schema, and set the data separators (eg commas or
-        tabs).  In many cases this information can be automatically
-        deduced from the file contents which is what this command
-        does.  There must be at least two columns and two rows.
+        tabs).  This command figures out the separator and csv dialect
+        automatically.  There must be at least two columns and two rows.
 
         If the table is not specified then the basename of the file
         will be used.
@@ -1798,7 +1928,7 @@ Enter ".help" for instructions
                 return float(v)
 
             # Work out the file format
-            formats = [{"dialect": "excel"}, {"dialect": "excel-tab"}]
+            formats = [{"dialect": "excel"}, {"dialect": "excel-tab"}, {'dialect': 'unix'}]
             seps = ["|", ";", ":"]
             if self.separator not in seps:
                 seps.append(self.separator)
@@ -1961,10 +2091,6 @@ Enter ".help" for instructions
         Note: Extension loading may not be enabled in the SQLite
         library version you are using.
 
-        Extensions are an easy way to add new functions and
-        functionality.  For a useful extension look at the bottom of
-        https://sqlite.org/contrib
-
         By default sqlite3_extension_init is called in the library but
         you can specify an alternate entry point.
 
@@ -1989,16 +2115,15 @@ Enter ".help" for instructions
 
     def command_log(self, cmd):
         "log ON|OFF: Shows SQLite log messages"
-        setting = self._boolean_command("bail", cmd)
+        setting = self._boolean_command("log", cmd)
         apsw.config(apsw.SQLITE_CONFIG_LOG, self.log_handler if setting else None)
 
     _output_modes = None
 
     def command_mode(self, cmd):
         """mode MODE ?OPTIONS?: Sets output mode to one of"""
-        if not self._output_modes:
-            self._cache_output_modes()
-
+        if not cmd:
+            raise self.Error("Specify an output mode")
         w = cmd[0]
         if w == "tabs":
             w = "list"
@@ -2095,7 +2220,7 @@ Enter ".help" for instructions
         self.output = self.output_box
 
     # needed so command completion and help can use it
-    def _cache_output_modes(self):
+    def _calculate_output_modes(self):
         modes = [m[len("output_"):] for m in dir(self) if m.startswith("output_")]
         modes.append("tabs")
         modes.sort()
@@ -2131,9 +2256,12 @@ Enter ".help" for instructions
         self.nullvalue = self.fixup_backslashes(cmd[0])
 
     def command_open(self, cmd):
-        """open ?OPTIONS? ?FILE?: Closes existing database and opens a different one
+        """open ?OPTIONS? ?FILE?: Opens a database connection
 
-        Options are: --new which deletes the file if it already exists
+        Options are:
+
+        --new:  Closes amy existing connection referring to the same file
+        and deletes the database files before opening
 
         If FILE is omitted then a memory database is opened
         """
@@ -2151,35 +2279,30 @@ Enter ".help" for instructions
                 raise self.Error("Too many arguments: " + p)
             dbname = p
 
-        if new and dbname:
-            # close it first in case re-opening existing.  windows doesn't
-            # allow deleting open files, tag alongs cause problems etc
-            # hence retry and sleeps
-            self.db = (None, None)
+        if new:
+            if not dbname:
+                raise self.Error("You must specify a filename with --new")
+            for c in apsw.connections():
+                try:
+                    if os.path.samefile(c.filename, dbname):
+                        c.close()
+                except apsw.ConnectionClosedError:
+                    pass
             for suffix in "", "-journal", "-wal", "-shm":
-                fn = dbname + suffix
-                for retry in range(1, 5):
-                    try:
-                        os.remove(fn)
-                        break
-                    except OSError:
-                        if not os.path.isfile(fn):
-                            break
-                        # under windows tag alongs can delay being able to
-                        # delete after we have closed the file
-                        gc.collect(2)
-                        time.sleep(.05 * retry)
-                else:
-                    os.rename(fn, fn + "-DELETEME")
-
-        self.db = (None, dbname)
+                try:
+                    os.remove(dbname + suffix)
+                except OSError:
+                    pass
+        self.db_references.add(self.db)
+        self._db = None
+        self.dbfilename = dbname
 
     def command_output(self, cmd):
         """output FILENAME: Send output to FILENAME (or stdout)
 
-        If the FILENAME is stdout then output is sent to standard
+        If the FILENAME is 'stdout' then output is sent to standard
         output from when the shell was started.  The file is opened
-        using the current encoding (change with .encoding command).
+        using the current encoding (change with 'encoding' command).
         """
         # Flush everything
         self.stdout.flush()
@@ -2395,8 +2518,17 @@ Enter ".help" for instructions
             raise self.Error("separator takes exactly one parameter")
         self.separator = self.fixup_backslashes(cmd[0])
 
-    _shows = ("echo", "explain", "headers", "mode", "nullvalue", "output", "separator", "width", "exceptions",
+    _shows = ("echo", "headers", "mode", "changes", "nullvalue", "output", "separator", "width", "exceptions",
               "encoding")
+
+    def command_shell(self, cmd):
+        """shell CMD ARGS...: Run CMD ARGS in a system shell"""
+        if len(cmd) == 0:
+            raise self.Error("Specify command and arguments to run")
+        assert len(cmd) == 1
+        res = os.system(cmd[0])
+        if res != 0:
+            self.write(self.stderr, self.colour.error + f"Exit code { res }" + "\n" + self.colour.error_)
 
     def command_show(self, cmd):
         """show: Show the current values for various settings."""
@@ -2415,21 +2547,14 @@ Enter ".help" for instructions
             if what and i != what:
                 continue
             # boolean settings
-            if i in ("echo", "headers", "exceptions"):
+            if i in ("echo", "headers", "exceptions", "changes"):
                 if i == "headers": i = "header"
                 v = "off"
                 if getattr(self, i):
                     v = "on"
-            elif i == "explain":
-                # we cheat by looking at truncate setting!
-                v = "on"
-                if self.truncate:
-                    v = "off"
             elif i in ("nullvalue", "separator"):
                 v = self._fmt_c_string(getattr(self, i))
             elif i == "mode":
-                if not self._output_modes:
-                    self._cache_output_modes()
                 for v in self._output_modes:
                     if self.output == getattr(self, "output_" + v):
                         break
@@ -2535,6 +2660,38 @@ Enter ".help" for instructions
         maxw = max(len(k) for k in versions)
         for k, v in versions.items():
             self.write(self.stdout, " " * (maxw - len(k)) + f"{ k }  { v}\n")
+
+    def command_vfsname(self, cmd):
+        "vfsname: VFS name used to open current database"
+        if cmd:
+            raise self.Error("No parameters taken")
+        self.write(self.stdout, self.db.open_vfs + "\n")
+
+    def _format_vfs(self, vfs):
+        w = max(len(k) for k in vfs.keys())
+        for k, v in vfs.items():
+            self.write(self.stdout, " " * (w - len(k)))
+            self.write(self.stdout, k + ":  ")
+            vout = "0x%x" % v if k.startswith("x") else str(v)
+            self.write(self.stdout, self.colour.colour_value(v, vout))
+            self.write(self.stdout, "\n")
+
+    def command_vfsinfo(self, cmd):
+        "vfsinfo: Shows detailed information about the VFS for the database"
+        if cmd:
+            raise self.Error("No parameters taken")
+        for vfs in apsw.vfs_details():
+            if vfs["zName"] == self.db.open_vfs:
+                self._format_vfs(vfs)
+
+    def command_vfslist(self, cmd):
+        "vfslist: Shows detailed information about all the VFS available"
+        if cmd:
+            raise self.Error("No parameters taken")
+        for i, vfs in enumerate(apsw.vfs_details()):
+            if i:
+                self.write(self.stdout, "\n")
+            self._format_vfs(vfs)
 
     def command_width(self, cmd):
         """width NUM NUM ...: Set the column widths for "column" mode
@@ -2779,25 +2936,8 @@ Enter ".help" for instructions
             return None
         return self.completions[state]
 
-    # Taken from https://sqlite.org/lang_keywords.html
-    _sqlite_keywords = """ABORT ACTION ADD AFTER ALL ALTER ANALYZE AND AS ASC ATTACH
-    AUTOINCREMENT BEFORE BEGIN BETWEEN BY CASCADE CASE CAST CHECK
-    COLLATE COLUMN COMMIT CONFLICT CONSTRAINT CREATE CROSS
-    CURRENT_DATE CURRENT_TIME CURRENT_TIMESTAMP DATABASE DEFAULT
-    DEFERRABLE DEFERRED DELETE DESC DETACH DISTINCT DROP EACH ELSE END
-    ESCAPE EXCEPT EXCLUSIVE EXISTS EXPLAIN FAIL FOR FOREIGN FROM FULL
-    GLOB GROUP HAVING IF IGNORE IMMEDIATE IN INDEX INDEXED INITIALLY
-    INNER INSERT INSTEAD INTERSECT INTO IS ISNULL JOIN KEY LEFT LIKE
-    LIMIT MATCH NATURAL NO NOT NOTNULL NULL OF OFFSET ON OR ORDER
-    OUTER PLAN PRAGMA PRIMARY QUERY RAISE RECURSIVE REFERENCES REGEXP
-    REINDEX RELEASE RENAME REPLACE RESTRICT RIGHT ROLLBACK ROW
-    SAVEPOINT SELECT SET TABLE TEMP TEMPORARY THEN TO TRANSACTION
-    TRIGGER UNION UNIQUE UPDATE USING VACUUM VALUES VIEW VIRTUAL WHEN
-    WHERE WITH WITHOUT""".split()
-
-    _sqlite_keywords.extend(getattr(apsw, "keywords", []))
-
-    # reserved words need to be quoted.  Only a subset of the above are reserved
+    _sqlite_keywords = apsw.keywords
+    # reserved words need to be quoted.  Only a subset of the keywords are reserved
     # but what the heck
     _sqlite_reserved = _sqlite_keywords
     # add a space after each of them except functions which get parentheses
@@ -2806,18 +2946,9 @@ Enter ".help" for instructions
     _sqlite_special_names = """_ROWID_ OID ROWID sqlite_schema
            SQLITE_SEQUENCE""".split()
 
-    _sqlite_functions = """abs( changes() char( coalesce( glob( ifnull( hex( instr(
-           last_insert_rowid() length( like( likelihood( likely(
-           load_extension( lower( ltrim( max( min( nullif( printf(
-           quote( random() randomblob( replace( round( rtrim( soundex(
-           sqlite_compileoption_get( sqlite_compileoption_used(
-           sqlite_source_id() sqlite_version() substr( total_changes()
-           trim( typeof( unlikely( unicode( upper( zeroblob( date(
-           time( datetime( julianday( strftime( avg( count(
-           group_concat( sum( total(""".split()
-
     _pragmas_bool = ("yes", "true", "on", "no", "false", "off")
     _pragmas = {
+        "analysis_limit=": None,
         "application_id": None,
         "auto_vacuum=": ("NONE", "FULL", "INCREMENTAL"),
         "automatic_index=": _pragmas_bool,
@@ -2832,14 +2963,14 @@ Enter ".help" for instructions
         "data_version": None,
         "database_list": None,
         "defer_foreign_keys=": _pragmas_bool,
-        "encoding=": None,
-        # ('"UTF-8"', '"UTF-16"', '"UTF-16le"', '"UTF16-16be"'),
-        # too hard to get " to be part of token just in this special case
+        "encoding=": ('UTF-8', 'UTF-16', 'UTF-16le', 'UTF16-16be'),
         "foreign_key_check": None,
         "foreign_key_list(": None,
         "foreign_keys": _pragmas_bool,
         "freelist_count": None,
         "fullfsync=": _pragmas_bool,
+        "function_list": None,
+        "hard_heap_limit=": None,
         "ignore_check_constraints": _pragmas_bool,
         "incremental_vacuum(": None,
         "index_info(": None,
@@ -2848,10 +2979,12 @@ Enter ".help" for instructions
         "integrity_check": None,
         "journal_mode=": ("DELETE", "TRUNCATE", "PERSIST", "MEMORY", "OFF", "WAL"),
         "journal_size_limit=": None,
+        "legacy_alter_table=": _pragmas_bool,
         "legacy_file_format=": _pragmas_bool,
         "locking_mode=": ("NORMAL", "EXCLUSIVE"),
         "max_page_count=": None,
         "mmap_size=": None,
+        "module_list": None,
         "optimize(": None,
         "page_count;": None,
         "page_size=": None,
@@ -2867,8 +3000,10 @@ Enter ".help" for instructions
         "synchronous=": ("OFF", "NORMAL", "FULL"),
         "table_info(": None,
         "table_list": None,
+        "table_xinfo(": None,
         "temp_store=": ("DEFAULT", "FILE", "MEMORY"),
         "threads=": None,
+        "trusted_schema": _pragmas_bool,
         "user_version=": None,
         "wal_autocheckpoint=": None,
         "wal_checkpoint": None,
@@ -2892,7 +3027,7 @@ Enter ".help" for instructions
             cur = self.db.cursor()
             collations = [row[1] for row in cur.execute("pragma collation_list")]
             databases = [row[1] for row in cur.execute("pragma database_list")]
-            other = []
+            other = [row[0] for row in cur.execute("pragma module_list")]
             for db in databases:
                 if db == "temp":
                     master = "sqlite_temp_schema"
@@ -2999,9 +3134,9 @@ Enter ".help" for instructions
     # we make some effort for some of the commands
     _command_params = {
         "bail": bool,
+        "changes": bool,
         "echo": bool,
         "exceptions": bool,
-        "explain": bool,
         "header": bool,
         "timer": bool,
     }
@@ -3032,8 +3167,6 @@ Enter ".help" for instructions
         if t[0] in {"colour", "color"}:
             completions = list(self._colours.keys())
         elif t[0] in {"mode"}:
-            if not self._output_modes:
-                self._cache_output_modes()
             completions = self._output_modes
         elif t[0] == "help":
             completions = [v[1:] for v in self._builtin_commands] + ["all"]
@@ -3232,9 +3365,11 @@ Enter ".help" for instructions
 try:
     # uses dataclasses and annotations, only available in Python 3.7+
     import apsw.ext
+    import dataclasses
 except (ImportError, SyntaxError):
     for n in "box", "table", "qbox":
         delattr(Shell, f"output_{ n }")
+    delattr(Shell, "command_dbinfo")
 
 
 def main() -> None:

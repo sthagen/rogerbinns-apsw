@@ -423,9 +423,22 @@
 } while(0)
 
 
+#define  Apsw_vfs_details_DOC "vfs_details($self)\n--\n\napsw.vfs_details() -> list[dict[str, int | str]]\n\n" \
+"Returns a list with details of each :ref:`vfs <vfs>`.  The detail is a\n" \
+"dictionary with the keys being the names of the `sqlite3_vfs\n" \
+"<https://sqlite.org/c3ref/vfs.html>`__ data structure, and their\n" \
+"corresponding values.\n" \
+"\n" \
+"Pointers are converted using `PyLong_FromVoidPtr\n" \
+"<https://docs.python.org/3/c-api/long.html?highlight=voidptr#c.PyLong_FromVoidPtr>`__.\n" \
+"\n" \
+"Calls: `sqlite3_vfs_find <https://sqlite.org/c3ref/vfs_find.html>`__\n" 
+
 #define  Apsw_vfsnames_DOC "vfsnames($self)\n--\n\napsw.vfsnames() -> list[str]\n\n" \
 "Returns a list of the currently installed :ref:`vfs <vfs>`.  The first\n" \
-"item in the list is the default vfs.\n" 
+"item in the list is the default vfs.\n" \
+"\n" \
+"Calls: `sqlite3_vfs_find <https://sqlite.org/c3ref/vfs_find.html>`__\n" 
 
 #define  Backup_class_DOC "You create a backup instance by calling :meth:`Connection.backup`.\n" 
 
@@ -989,6 +1002,13 @@
 ":param op: A `configuration operation\n" \
 "  <https://sqlite.org/c3ref/c_dbconfig_enable_fkey.html>`__\n" \
 ":param args: Zero or more arguments as appropriate for *op*\n" \
+"\n" \
+"This is how to get the fkey setting::\n" \
+"\n" \
+"  val = config(apsw.SQLITE_DBCONFIG_ENABLE_FKEY, -1)\n" \
+"\n" \
+"A parameter of zero would turn it off, 1 turns on, and negative\n" \
+"leaves unaltered.  The effective value is always returned.\n" \
 "\n" \
 "Calls: `sqlite3_db_config <https://sqlite.org/c3ref/db_config.html>`__\n" 
 
@@ -1628,6 +1648,37 @@
 } while(0)
 
 
+#define  Connection_read_DOC "read($self,schema,which,offset,amount)\n--\n\nConnection.read(schema: str, which: int, offset: int, amount: int) -> tuple[bool, bytes]\n\n" \
+"Invokes the underlying VFS method to read data from the database.  It\n" \
+"is strongly recommended to read aligned complete pages, since that is\n" \
+"only what SQLite does.\n" \
+"\n" \
+"`schema` is `main`, `temp`, or the name of an attached database.\n" \
+"\n" \
+"`which` is 0 for the database file, 1 for the journal.\n" \
+"\n" \
+"The return value is a tuple of a boolean indicating a complete read if\n" \
+"True, and the bytes read which will always be the amount requested\n" \
+"in size.\n" \
+"\n" \
+"`SQLITE_IOERR_SHORT_READ` will give a `False` value for the boolean,\n" \
+"and there is no way of knowing how much was read.\n" \
+"\n" \
+"Implemented using `SQLITE_FCNTL_FILE_POINTER` and `SQLITE_FCNTL_JOURNAL_POINTER`.\n" \
+"Errors will usually be generic `SQLITE_ERROR` with no message.\n" \
+"\n" \
+"Calls: `sqlite3_file_control <https://sqlite.org/c3ref/file_control.html>`__\n" 
+
+#define Connection_read_USAGE "Connection.read(schema: str, which: int, offset: int, amount: int) -> tuple[bool, bytes]"
+
+#define Connection_read_CHECK do { \
+  assert(__builtin_types_compatible_p(typeof(schema), const char *)); \
+  assert(__builtin_types_compatible_p(typeof(which), int)); \
+  assert(__builtin_types_compatible_p(typeof(offset), long long)); \
+  assert(__builtin_types_compatible_p(typeof(amount), int)); \
+} while(0)
+
+
 #define  Connection_readonly_DOC "readonly($self,name)\n--\n\nConnection.readonly(name: str) -> bool\n\n" \
 "True or False if the named (attached) database was opened readonly or file\n" \
 "permissions don't allow writing.  The main database is named \"main\".\n" \
@@ -1803,11 +1854,14 @@
 "Sets a callable which is invoked at the end of execution of each\n" \
 "statement and passed the statement string and how long it took to\n" \
 "execute. (The execution time is in nanoseconds.) Note that it is\n" \
-"called only on completion. If for example you do a ``SELECT`` and\n" \
-"only read the first result, then you won't reach the end of the\n" \
-"statement.\n" \
+"called only on completion. If for example you do a ``SELECT`` and only\n" \
+"read the first result, then you won't reach the end of the statement.\n" \
 "\n" \
-"Calls: `sqlite3_profile <https://sqlite.org/c3ref/profile.html>`__\n" 
+"This used to call the now deprecated `sqlite3_profile API\n" \
+"<https://sqlite.org/c3ref/profile.html>`__\n" \
+"\n" \
+"\n" \
+"Calls: `sqlite3_trace_v2 <https://sqlite.org/c3ref/trace_v2.html>`__\n" 
 
 #define Connection_setprofile_callable_MSG  "argument 'callable' of Connection.setprofile(callable: Optional[Callable[[str, int], None]]) -> None" 
 

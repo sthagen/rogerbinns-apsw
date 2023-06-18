@@ -1149,8 +1149,6 @@ apswvfspy_xCurrentTime(APSWVFS *self)
 
   res = self->basevfs->xCurrentTime(self->basevfs, &julian);
 
-  APSW_FAULT_INJECT(xCurrentTimeFail, , res = 1);
-
   if (res != 0)
   {
     SET_EXC(SQLITE_ERROR, NULL); /* general sqlite error code */
@@ -1159,6 +1157,56 @@ apswvfspy_xCurrentTime(APSWVFS *self)
   }
 
   return PyFloat_FromDouble(julian);
+}
+
+static int
+apswvfs_xCurrentTimeInt64(sqlite3_vfs *vfs, sqlite3_int64 *time)
+{
+  PyObject *pyresult = NULL;
+  int result = 0;
+  VFSPREAMBLE;
+
+  pyresult = Call_PythonMethodV((PyObject *)(vfs->pAppData), "xCurrentTimeInt64", 1, "()");
+
+  if (pyresult)
+    *time = PyLong_AsLongLong(pyresult);
+
+  if (PyErr_Occurred())
+  {
+    AddTraceBackHere(__FILE__, __LINE__, "vfs.xCurrentTimeInt64", "{s: O}", "result", OBJ(pyresult));
+    result = 1;
+  }
+
+  Py_XDECREF(pyresult);
+  VFSPOSTAMBLE;
+  return result;
+}
+
+/** .. method:: xCurrentTimeInt64()  -> int
+
+  Returns as an integer the `Julian Day Number
+  <http://en.wikipedia.org/wiki/Julian_day>`__ multiplied by 86400000
+  (the number of milliseconds in a 24-hour day).
+*/
+static PyObject *
+apswvfspy_xCurrentTimeInt64(APSWVFS *self)
+{
+  int res;
+  sqlite3_int64 time;
+
+  CHECKVFSPY;
+  VFSNOTIMPLEMENTED(xCurrentTimeInt64, 1);
+
+  res = self->basevfs->xCurrentTimeInt64(self->basevfs, &time);
+
+  if (res != 0)
+  {
+    SET_EXC(SQLITE_ERROR, NULL); /* general sqlite error code */
+    AddTraceBackHere(__FILE__, __LINE__, "vfspy.xCurrentTimeInt64", NULL);
+    return NULL;
+  }
+
+  return PyLong_FromLongLong(time);
 }
 
 static int
@@ -1582,7 +1630,7 @@ APSWVFS_new(PyTypeObject *type, PyObject *Py_UNUSED(args), PyObject *Py_UNUSED(k
   return (PyObject *)self;
 }
 
-/** .. method:: __init__(name: str, base: Optional[str] = None, makedefault: bool = False, maxpathname: int = 1024)
+/** .. method:: __init__(name: str, base: Optional[str] = None, makedefault: bool = False, maxpathname: int = 1024, *, iVersion: int = 3, exclude: Optional[set[str]] = None)
 
     :param name: The name to register this vfs under.  If the name
         already exists then this vfs will replace the prior one of the
@@ -1601,8 +1649,12 @@ APSWVFS_new(PyTypeObject *type, PyObject *Py_UNUSED(args), PyObject *Py_UNUSED(k
         this value then SQLite will not`be able to open it.  If you are
         using a base, then a value of zero will use the value from base.
 
-    :raises ValueError: If *base* is not *None* and the named vfs is not
-      currently registered.
+    :param iVersion: Version number for the `sqlite3_vfs <https://sqlite.org/c3ref/vfs.html>`__
+        structure.
+
+    :param exclude: A set of strings, naming the methods that will be filled in with ``NULL`` in the `sqlite3_vfs
+        <https://sqlite.org/c3ref/vfs.html>`__  structure to indicate to SQLite that they are
+        not supported.
 
     -* sqlite3_vfs_register sqlite3_vfs_find
 */
@@ -1610,14 +1662,22 @@ static int
 APSWVFS_init(APSWVFS *self, PyObject *args, PyObject *kwds)
 {
   const char *base = NULL, *name = NULL;
-  int makedefault = 0, maxpathname = 1024, res;
+  int makedefault = 0, maxpathname = 1024, res, iVersion = 3;
+  PyObject *exclude = NULL;
 
   {
-    static char *kwlist[] = {"name", "base", "makedefault", "maxpathname", NULL};
+    static char *kwlist[] = {"name", "base", "makedefault", "maxpathname", "iVersion", "exclude", NULL};
     VFS_init_CHECK;
     argcheck_bool_param makedefault_param = {&makedefault, VFS_init_makedefault_MSG};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|zO&i:" VFS_init_USAGE, kwlist, &name, &base, argcheck_bool, &makedefault_param, &maxpathname))
+    argcheck_Optional_set_param exclude_param = {&exclude, VFS_init_exclude_MSG};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|zO&i$iO&:" VFS_init_USAGE, kwlist, &name, &base, argcheck_bool, &makedefault_param, &maxpathname, &iVersion, argcheck_Optional_set, &exclude_param))
       return -1;
+  }
+
+  if (iVersion < 1 || iVersion > 3)
+  {
+    PyErr_Format(PyExc_ValueError, "apsw only supports VFS iVersion of 1, 2 and 3, not %d", iVersion);
+    goto error;
   }
 
   if (base)
@@ -1645,7 +1705,7 @@ APSWVFS_init(APSWVFS *self, PyObject *args, PyObject *kwds)
   self->containingvfs = (sqlite3_vfs *)PyMem_Calloc(1, sizeof(sqlite3_vfs));
   if (!self->containingvfs)
     return -1;
-  self->containingvfs->iVersion = 3;
+  self->containingvfs->iVersion = iVersion;
   self->containingvfs->szOsFile = sizeof(APSWSQLite3File);
   if (self->basevfs && !maxpathname)
     self->containingvfs->mxPathname = self->basevfs->mxPathname;
@@ -1655,8 +1715,22 @@ APSWVFS_init(APSWVFS *self, PyObject *args, PyObject *kwds)
   if (!self->containingvfs->zName)
     goto error;
   self->containingvfs->pAppData = self;
-#define METHOD(meth) \
-  self->containingvfs->x##meth = apswvfs_x##meth;
+#define METHOD(meth)                                         \
+  do                                                         \
+  {                                                          \
+    int include = 1;                                         \
+    if (exclude)                                             \
+    {                                                        \
+      PyObject *tmpstring = PyUnicode_FromString("x" #meth); \
+      if (!tmpstring)                                        \
+        goto error;                                          \
+      if (1 == PySet_Contains(exclude, tmpstring))           \
+        include = 0;                                         \
+      Py_DECREF(tmpstring);                                  \
+    }                                                        \
+    if (include)                                             \
+      self->containingvfs->x##meth = apswvfs_x##meth;        \
+  } while (0)
 
   METHOD(Delete);
   METHOD(FullPathname);
@@ -1670,7 +1744,7 @@ APSWVFS_init(APSWVFS *self, PyObject *args, PyObject *kwds)
   METHOD(Sleep);
   METHOD(CurrentTime);
   METHOD(GetLastError);
-  /* The VFS2 method is not particularly useful */
+  METHOD(CurrentTimeInt64);
   METHOD(SetSystemCall);
   METHOD(GetSystemCall);
   METHOD(NextSystemCall);
@@ -1710,6 +1784,7 @@ static PyMethodDef APSWVFS_methods[] = {
     {"xRandomness", (PyCFunction)apswvfspy_xRandomness, METH_VARARGS | METH_KEYWORDS, VFS_xRandomness_DOC},
     {"xSleep", (PyCFunction)apswvfspy_xSleep, METH_VARARGS | METH_KEYWORDS, VFS_xSleep_DOC},
     {"xCurrentTime", (PyCFunction)apswvfspy_xCurrentTime, METH_NOARGS, VFS_xCurrentTime_DOC},
+    {"xCurrentTimeInt64", (PyCFunction)apswvfspy_xCurrentTimeInt64, METH_NOARGS, VFS_xCurrentTimeInt64_DOC},
     {"xGetLastError", (PyCFunction)apswvfspy_xGetLastError, METH_NOARGS, VFS_xGetLastError_DOC},
     {"xSetSystemCall", (PyCFunction)apswvfspy_xSetSystemCall, METH_VARARGS | METH_KEYWORDS, VFS_xSetSystemCall_DOC},
     {"xGetSystemCall", (PyCFunction)apswvfspy_xGetSystemCall, METH_VARARGS | METH_KEYWORDS, VFS_xGetSystemCall_DOC},

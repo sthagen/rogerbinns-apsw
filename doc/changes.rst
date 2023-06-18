@@ -24,6 +24,17 @@ command :ref:`.dbinfo <shell-cmd-dbinfo>` displays it.
 Added :meth:`apsw.vfs_details`.  The shell command
 :ref:`.vfslist <shell-cmd-vfslist>` displays it.
 
+Implemented `VFS method xCurrentTimeInt64
+<https://sqlite.org/c3ref/vfs.html>`__.  The default SQLite VFS no
+longer provide ``xCurrentTime`` (floating point version) if
+``SQLITE_OMIT_DEPRECATED`` is defined, so this is needed for
+inheritance to work. (:issue:`451`)
+
+**Backwards incompatible change**: *VFS* If you override
+``xCurrentTime``, then you will need to override ``xCurrentTimeInt64``
+in the same way, or ``exclude`` ``xCurrentTimeInt64`` in :class:`VFS`,
+or use ``iVersion`` of ``1``.
+
 :ref:`speedtest` now shows summary statistics, and improved help text.
 (:issue:`444`)
 

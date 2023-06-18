@@ -6007,6 +6007,13 @@ class APSW(unittest.TestCase):
 
         # some coverage related stuff
         self.assertRaises(TypeError, apsw.VFSFile, "", 3, [0, 0])
+        self.assertRaises(TypeError, apsw.VFS, "ignored", base=7)
+        self.assertRaises(TypeError, apsw.VFS, 7)
+        self.assertRaises(TypeError, apsw.VFS, "ignored", maxpathname="seven")
+        self.assertRaises(TypeError, apsw.VFS, "ignored", iVersion="seven")
+        self.assertRaises(ValueError, apsw.VFS, "ignored", iVersion=-2)
+        self.assertRaises(TypeError, apsw.VFS, "ignored", exclude=2)
+        self.assertNotIn("ignored", apsw.vfsnames())
 
         # Check basic functionality and inheritance - make an obfuscated provider
 
@@ -6060,6 +6067,32 @@ class APSW(unittest.TestCase):
             self.assertEqual(one[96:], two[96:])
 
         compare(orig, encryptme(obfu))
+
+        # versioning and exlcudes
+        meth_names = {}
+        for ver in (1, 2, 3):
+            name = f"foo{ ver }"
+            v = apsw.VFS(name, iVersion=ver)
+            registered = [vfs for vfs in apsw.vfs_details() if vfs["zName"] == name][0]
+            assert registered["iVersion"] == ver
+            for k in registered:
+                if k.startswith("x") and k not in meth_names:
+                    meth_names[k] = ver
+
+        for ver in (1,2,3):
+            name = f"bar{ ver }"
+            exclude = set(random.sample(list(meth_names.keys()), 3))
+            v = apsw.VFS(name, iVersion=ver, exclude=exclude)
+            registered = [vfs for vfs in apsw.vfs_details() if vfs["zName"] == name][0]
+            assert registered["iVersion"] == ver
+            for name in registered:
+                if not name.startswith("x"):
+                    continue
+                assert meth_names[name] <=ver
+                if name in exclude:
+                    assert registered[name] == 0
+                else:
+                    assert registered[name] != 0
 
         # helper routines
         self.assertRaises(TypeError, apsw.exceptionfor, "three")
@@ -6410,6 +6443,31 @@ class APSW(unittest.TestCase):
 
             def xCurrentTime99(self):
                 return super(TestVFS, self).xCurrentTime()
+
+            def xCurrentTimeInt641(self, bad, args):
+                1 / 0
+
+            def xCurrentTimeInt642(self):
+                1 / 0
+
+            def xCurrentTimeInt643(self):
+                return super(TestVFS, self).xCurrentTimeInt64("three")
+
+            def xCurrentTimeInt644(self):
+                return "three"
+
+            def xCurrentTimeInt645(self):
+                return 2 ** 65
+
+            def xCurrentTimeCorrect(self):
+                # actual correct implementation http://stackoverflow.com/questions/466321/convert-unix-timestamp-to-julian
+                return time.time() / 86400.0 + 2440587.5
+
+            def xCurrentTime99(self):
+                return super(TestVFS, self).xCurrentTime()
+
+            def xCurrentTimeInt6499(self):
+                return super(TestVFS, self).xCurrentTimeInt64()
 
             def xGetLastError1(self, bad, args):
                 1 / 0
@@ -6865,21 +6923,31 @@ class APSW(unittest.TestCase):
         testdb(mode="delete")
         testtimeout = False
 
-        ## xCurrentTime
+        ## xCurrentTime / xCurrentTimeInt64
+        # The Int64 version is usually called.  We set both here
         self.assertRaises(TypeError, vfs.xCurrentTime, "three")
+        self.assertRaises(TypeError, vfs.xCurrentTimeInt64, "three")
         TestVFS.xCurrentTime = TestVFS.xCurrentTime1
+        TestVFS.xCurrentTimeInt64 = TestVFS.xCurrentTimeInt641
         self.assertRaisesUnraisable(TypeError, testdb)
         TestVFS.xCurrentTime = TestVFS.xCurrentTime2
+        TestVFS.xCurrentTimeInt64 = TestVFS.xCurrentTimeInt642
         self.assertRaisesUnraisable(ZeroDivisionError, testdb)
         TestVFS.xCurrentTime = TestVFS.xCurrentTime3
+        TestVFS.xCurrentTimeInt64 = TestVFS.xCurrentTimeInt643
         self.assertRaisesUnraisable(TypeError, testdb)
         TestVFS.xCurrentTime = TestVFS.xCurrentTime4
+        TestVFS.xCurrentTimeInt64 = TestVFS.xCurrentTimeInt644
         self.assertRaisesUnraisable(TypeError, testdb)
         TestVFS.xCurrentTime = TestVFS.xCurrentTime5
-        testdb()
+        TestVFS.xCurrentTimeInt64 = TestVFS.xCurrentTimeInt645
+        self.assertMayRaiseUnraisable(OverflowError, testdb)
         TestVFS.xCurrentTime = TestVFS.xCurrentTime99
+        TestVFS.xCurrentTimeInt64 = TestVFS.xCurrentTimeInt6499
         self.assertMayRaiseUnraisable(apsw.VFSNotImplementedError, testdb)
         TestVFS.xCurrentTime = TestVFS.xCurrentTimeCorrect
+        TestVFS.xCurrentTimeInt64 = TestVFS.xCurrentTimeInt6499
+        testdb()
 
         ## xGetLastError
         # We can't directly test because the methods are called as side effects
@@ -8979,7 +9047,7 @@ shell.write(shell.stdout, "hello world\\n")
         ### Command - show
         ###
         # set all settings to known values
-        resetcmd = ".echo off\n.explain off\n.headers off\n.mode list\n.nullvalue ''\n.output stdout\n.separator |\n.width 1 2 3\n.exceptions off"
+        resetcmd = ".echo off\n.changes off\n.headers off\n.mode list\n.nullvalue ''\n.output stdout\n.separator |\n.width 1 2 3\n.exceptions off"
         reset()
         cmd(resetcmd)
         s.cmdloop()
@@ -8991,7 +9059,7 @@ shell.write(shell.stdout, "hello world\\n")
         isempty(fh[1])
         isnotempty(fh[2])
         baseline = get(fh[2])
-        for i in ".echo on", ".explain", ".headers on", ".mode column", ".nullvalue T", ".separator %", ".width 8 9 1", ".exceptions on":
+        for i in ".echo on", ".changes on", ".headers on", ".mode column", ".nullvalue T", ".separator %", ".width 8 9 1", ".exceptions on":
             reset()
             cmd(resetcmd)
             s.cmdloop()
@@ -9266,11 +9334,6 @@ shell.write(shell.stdout, "hello world\\n")
                 super(FaultVFSFile, self).__init__("", name, flags)
 
         vfs = FaultVFS()
-
-        ## xCurrentTimeFail
-        apsw.faultdict["xCurrentTimeFail"] = True
-        self.assertRaisesUnraisable(apsw.SQLError,
-                                    apsw.Connection(":memory:", vfs="faultvfs").cursor().execute, "select date('now')")
 
         ## APSWVFSBadVersion
         apsw.faultdict["APSWVFSBadVersion"] = True

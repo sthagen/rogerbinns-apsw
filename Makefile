@@ -99,7 +99,7 @@ PYCOVERAGEOPTS=--source apsw --append
 pycoverage:  ## Coverage of the Python code
 	-rm -rf .coverage htmlcov
 	$(PYTHON) -m coverage run $(PYCOVERAGEOPTS) -m apsw.tests
-	$(PYTHON) -m coverage run $(PYCOVERAGEOPTS) -m apsw ":memory:" .quit
+	$(PYTHON) -m coverage run $(PYCOVERAGEOPTS) -m apsw ":memory:" .exit
 	$(PYTHON) -m coverage run $(PYCOVERAGEOPTS) -m apsw.speedtest --apsw --sqlite3
 	$(PYTHON) -m coverage run $(PYCOVERAGEOPTS) -m apsw.trace -o /dev/null --sql --rows --timestamps --thread example-code.py >/dev/null
 	$(PYTHON) -m coverage report -m
@@ -181,12 +181,13 @@ compile-win:  ## Builds and tests against all the Python versions on Windows
 # other packages were skipped due to metadata issues
 compile-win-one:  ## Does one Windows build - set PYTHON variable
 	$(PYTHON) -m pip install --upgrade --upgrade-strategy eager pip wheel setuptools
+	$(PYTHON) -m pip uninstall -y apsw
 	copy tools\\setup-pypi.cfg setup.apsw
-	$(PYTHON)  -m pip wheel -v .
-	$(PYTHON)  -m pip install --force-reinstall --find-links=. apsw
+	$(PYTHON)  -m pip --no-cache-dir wheel -v .
+	cmd /c FOR %i in (*.whl) DO $(PYTHON)  -m pip --no-cache-dir install --force-reinstall %i
 	$(PYTHON) setup.py build_test_extension
 	$(WINCICONFIG) $(PYTHON) -m apsw.tests
-	del setup.apsw *.whl
+	-del /q setup.apsw *.whl
 
 source_nocheck: src/apswversion.h
 	env APSW_NO_GA=t $(MAKE) doc

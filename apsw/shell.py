@@ -21,6 +21,7 @@ import base64
 import argparse
 import contextlib
 import traceback
+import code
 
 from typing import TextIO, Optional
 
@@ -416,7 +417,7 @@ OPTIONS include:
                     op.append("\\n")
                 elif c == "\t":
                     op.append("\\t")
-                elif c == "/":  # yes you have to escape forward slash for some reason
+                elif c == "/":
                     op.append("\\/")
                 elif c == '"':
                     op.append("\\" + c)
@@ -440,7 +441,7 @@ OPTIONS include:
             return '"' + o + '"'
         else:
             # number of some kind
-            return '%s' % (v, )
+            return str(v)
 
     def _fmt_python(self, v):
         "Format as python literal"
@@ -1013,9 +1014,9 @@ Enter ".help" for instructions
         if len(cmd) > 3 and cmd[0] == "parameter" and cmd[1] == "set":
             pos = command.index(cmd[2], command.index("set") + 4) + len(cmd[2]) + 1
             cmd = cmd[:3] + [command[pos:]]
-        # special handling for shell because we want to preserve the text exactly
-        if cmd[0] == "shell":
-            rest = command[command.index("shell") + 6:].strip()
+        # special handling for shell / py because we want to preserve the text exactly
+        if cmd[0] in {"shell", "py"}:
+            rest = command[command.index(cmd[0]) + len(cmd[0]):].strip()
             if rest:
                 cmd = [cmd[0], rest]
         res = fn(cmd[1:])
@@ -1158,6 +1159,11 @@ Enter ".help" for instructions
         finally:
             self.pop_output()
 
+    _dbconfig_ignore = {
+        "SQLITE_DBCONFIG_MAINDBNAME", "SQLITE_DBCONFIG_LOOKASIDE", "SQLITE_DBCONFIG_MAX",
+        "SQLITE_DBCONFIG_STMT_SCANSTATUS"
+    }
+
     def command_dbconfig(self, cmd):
         """dbconfig ?NAME VALUE?: Show all dbconfig, or set a specific one
 
@@ -1166,14 +1172,10 @@ Enter ".help" for instructions
 
             .dbconfig enable_fkey 1
         """
-        ignore = {
-            "SQLITE_DBCONFIG_MAINDBNAME", "SQLITE_DBCONFIG_LOOKASIDE", "SQLITE_DBCONFIG_MAX",
-            "SQLITE_DBCONFIG_STMT_SCANSTATUS"
-        }
         if len(cmd) == 0:
             outputs = {}
             for k in apsw.mapping_db_config:
-                if type(k) is not str or k in ignore:
+                if type(k) is not str or k in self._dbconfig_ignore:
                     continue
                 pretty = k[len("SQLITE_DBCONFIG_"):].lower()
                 outputs[pretty] = self.db.config(getattr(apsw, k), -1)
@@ -2410,6 +2412,22 @@ Enter ".help" for instructions
         if len(cmd) == 2:
             self.moreprompt = self.fixup_backslashes(cmd[1])
 
+    def command_py(self, cmd):
+        """py ?PYTHON?: Starts a python REPL or runs the Python statement provided
+
+        The namespace provided includes ``apsw`` for the module, ``shell`` for this
+        shell and ``db`` for the current database.
+        """
+        vars = {"shell": self, "apsw": apsw, "db": self.db}
+        interp = code.InteractiveConsole(locals = vars)
+        if cmd:
+            assert len(cmd) == 1
+            res = interp.runsource(cmd[0])
+            if res:
+                self.write(self.stderr, "Incomplete Python statement")
+        else:
+            interp.interact(exitmsg="Returning to APSW shell")
+
     def command_read(self, cmd):
         """read FILENAME: Processes SQL and commands in FILENAME (or Python if FILENAME ends with .py)
 
@@ -3170,6 +3188,11 @@ Enter ".help" for instructions
             completions = self._output_modes
         elif t[0] == "help":
             completions = [v[1:] for v in self._builtin_commands] + ["all"]
+        elif t[0] == "dbconfig":
+            completions = [
+                v[len("SQLITE_DBCONFIG_"):].lower() for v in apsw.mapping_db_config
+                if isinstance(v, str) and v not in self._dbconfig_ignore
+            ]
         elif t[0] == "parameter":
             if len(t) == 1 or (len(t) == 2 and token):
                 completions = ["clear", "list", "unset ", "set "]

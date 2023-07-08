@@ -448,16 +448,23 @@ def index_info_to_dict(o: apsw.IndexInfo,
     return res
 
 
-def dbinfo(db: apsw.Connection, schema: str = "main") -> tuple[DatabaseFileInfo | None, JournalFileInfo | WALFileInfo | None]:
+def dbinfo(db: apsw.Connection,
+           schema: str = "main") -> tuple[DatabaseFileInfo | None, JournalFileInfo | WALFileInfo | None]:
     """Extracts fields from the database files
 
     Based on the `file format description <https://www.sqlite.org/fileformat2.html>`__.  The
     headers are read using :meth:`apsw.Connection.read` so you see inside encrypted, compressed,
-    zip etc formats. not necessarily the actual on disk file."""
+    zip etc formats. not necessarily the actual on disk file.
+
+    Memory databases return `None` for both.
+    """
 
     dbinfo = journalinfo = None
 
-    ok, header_page = db.read(schema, 0, 0, 128)
+    try:
+        ok, header_page = db.read(schema, 0, 0, 128)
+    except apsw.SQLError:
+        ok = False
 
     be_int = functools.partial(int.from_bytes, byteorder="big", signed=False)
 
@@ -474,7 +481,7 @@ def dbinfo(db: apsw.Connection, schema: str = "main") -> tuple[DatabaseFileInfo 
 
     def text_encoding(b: bytes) -> str:
         v = be_int(b)
-        return {1: "UTF-8", 2: "UTF-16le", 3: "UTF-16be"}.get(v, f"<< INVALID VALUE { v } >>")
+        return {0: "(pending)", 1: "UTF-8", 2: "UTF-16le", 3: "UTF-16be"}.get(v, f"<< INVALID VALUE { v } >>")
 
     if ok:
         kw = {"filename": db.filename}
@@ -525,9 +532,11 @@ def dbinfo(db: apsw.Connection, schema: str = "main") -> tuple[DatabaseFileInfo 
                 kw[name] = converter(b)
             journalinfo = WALFileInfo(**kw)
         else:
+            header_valid = lambda b: b == b"\xd9\xd5\x05\xf9\x20\xa1\x63\xd7"
             kw["filename"] = db.filename_journal
             for name, offset, size, converter in (
                 ("header", 0, 8, bytes),
+                ("header_valid", 0, 8, header_valid),
                 ("page_count", 8, 4, be_sint),
                 ("random_nonce", 12, 4, be_int),
                 ("initial_pages", 16, 4, be_int),
@@ -536,10 +545,7 @@ def dbinfo(db: apsw.Connection, schema: str = "main") -> tuple[DatabaseFileInfo 
             ):
                 b = journal_page[offset:offset + size]
                 kw[name] = converter(b)
-            # if the journal is not in use but present like in persist
-            # mode then the header is all zeroes
-            if any(b != 0 for b in kw["header"]):
-                journalinfo = JournalFileInfo(**kw)
+            journalinfo = JournalFileInfo(**kw)
 
     return dbinfo, journalinfo
 
@@ -1581,6 +1587,8 @@ class JournalFileInfo:
     "Header string"
     header: bytes
     'The "Page Count" - The number of pages in the next segment of the journal, or -1 to mean all content to the end of the file'
+    header_valid: bool
+    "If the header is the expected bytes"
     page_count: int
     "A random nonce for the checksum"
     random_nonce: int

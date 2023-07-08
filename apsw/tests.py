@@ -14,7 +14,8 @@ import itertools
 import inspect
 import struct
 import contextlib
-
+import tempfile
+import textwrap
 
 def ShouldFault(name, pending_exception):
     # You can't use print because calls involving print can be nested
@@ -8415,6 +8416,49 @@ class APSW(unittest.TestCase):
         isempty(fh[2])
         for i in "testdb", "quack":
             self.assertTrue(i not in get(fh[1]))
+
+        ###
+        ### Command - dbconfig
+        ###
+        reset()
+        cmd(".dbconfig")
+        s.cmdloop()
+        isempty(fh[2])
+        self.assertIn("trigger_eqp:", get(fh[1]))
+        reset()
+        self.assertFalse(s.db.config(apsw.SQLITE_DBCONFIG_TRIGGER_EQP, -1))
+        cmd(".dbconfig trigger_eqp 1")
+        s.cmdloop()
+        isempty(fh[2])
+        self.assertTrue(s.db.config(apsw.SQLITE_DBCONFIG_TRIGGER_EQP, -1))
+
+        ###
+        ### Command - dbinfo
+        ###
+        if hasattr(s, "command_dbinfo"):
+            with tempfile.TemporaryDirectory(prefix="apsw-test-shell-dbinfo-") as tmpd:
+                reset()
+                cmd(f".open { tmpd }/newdb")
+                s.cmdloop()
+                isempty(fh[2])
+                reset()
+                cmd(textwrap.dedent("""
+                    .dbinfo
+                    pragma journal_mode=wal;
+                    .dbinfo
+                    pragma journal_mode=persist;
+                    .dbinfo
+                    pragma encoding="UTF-16";
+                    .dbinfo
+                    create table x(y);
+                    .dbinfo
+                """))
+                s.cmdloop()
+                isnotempty(fh[1])
+                isempty(fh[2])
+                reset()
+                cmd(".close\n.connection 0")
+                s.cmdloop()
 
         ###
         ### Commands - dump

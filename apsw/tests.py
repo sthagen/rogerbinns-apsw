@@ -9067,6 +9067,18 @@ insert into xxblah values(3);
             self.assertTrue("1" in get(fh[1]))
 
         ###
+        ### Command - log
+        ###
+        reset()
+        cmd(".log on\n+;")
+        s.cmdloop()
+        self.assertIn("SQLITE_ERROR", get(fh[2]))
+        reset()
+        cmd(".log off\n+;")
+        s.cmdloop()
+        self.assertNotIn("SQLITE_ERROR", get(fh[2]))
+
+        ###
         ### Command - mode
         ###
         # already thoroughly tested in code above
@@ -9103,6 +9115,36 @@ insert into xxblah values(3);
             self.assertEqual(b4, s.stdout)
 
         ###
+        ### Command - parameter
+        ###
+        reset()
+        cmd("select :foo;")
+        s.cmdloop()
+        isempty(fh[1])
+        self.assertIn("No binding present for 'foo' -", get(fh[2]))
+        for val in ('orange', 'banana'):
+            reset()
+            cmd(f".parameter set foo '{ val }'\nselect $foo;")
+            s.cmdloop()
+            isempty(fh[2])
+            self.assertIn(val, get(fh[1]))
+        reset()
+        cmd(".parameter list")
+        s.cmdloop()
+        isempty(fh[2])
+        self.assertIn("banana", get(fh[1]))
+        reset()
+        cmd(".parameter unset foo\nselect $foo;")
+        s.cmdloop()
+        isempty(fh[1])
+        self.assertIn("No binding present for 'foo' -", get(fh[2]))
+        reset()
+        cmd(".parameter set bar 3\n.parameter clear\nselect $bar;")
+        s.cmdloop()
+        isempty(fh[1])
+        self.assertIn("No binding present for 'bar' -", get(fh[2]))
+
+        ###
         ### Command prompt
         ###
         # not much to test until pty testing is working
@@ -9114,6 +9156,20 @@ insert into xxblah values(3);
             isempty(fh[1])
             isnotempty(fh[2])
             self.assertEqual(b4, (s.prompt, s.moreprompt))
+
+        ###
+        ### Command - py
+        ###
+        reset()
+        cmd(".py None")
+        s.cmdloop()
+        isempty(fh[1])
+        isempty(fh[2])
+        reset()
+        cmd(".py [")
+        s.cmdloop()
+        self.assertIn("Incomplete", get(fh[2]))
+        # interactive use is tested interactively
 
         ###
         ### Command read
@@ -9157,6 +9213,21 @@ shell.write(shell.stdout, "hello world\\n")
             self.assertTrue(i in get(fh[1]))
 
         # separator done earlier
+
+        ###
+        ### Command - shell
+        ###
+        reset()
+        # this uses the process stdout/err which we can't capture without heroics
+        cmd(".shell exit 1")
+        s.cmdloop()
+        self.assertIn("Exit code", get(fh[2]))
+        reset()
+        cmd(".shell %s > %s" % ("dir" if sys.platform == "win32" else "ls", os.devnull))
+        s.cmdloop()
+        # should always work on these platforms
+        if sys.platform in {"win32", "linux", "darwin"}:
+            self.assertNotIn("Exit code", get(fh[2]))
 
         ###
         ### Command - show
@@ -9246,6 +9317,32 @@ shell.write(shell.stdout, "hello world\\n")
             isempty(fh[2])
 
         # timer is tested earlier
+
+        ###
+        ### Command - version
+        ###
+        reset()
+        cmd(".version")
+        s.cmdloop()
+        isempty(fh[2])
+        self.assertIn(apsw.apswversion(), get(fh[1]))
+
+        ###
+        ### Command - vfsname / vfsinfo / vfslist
+        ###
+        name = s.db.open_vfs
+        reset()
+        cmd(".vfsname")
+        s.cmdloop()
+        self.assertEqual(name, get(fh[1]).strip())
+        reset()
+        cmd(".vfsinfo")
+        s.cmdloop()
+        self.assertIn(name, get(fh[1]))
+        reset()
+        cmd(".vfslist")
+        s.cmdloop()
+        self.assertIn(name, get(fh[1]))
 
         ###
         ### Command width

@@ -326,10 +326,11 @@ FILENAME is the name of a SQLite database. A new database is
 created if the file does not exist. If omitted or an empty
 string then an in-memory database is created.
 OPTIONS include:
+
    -init filename       read/process named file
    -echo                print commands before execution
    -[no]header          turn headers on or off
-   -bail                stop after hitting an error
+   -bail                stop after hitting the first error
    -interactive         force interactive I/O
    -batch               force batch I/O
    -column              set output mode to 'column'
@@ -343,7 +344,7 @@ OPTIONS include:
    -version             show SQLite version
    -encoding 'name'     the encoding to use for files
                         opened via .import, .read & .output
-   -nocolour            disables colour output to screen
+   -nocolour            disables interactive colour output
 """
         return msg.lstrip()
 
@@ -921,9 +922,9 @@ Enter ".help" for instructions
             sql = qd[1]
             if not internal:
                 if self.echo:
-                    self.write(self.stderr, fmt_sql(qd[0]) + "\n")
+                    self.write_error(fmt_sql(qd[0]) + "\n")
             if qd[2]:
-                self.write(self.stderr, f"{ self.colour.error }{ qd[2] }{ self.colour.error_}\n")
+                self.write_error(f"{ qd[2] }\n")
                 if qd[3] >= 0:
                     offset = qd[3]
                     query = qd[0].encode("utf8")
@@ -1089,7 +1090,11 @@ Enter ".help" for instructions
         self.changes = self._boolean_command("changes", cmd)
 
     def command_close(self, cmd):
-        """close: Closes the current database"""
+        """close: Closes the current database
+
+        Use .open to open a database, or .connection to switch to another
+        connection
+        """
         if len(cmd):
             raise self.Error("Unexpected arguments")
         self.db.close()
@@ -1183,7 +1188,7 @@ Enter ".help" for instructions
             for k, v in outputs.items():
                 self.write(self.stdout, " " * (w - len(k)))
                 self.write(self.stdout, k + ":  ")
-                self.write(self.stdout, self.colour.colour_value(v, apsw.format_sql_value(v)))
+                self.write_value(v)
                 self.write(self.stdout, "\n")
             return
         elif len(cmd) != 2:
@@ -1193,7 +1198,7 @@ Enter ".help" for instructions
             raise self.Error(f"Unknown config option { key }")
         v = self.db.config(getattr(apsw, key), int(cmd[1]))
         self.write(self.stdout, cmd[0].lower() + ": ")
-        self.write(self.stdout, self.colour.colour_value(v, apsw.format_sql_value(v)))
+        self.write_value(v)
         self.write(self.stdout, "\n")
 
     def command_dbinfo(self, cmd):
@@ -1235,7 +1240,7 @@ Enter ".help" for instructions
         for k, v in outputs:
             self.write(self.stdout, " " * (w - len(k)))
             self.write(self.stdout, k + ":  ")
-            self.write(self.stdout, self.colour.colour_value(v, apsw.format_sql_value(v)))
+            self.write_value(v)
             self.write(self.stdout, "\n")
 
     def command_dump(self, cmd):
@@ -1833,7 +1838,7 @@ Enter ".help" for instructions
                 try:
                     cur.execute(sql, line)
                 except Exception:
-                    self.write(self.stderr, "Error inserting row %d" % (row, ))
+                    self.write_error(f"Error inserting row { row }")
                     raise
                 row += 1
             self.db.execute("COMMIT")
@@ -2121,7 +2126,7 @@ Enter ".help" for instructions
 
     def log_handler(self, code, message):
         code = f"( { code } - { apsw.mapping_result_codes.get(code, 'unknown') } ) "
-        self.write(self.stderr, self.colour.error + code + message + "\n" + self.colour.error_)
+        self.write_error(code + message + "\n")
 
     def command_log(self, cmd):
         "log ON|OFF: Shows SQLite log messages"
@@ -2360,8 +2365,14 @@ Enter ".help" for instructions
            unset NAME      -- deletes named binding
            set NAME VALUE  -- sets binding to VALUE
 
-        The value must be a valid SQL literal.  For example
-        3 will be an integer 3 while '3' will be a string.
+        The value must be a valid SQL literal or expression.  For example
+        `3` will be an integer 3 while `'3'` will be a string.
+
+        Example::
+
+          .parameter set floor 10.99
+          .parameter set text 'Acme''s Glove'
+          select * from sales where price > $floor and description != $text;
         """
         if cmd:
             if len(cmd) == 1 and cmd[0] in {"clear", "init"}:
@@ -2371,10 +2382,10 @@ Enter ".help" for instructions
                 if not self.bindings:
                     self.write(self.stdout, "No parameters set\n")
                     return
-                w = min(10, max(len(k) for k in self.bindings.keys()) + 1)
+                w = max(10, max(len(k) for k in self.bindings) + 1)
                 for k, v in sorted(self.bindings.items()):
                     self.write(self.stdout, k + " " * (w - len(k)))
-                    self.write(self.stdout, self.colour.colour_value(v, apsw.format_sql_value(v)))
+                    self.write_value(v)
                     self.write(self.stdout, "\n")
                 return
             if len(cmd) == 2 and cmd[0] == "unset":
@@ -2425,16 +2436,32 @@ Enter ".help" for instructions
 
         The namespace provided includes ``apsw`` for the module, ``shell`` for this
         shell and ``db`` for the current database.
+
+        Using the .output command does not affect output from this command.  You
+        can write to `shell.stdout` and `shell.stderr`.
         """
+        self.stdout.flush()
+        self.stderr.flush()
         vars = {"shell": self, "apsw": apsw, "db": self.db}
-        interp = code.InteractiveConsole(locals=vars)
         if cmd:
             assert len(cmd) == 1
-            res = interp.runsource(cmd[0])
+            interp = code.InteractiveInterpreter(locals=vars)
+            try:
+                # we have to make sys.excepthook and sys.__excepthook__ be
+                # the same otherwise the traceback includes methods in the
+                # code module.  Ubuntu's apport messes with excepthook
+                hook = sys.excepthook
+                sys.excepthook = sys.__excepthook__
+                res = interp.runsource(cmd[0])
+            finally:
+                sys.excepthook = hook
             if res:
-                self.write(self.stderr, "Incomplete Python statement")
+                self.write_error("Incomplete Python statement\n")
         else:
-            interp.interact(exitmsg="Returning to APSW shell")
+            # this should be locals (plural) but the method is written
+            # in singular and works due to being passed as a positional
+            # argument
+            code.interact(local=vars, exitmsg=self.colour.intro + "Returning to APSW shell" + self.colour.intro_)
 
     def command_read(self, cmd):
         """read FILENAME: Processes SQL and commands in FILENAME (or Python if FILENAME ends with .py)
@@ -2548,13 +2575,17 @@ Enter ".help" for instructions
               "encoding")
 
     def command_shell(self, cmd):
-        """shell CMD ARGS...: Run CMD ARGS in a system shell"""
+        """shell CMD ARGS...: Run CMD ARGS in a system shell
+
+        Note that output goes to the process standard output, not
+        whatever the shell .output command has configured.
+        """
         if len(cmd) == 0:
             raise self.Error("Specify command and arguments to run")
         assert len(cmd) == 1
         res = os.system(cmd[0])
         if res != 0:
-            self.write(self.stderr, self.colour.error + f"Exit code { res }" + "\n" + self.colour.error_)
+            self.write_error(f"Exit code { res }\n")
 
     def command_show(self, cmd):
         """show: Show the current values for various settings."""
@@ -2699,7 +2730,7 @@ Enter ".help" for instructions
             self.write(self.stdout, " " * (w - len(k)))
             self.write(self.stdout, k + ":  ")
             vout = "0x%x" % v if k.startswith("x") else str(v)
-            self.write(self.stdout, self.colour.colour_value(v, vout))
+            self.write_value(v)
             self.write(self.stdout, "\n")
 
     def command_vfsinfo(self, cmd):
@@ -2823,6 +2854,14 @@ Enter ".help" for instructions
     def write(self, dest, text):
         "Writes text to dest.  dest will typically be one of self.stdout or self.stderr."
         dest.write(text)
+
+    def write_error(self, text):
+        "Writes text to self.stderr colouring it"
+        self.write(self.stderr, self.colour.error + text + self.colour.error_)
+
+    def write_value(self, value, fmt=apsw.format_sql_value):
+        "Writes colourized value to self.stdout converting to text with fmt"
+        self.write(self.stdout, self.colour.colour_value(value, fmt(value)))
 
     _raw_input = input
 

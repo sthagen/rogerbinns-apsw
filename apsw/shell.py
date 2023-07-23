@@ -1115,9 +1115,11 @@ Enter ".help" for instructions
             dbs.append(c)
 
         if len(cmd) == 0:
+            co = self.colour
+            if self.db not in dbs:
+                self.write(self.stdout, co.bold + "(Current connection is closed)" + co.bold_ + "\n")
             for i, c in enumerate(dbs):
                 sel = "*" if self.db is c else " "
-                co = self.colour
                 self.write(
                     self.stdout,
                     f"{ co.bold}{ sel }{ co.bold_} { co.vnumber }{ i: 2}{ co.vnumber_ } - ({ c.open_vfs }) \"{ co.vstring }{ c.filename }{ co.vstring_ }\"\n"
@@ -2275,28 +2277,35 @@ Enter ".help" for instructions
 
         Options are:
 
-        --new:  Closes amy existing connection referring to the same file
-        and deletes the database files before opening
+        --wipe     Closes any existing connections in this process referring to
+                   the same file  and deletes the database file, journals etc
+                   before opening
+
+        --vfs VFS  Which vfs to use when opening
 
         If FILE is omitted then a memory database is opened
         """
-        new = False
+        wipe = False
+        vfs = None
         dbname = None
         c = cmd
         while c:
             p = c.pop(0)
             if p.startswith("--"):
-                if p == "--new":
-                    new = True
+                if p == "--wipe":
+                    wipe = True
+                    continue
+                if p == "--vfs":
+                    vfs = c.pop(0)
                     continue
                 raise self.Error("Unknown open param: " + p)
             if dbname is not None:
                 raise self.Error("Too many arguments: " + p)
             dbname = p
 
-        if new:
+        if wipe:
             if not dbname:
-                raise self.Error("You must specify a filename with --new")
+                raise self.Error("You must specify a filename with --wipe")
             for c in apsw.connections():
                 try:
                     if c.filename and os.path.samefile(c.filename, dbname):
@@ -2309,8 +2318,11 @@ Enter ".help" for instructions
                 except OSError:
                     pass
         self.db_references.add(self.db)
-        self._db = None
-        self.dbfilename = dbname
+        self.dbfilename = dbname if dbname is  not None else ""
+        self._db = apsw.Connection(self.dbfilename,
+                                   vfs=vfs,
+                                   flags=apsw.SQLITE_OPEN_URI | apsw.SQLITE_OPEN_READWRITE
+                                   | apsw.SQLITE_OPEN_CREATE)
 
     def command_output(self, cmd):
         """output FILENAME: Send output to FILENAME (or stdout)
@@ -2470,14 +2482,15 @@ Enter ".help" for instructions
         dot commands).  If the filename ends in .py then it is treated
         as Python code instead.
 
-        For Python code the symbol 'shell' refers to the instance of
-        the shell and 'apsw' is the apsw module.
+        For Python code the symbol 'db' refers to the current database,
+        'shell' refers to the instance of the shell and 'apsw' is the
+        apsw module.
         """
         if len(cmd) != 1:
             raise self.Error("read takes a single filename")
         if cmd[0].lower().endswith(".py"):
             g = {}
-            g.update({'apsw': apsw, 'shell': self})
+            g.update({'apsw': apsw, 'shell': self, 'db': self.db})
             # compile step is needed to associate name with code
             f = open(cmd[0], "rb")
             try:

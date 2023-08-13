@@ -1,8 +1,8 @@
 
 SQLITEVERSION=3.42.0
-APSWSUFFIX=.0
+APSWSUFFIX=.1
 
-RELEASEDATE="18 May 2023"
+RELEASEDATE="20 May 2023"
 
 VERSION=$(SQLITEVERSION)$(APSWSUFFIX)
 VERDIR=apsw-$(VERSION)
@@ -38,7 +38,7 @@ clean: ## Cleans up everything
 	rm -rf dist build work/* megatestresults apsw.egg-info __pycache__ apsw/__pycache__ :memory: .mypy_cache .ropeproject htmlcov "System Volume Information" doc/docdb.json
 	mkdir dist
 	for i in 'vgcore.*' '.coverage' '*.pyc' '*.pyo' '*~' '*.o' '*.so' '*.dll' '*.pyd' '*.gcov' '*.gcda' '*.gcno' '*.orig' '*.tmp' 'testdb*' 'testextension.sqlext' ; do \
-		find . -type f -name "$$i" -print0 | xargs -0t --no-run-if-empty rm -f ; done
+		find . -type f -name "$$i" -print0 | xargs -0 --no-run-if-empty rm -f ; done
 	rm -f doc/typing.rstgen doc/example.rst $(GENDOCS)
 	-rm -rf sqlite3/
 
@@ -47,10 +47,12 @@ doc: docs ## Builds all the doc
 docs: build_ext docs-no-fetch
 
 docs-no-fetch: $(GENDOCS) doc/example.rst doc/.static doc/typing.rstgen
+	rm -f testdb
 	env PYTHONPATH=. $(PYTHON) tools/docmissing.py
 	env PYTHONPATH=. $(PYTHON) tools/docupdate.py $(VERSION)
 	make PYTHONPATH="`pwd`" VERSION=$(VERSION) RELEASEDATE=$(RELEASEDATE) -C doc clean html epub
 	tools/spellcheck.sh
+	rst2html.py --strict --verbose --exit-status 1 README.rst >/dev/null
 
 doc/example.rst: example-code.py tools/example2rst.py src/apswversion.h
 	rm -f dbfile
@@ -210,7 +212,7 @@ release: ## Signs built source file(s)
 	cd dist ; zip -m $(VERDIR)-sigs.zip *.asc
 
 # building a python debug interpreter
-PYDEBUG_VER=3.11.3
+PYDEBUG_VER=3.11.4
 PYDEBUG_DIR=/space/pydebug
 PYVALGRIND_VER=$(PYDEBUG_VER)
 PYVALGRIND_DIR=/space/pyvalgrind

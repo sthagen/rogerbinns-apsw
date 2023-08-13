@@ -7,6 +7,8 @@
 
 import sys
 import os
+import types
+from typing import Optional
 import warnings
 import platform
 import typing
@@ -17,6 +19,7 @@ import contextlib
 import tempfile
 import textwrap
 import shlex
+
 
 def ShouldFault(name, pending_exception):
     # You can't use print because calls involving print can be nested
@@ -30,6 +33,14 @@ def ShouldFault(name, pending_exception):
 sys.apsw_should_fault = ShouldFault
 
 import apsw
+
+if not all(hasattr(apsw, name) for name in ("initialize", "format_sql_value")):
+    msg = """
+The compiled portion of APSW is not present where the tests are being run.
+It needs to be compiled and in-place first.
+    """.strip()
+    sys.exit(msg)
+
 import apsw.shell
 
 
@@ -1127,7 +1138,7 @@ class APSW(unittest.TestCase):
         a = VFSA()
         b = VFSB()
         sys.setrecursionlimit(200)
-        print("A message about RecursionError is possible, and what is being tested", file=sys.stderr)
+        print("A message due to RecursionError is possible, and what is being tested", file=sys.stderr)
         self.assertRaises((apsw.SQLError, RecursionError),
                           self.assertRaisesUnraisable, (apsw.SQLError, RecursionError),
                           apsw.Connection,
@@ -5255,6 +5266,9 @@ class APSW(unittest.TestCase):
                     "check": "CHECK_INDEX",
                 },
             },
+            "apswfcntl": {
+                "req": {}
+            },
         }
 
         prefix, base = name.split("_", 1)
@@ -6040,10 +6054,10 @@ class APSW(unittest.TestCase):
                 apsw.VFSFile.__init__(self, inheritfromvfsname, filename, flags)
 
             def xRead(self, amount, offset):
-                return encryptme(super(ObfuscatedVFSFile, self).xRead(amount, offset))
+                return encryptme(super().xRead(amount, offset))
 
             def xWrite(self, data, offset):
-                super(ObfuscatedVFSFile, self).xWrite(encryptme(data), offset)
+                super().xWrite(encryptme(data), offset)
 
         class ObfuscatedVFS(apsw.VFS):
 
@@ -6187,7 +6201,7 @@ class APSW(unittest.TestCase):
                 return 3
 
             def xRandomness99(self, n):
-                return super(RandomVFS, self).xRandomness(n + 2049)
+                return super().xRandomness(n + 2049)
 
         vfsupper = RandomVFSUpper()
         vfs = RandomVFS()
@@ -6227,13 +6241,13 @@ class APSW(unittest.TestCase):
         class TestVFS(apsw.VFS):
 
             def init1(self):
-                super(TestVFS, self).__init__("apswtest")
+                super().__init__("apswtest")
 
             def init99(self, name="apswtest", base="", **kwargs):
-                super(TestVFS, self).__init__(name, base, **kwargs)
+                super().__init__(name, base, **kwargs)
 
             def xDelete1(self, name, syncdir):
-                super(TestVFS, self).xDelete(".", False)
+                super().xDelete(".", False)
 
             def xDelete2(self, bad, number, of, args):
                 1 / 0
@@ -6242,12 +6256,12 @@ class APSW(unittest.TestCase):
                 1 / 0
 
             def xDelete4(self, name, syncdir):
-                super(TestVFS, self).xDelete("bad", "arguments")
+                super().xDelete("bad", "arguments")
 
             def xDelete99(self, name, syncdir):
                 assert (type(name) == type(""))
                 assert (type(syncdir) == type(1))
-                return super(TestVFS, self).xDelete(name, syncdir)
+                return super().xDelete(name, syncdir)
 
             def xAccess1(self, bad, number, of, args):
                 1 / 0
@@ -6256,7 +6270,7 @@ class APSW(unittest.TestCase):
                 1 / 0
 
             def xAccess3(self, name, flags):
-                return super(TestVFS, self).xAccess("bad", "arguments")
+                return super().xAccess("bad", "arguments")
 
             def xAccess4(self, name, flags):
                 return (3, )
@@ -6264,7 +6278,7 @@ class APSW(unittest.TestCase):
             def xAccess99(self, name, flags):
                 assert (type(name) == type(""))
                 assert (type(flags) == type(1))
-                return super(TestVFS, self).xAccess(name, flags)
+                return super().xAccess(name, flags)
 
             def xFullPathname1(self, bad, number, of, args):
                 1 / 0
@@ -6273,11 +6287,11 @@ class APSW(unittest.TestCase):
                 1 / 0
 
             def xFullPathname3(self, name):
-                return super(TestVFS, self).xFullPathname("bad", "args")
+                return super().xFullPathname("bad", "args")
 
             def xFullPathname4(self, name):
                 # parameter is larger than default buffer sizes used by sqlite
-                return super(TestVFS, self).xFullPathname(name * 10000)
+                return super().xFullPathname(name * 10000)
 
             def xFullPathname5(self, name):
                 # result is larger than default buffer sizes used by sqlite
@@ -6288,17 +6302,17 @@ class APSW(unittest.TestCase):
 
             def xFullPathname99(self, name):
                 assert (type(name) == type(u""))
-                return super(TestVFS, self).xFullPathname(name)
+                return super().xFullPathname(name)
 
             def xOpen1(self, bad, number, of, arguments):
                 1 / 0
 
             def xOpen2(self, name, flags):
-                super(TestVFS, self).xOpen(name, 3)
+                super().xOpen(name, 3)
                 1 / 0
 
             def xOpen3(self, name, flags):
-                v = super(TestVFS, self).xOpen(name, flags)
+                v = super().xOpen(name, flags)
                 flags.append(v)
                 return v
 
@@ -6311,7 +6325,7 @@ class APSW(unittest.TestCase):
                 assert (len(flags) == 2)
                 assert (type(flags[0]) in (int, ))
                 assert (type(flags[1]) in (int, ))
-                return super(TestVFS, self).xOpen(name, flags)
+                return super().xOpen(name, flags)
 
             def xOpen100(self, name, flags):
                 return TestFile(name, flags)
@@ -6329,18 +6343,18 @@ class APSW(unittest.TestCase):
                 return "fred"
 
             def xDlOpen5(self, name):
-                return super(TestVFS, self).xDlOpen(3)
+                return super().xDlOpen(3)
 
             # python 3 only test
             def xDlOpen6(self, name):
-                return super(TestVFS, self).xDlOpen(b"abcd")  # bad string type
+                return super().xDlOpen(b"abcd")  # bad string type
 
             def xDlOpen7(self, name):
                 return 0xffffffffffffffff10
 
             def xDlOpen99(self, name):
                 assert (type(name) == type(u""))
-                res = super(TestVFS, self).xDlOpen(name)
+                res = super().xDlOpen(name)
                 if ctypes:
                     try:
                         cres = ctypes.cdll.LoadLibrary(name)._handle
@@ -6359,10 +6373,10 @@ class APSW(unittest.TestCase):
                 return "fred"
 
             def xDlSym4(self, handle, name):
-                super(TestVFS, self).xDlSym(3, 3)
+                super().xDlSym(3, 3)
 
             def xDlSym5(self, handle, name):
-                return super(TestVFS, self).xDlSym(handle, b"abcd")
+                return super().xDlSym(handle, b"abcd")
 
             def xDlSym6(self, handle, name):
                 return 0xffffffffffffffff10
@@ -6370,7 +6384,7 @@ class APSW(unittest.TestCase):
             def xDlSym99(self, handle, name):
                 assert (type(handle) in (int, ))
                 assert (type(name) == type(u""))
-                res = super(TestVFS, self).xDlSym(handle, name)
+                res = super().xDlSym(handle, name)
                 # pypy doesn't have dlsym
                 if not iswindows and hasattr(_ctypes, "dlsym"):
                     assert (_ctypes.dlsym(handle, name) == res)
@@ -6384,11 +6398,11 @@ class APSW(unittest.TestCase):
                 1 / 0
 
             def xDlClose3(self, handle):
-                return super(TestVFS, self).xDlClose("three")
+                return super().xDlClose("three")
 
             def xDlClose99(self, handle):
                 assert (type(handle) in (int, ))
-                super(TestVFS, self).xDlClose(handle)
+                super().xDlClose(handle)
 
             def xDlError1(self, bad, number, of, arguments):
                 1 / 0
@@ -6397,7 +6411,7 @@ class APSW(unittest.TestCase):
                 1 / 0
 
             def xDlError3(self):
-                return super(TestVFS, self).xDlError("three")
+                return super().xDlError("three")
 
             def xDlError4(self):
                 return 3
@@ -6409,7 +6423,7 @@ class APSW(unittest.TestCase):
                 return None
 
             def xDlError99(self):
-                return super(TestVFS, self).xDlError()
+                return super().xDlError()
 
             def xSleep1(self, bad, number, of, arguments):
                 1 / 0
@@ -6418,7 +6432,7 @@ class APSW(unittest.TestCase):
                 1 / 0
 
             def xSleep3(self, microseconds):
-                return super(TestVFS, self).xSleep("three")
+                return super().xSleep("three")
 
             def xSleep4(self, microseconds):
                 return "three"
@@ -6431,7 +6445,7 @@ class APSW(unittest.TestCase):
 
             def xSleep99(self, microseconds):
                 assert (type(microseconds) in (int, ))
-                return super(TestVFS, self).xSleep(microseconds)
+                return super().xSleep(microseconds)
 
             def xCurrentTime1(self, bad, args):
                 1 / 0
@@ -6440,7 +6454,7 @@ class APSW(unittest.TestCase):
                 1 / 0
 
             def xCurrentTime3(self):
-                return super(TestVFS, self).xCurrentTime("three")
+                return super().xCurrentTime("three")
 
             def xCurrentTime4(self):
                 return "three"
@@ -6453,7 +6467,7 @@ class APSW(unittest.TestCase):
                 return time.time() / 86400.0 + 2440587.5
 
             def xCurrentTime99(self):
-                return super(TestVFS, self).xCurrentTime()
+                return super().xCurrentTime()
 
             def xCurrentTimeInt641(self, bad, args):
                 1 / 0
@@ -6462,7 +6476,7 @@ class APSW(unittest.TestCase):
                 1 / 0
 
             def xCurrentTimeInt643(self):
-                return super(TestVFS, self).xCurrentTimeInt64("three")
+                return super().xCurrentTimeInt64("three")
 
             def xCurrentTimeInt644(self):
                 return "three"
@@ -6475,10 +6489,10 @@ class APSW(unittest.TestCase):
                 return time.time() / 86400.0 + 2440587.5
 
             def xCurrentTime99(self):
-                return super(TestVFS, self).xCurrentTime()
+                return super().xCurrentTime()
 
             def xCurrentTimeInt6499(self):
-                return super(TestVFS, self).xCurrentTimeInt64()
+                return super().xCurrentTimeInt64()
 
             def xGetLastError1(self, bad, args):
                 1 / 0
@@ -6487,7 +6501,7 @@ class APSW(unittest.TestCase):
                 1 / 0
 
             def xGetLastError3(self):
-                return super(TestVFS, self).xGetLastError("three")
+                return super().xGetLastError("three")
 
             def xGetLastError4(self):
                 return 3
@@ -6519,7 +6533,7 @@ class APSW(unittest.TestCase):
                 return "banana", "Some sort of message"
 
             def xGetLastError99(self):
-                return super(TestVFS, self).xGetLastError()
+                return super().xGetLastError()
 
             def xNextSystemCall1(self, bad, args):
                 1 / 0
@@ -6534,7 +6548,7 @@ class APSW(unittest.TestCase):
                 1 / 0
 
             def xNextSystemCall99(self, name):
-                return super(TestVFS, self).xNextSystemCall(name)
+                return super().xNextSystemCall(name)
 
             def xGetSystemCall1(self, bad, args):
                 1 / 0
@@ -6549,7 +6563,7 @@ class APSW(unittest.TestCase):
                 return 3.7
 
             def xGetSystemCall99(self, name):
-                return super(TestVFS, self).xGetSystemCall(name)
+                return super().xGetSystemCall(name)
 
             def xSetSystemCall1(self, bad, args, args3):
                 1 / 0
@@ -6561,39 +6575,39 @@ class APSW(unittest.TestCase):
                 raise apsw.NotFoundError()
 
             def xSetSystemCall99(self, name, ptr):
-                return super(TestVFS, self).xSetSystemCall(name, ptr)
+                return super().xSetSystemCall(name, ptr)
 
         class TestFile(apsw.VFSFile):
 
             def init1(self, name, flags):
-                super(TestFile, self).__init__("bogus", "arguments")
+                super().__init__("bogus", "arguments")
 
             def init2(self, name, flags):
-                super(TestFile, self).__init__("bogus", 3, 4)
+                super().__init__("bogus", 3, 4)
 
             def init3(self, name, flags):
-                super(TestFile, self).__init__("bogus", "4", 4)
+                super().__init__("bogus", "4", 4)
 
             def init4(self, name, flags):
-                super(TestFile, self).__init__("bogus", "4", [4, 4, 4, 4])
+                super().__init__("bogus", "4", [4, 4, 4, 4])
 
             def init5(self, name, flags):
-                super(TestFile, self).__init__("", name, [0xffffffffeeeeeeee0, 0xffffffffeeeeeeee0])
+                super().__init__("", name, [0xffffffffeeeeeeee0, 0xffffffffeeeeeeee0])
 
             def init6(self, name, flags):
-                super(TestFile, self).__init__("", name, [0xffffffffa, 0])  # 64 bit int vs long overflow
+                super().__init__("", name, [0xffffffffa, 0])  # 64 bit int vs long overflow
 
             def init7(self, name, flags):
-                super(TestFile, self).__init__("", name, (6, 7))
+                super().__init__("", name, (6, 7))
 
             def init8(self, name, flags):
-                super(TestFile, self).__init__("bogus", name, flags)
+                super().__init__("bogus", name, flags)
 
             def init9(self, name, flags):
-                super(TestFile, self).__init__("", name, (6, "six"))
+                super().__init__("", name, (6, "six"))
 
             def init99(self, name, flags):
-                super(TestFile, self).__init__("", name, flags)
+                super().__init__("", name, flags)
 
             def xRead1(self, bad, number, of, arguments):
                 1 / 0
@@ -6608,10 +6622,10 @@ class APSW(unittest.TestCase):
                 return u"a" * amount
 
             def xRead5(self, amount, offset):
-                return super(TestFile, self).xRead(amount - 1, offset)
+                return super().xRead(amount - 1, offset)
 
             def xRead99(self, amount, offset):
-                return super(TestFile, self).xRead(amount, offset)
+                return super().xRead(amount, offset)
 
             def xWrite1(self, bad, number, of, arguments):
                 1 / 0
@@ -6620,7 +6634,7 @@ class APSW(unittest.TestCase):
                 1 / 0
 
             def xWrite99(self, buffy, offset):
-                return super(TestFile, self).xWrite(buffy, offset)
+                return super().xWrite(buffy, offset)
 
             def xUnlock1(self, bad, number, of, arguments):
                 1 / 0
@@ -6629,7 +6643,7 @@ class APSW(unittest.TestCase):
                 1 / 0
 
             def xUnlock99(self, level):
-                return super(TestFile, self).xUnlock(level)
+                return super().xUnlock(level)
 
             def xLock1(self, bad, number, of, arguments):
                 1 / 0
@@ -6638,7 +6652,7 @@ class APSW(unittest.TestCase):
                 1 / 0
 
             def xLock99(self, level):
-                return super(TestFile, self).xLock(level)
+                return super().xLock(level)
 
             def xTruncate1(self, bad, number, of, arguments):
                 1 / 0
@@ -6647,7 +6661,7 @@ class APSW(unittest.TestCase):
                 1 / 0
 
             def xTruncate99(self, size):
-                return super(TestFile, self).xTruncate(size)
+                return super().xTruncate(size)
 
             def xSync1(self, bad, number, of, arguments):
                 1 / 0
@@ -6656,7 +6670,7 @@ class APSW(unittest.TestCase):
                 1 / 0
 
             def xSync99(self, flags):
-                return super(TestFile, self).xSync(flags)
+                return super().xSync(flags)
 
             def xSectorSize1(self, bad, number, of, args):
                 1 / 0
@@ -6671,7 +6685,7 @@ class APSW(unittest.TestCase):
                 return 0xffffffffeeeeeeee0
 
             def xSectorSize99(self):
-                return super(TestFile, self).xSectorSize()
+                return super().xSectorSize()
 
             def xDeviceCharacteristics1(self, bad, number, of, args):
                 1 / 0
@@ -6686,7 +6700,7 @@ class APSW(unittest.TestCase):
                 return 0xffffffffeeeeeeee0
 
             def xDeviceCharacteristics99(self):
-                return super(TestFile, self).xDeviceCharacteristics()
+                return super().xDeviceCharacteristics()
 
             def xFileSize1(self, bad, number, of, args):
                 1 / 0
@@ -6701,7 +6715,7 @@ class APSW(unittest.TestCase):
                 return 0xffffffffeeeeeeee0
 
             def xFileSize99(self):
-                res = super(TestFile, self).xFileSize()
+                res = super().xFileSize()
                 if res < 100000:
                     return int(res)
                 return res
@@ -6719,7 +6733,7 @@ class APSW(unittest.TestCase):
                 return 0xffffffffeeeeeeee0
 
             def xCheckReservedLock99(self):
-                return super(TestFile, self).xCheckReservedLock()
+                return super().xCheckReservedLock()
 
             def xFileControl1(self, bad, number, of, args):
                 1 / 0
@@ -6737,7 +6751,7 @@ class APSW(unittest.TestCase):
                     if ctypes:
                         assert (True is ctypes.py_object.from_address(ptr).value)
                 else:
-                    return super(TestFile, self).xFileControl(op, ptr)
+                    return super().xFileControl(op, ptr)
                 return True
 
         TestVFS.xCurrentTime = TestVFS.xCurrentTimeCorrect
@@ -7896,8 +7910,10 @@ class APSW(unittest.TestCase):
         for row in s.db.cursor().execute("select * from sqlite_schema"):
             self.fail("--wipe didn't wipe file")
 
-        N="sentinel-chidh-jklhfd"
+        N = "sentinel-chidh-jklhfd"
+
         class vfstest(apsw.VFS):
+
             def __init__(self):
                 super().__init__(name=N, base="")
 
@@ -8197,8 +8213,6 @@ class APSW(unittest.TestCase):
                 isempty(fh[2])
                 testnasty()
 
-
-
         # What happens if db cannot be opened?
         s.process_args(args=["/"])
         reset()
@@ -8435,7 +8449,7 @@ class APSW(unittest.TestCase):
 
             with chdir(tmpd1):
                 reset()
-                V="sentinel-jhdgfsfjdskh-1"
+                V = "sentinel-jhdgfsfjdskh-1"
                 cmd(f".open { shlex.quote(V) }\ncreate table foo(x);\n.open { shlex.quote(V) }")
                 s.cmdloop()
                 isempty(fh[1])
@@ -8508,7 +8522,8 @@ class APSW(unittest.TestCase):
                 s.cmdloop()
                 isempty(fh[2])
                 reset()
-                cmd(textwrap.dedent("""
+                cmd(
+                    textwrap.dedent("""
                     .dbinfo
                     pragma journal_mode=wal;
                     .dbinfo
@@ -9604,7 +9619,7 @@ shell.write(shell.stdout, "hello world\\n")
         class FaultVFS(apsw.VFS):
 
             def __init__(self, name="faultvfs", inherit="", makedefault=False):
-                super(FaultVFS, self).__init__(name, inherit, makedefault=makedefault)
+                super().__init__(name, inherit, makedefault=makedefault)
 
             def xGetLastErrorLong(self):
                 return "a" * 1024, None
@@ -9615,7 +9630,7 @@ shell.write(shell.stdout, "hello world\\n")
         class FaultVFSFile(apsw.VFSFile):
 
             def __init__(self, name, flags):
-                super(FaultVFSFile, self).__init__("", name, flags)
+                super().__init__("", name, flags)
 
         vfs = FaultVFS()
 
@@ -10095,6 +10110,78 @@ SELECT group_concat(rtrim(t),x'0a') FROM a;
         # at time of writing it was 24 nodes
         self.assertGreater(count(qd.query_plan), 10)
 
+    def testVFSFcntlPragma(self):
+        "Test wrapping fcntl pragmas"
+
+        class testvfs(apsw.VFS):
+            name = "testingpragma"
+
+            def __init__(self):
+                super().__init__(self.name, "")
+
+            def xOpen(self, name, flags):
+                return testvfsfile(name, flags)
+
+        testvfs = testvfs()
+        seen_unraiseable = None
+
+        class testvfsfile(apsw.VFSFile):
+
+            def __init__(self, name, flags):
+                super().__init__("", name, flags)
+
+            def excepthook(self, etype, evalue, etraceback):
+                nonlocal seen_unraiseable
+                seen_unraiseable = (etype, evalue, etraceback)
+
+            # note 'self' is for the test not this file instance
+            def xFileControl(fileself, op, ptr):
+                if op != apsw.SQLITE_FCNTL_PRAGMA:
+                    return super().xFileControl(op, ptr)
+                self.assertRaises(TypeError, apsw.VFSFcntlPragma, "a string")
+                p = apsw.VFSFcntlPragma(ptr)
+                self.assertIn((p.name, p.value), test_pragmas)
+                self.assertRaises(TypeError, setattr, p, "result", 3)
+                v = test_pragmas[(p.name, p.value)]
+                if isinstance(v, Exception):
+                    p.result = v.args[0]
+                    p.result = "message: " + p.result
+                    raise v
+                if v is not False:
+                    p.result = v
+                    return True
+                return False
+
+        con = apsw.Connection(self.db.db_filename("main"), vfs=testvfs.name)
+
+        test_pragmas = {
+            ("once", None): "some text for the result",
+            ("once", "valueeee"): "completely different text",
+            ("donot", "understand"): False,
+            ("autherror", None): apsw.AuthError("yet more different text"),
+        }
+
+        for (k, v), r in test_pragmas.items():
+            seen_unraiseable = res = exc = None
+            sql = f"pragma { k }"
+            if v:
+                sql += f"({ v })"
+            try:
+                res = con.execute(sql).get
+            except apsw.Error as e:
+                exc = e
+            if r is False:
+                self.assertIsNone(exc)
+                self.assertIsNone(seen_unraiseable)
+                self.assertIsNone(res)
+            elif isinstance(r, apsw.Error):
+                self.assertIsInstance(exc, r.__class__)
+                self.assertIs(seen_unraiseable[1], r)
+                self.assertTrue(exc.args[0].endswith("message: " + r.args[0]))
+                self.assertIsNone(res)
+            else:
+                self.assertEqual(res, r)
+
     # This test is run last by deliberate name choice.  If it did
     # uncover any bugs there isn't much that can be done to turn the
     # checker off.
@@ -10344,7 +10431,7 @@ def setup():
 
     # We can do extension loading but no extension present ...
     if getattr(memdb, "enableloadextension", None) and not os.path.exists(LOADEXTENSIONFILENAME):
-        print("Not doing LoadExtension test.  You need to compile the extension first\n")
+        print("Not doing the optional LoadExtension test.  You need to compile the extension first\n")
         print("  python3 setup.py build_test_extension")
         del APSW.testLoadExtension
 

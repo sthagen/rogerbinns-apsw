@@ -1413,6 +1413,10 @@
 "\n" \
 ":returns: True or False indicating if the VFS understood the op.\n" \
 "\n" \
+"The :ref:`example <example_filecontrol>` shows getting\n" \
+"`SQLITE_FCNTL_DATA_VERSION\n" \
+"<https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html#sqlitefcntldataversion>`__.\n" \
+"\n" \
 "If you want data returned back then the *pointer* needs to point to\n" \
 "something mutable.  Here is an example using `ctypes\n" \
 "<https://docs.python.org/3/library/ctypes.html>`_ of\n" \
@@ -1438,7 +1442,7 @@
 "          return True\n" \
 "      else:\n" \
 "          # pass to parent/superclass\n" \
-"          return super(MyFile, self).xFileControl(op, pointer)\n" \
+"          return super().xFileControl(op, pointer)\n" \
 "\n" \
 "This is how you set the chunk size by which the database grows.  Do\n" \
 "not combine it into one line as the c_int would be garbage collected\n" \
@@ -2811,6 +2815,38 @@
 } while(0)
 
 
+#define  VFSFcntlPragma_class_DOC "A helper class to work with `SQLITE_FCNTL_PRAGMA\n" \
+"<https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html#sqlitefcntlpragma>`__\n" \
+"in :meth:`VFSFile.xFileControl`. The :ref:`example <example_vfs>`\n" \
+"shows usage of this class.\n" \
+"\n" \
+"It is only valid while in :meth:`VFSFile.xFileControl`, and using\n" \
+"outside of that will result in memory corruption and crashes.\n" 
+
+#define  VFSFcntlPragma_init_DOC "__init__($self,pointer)\n--\n\nVFSFcntlPragma.__init__(pointer: int)\n\n" \
+"The pointer must be what your xFileControl method received.\n" 
+
+#define VFSFcntlPragma_init_pointer_MSG  "argument 'pointer' of VFSFcntlPragma.__init__(pointer: int)" 
+
+#define VFSFcntlPragma_init_USAGE "VFSFcntlPragma.__init__(pointer: int)"
+
+#define VFSFcntlPragma_init_CHECK do { \
+  assert(__builtin_types_compatible_p(typeof(pointer), void *)); \
+} while(0)
+
+
+#define  VFSFcntlPragma_name_DOC ":type: str\n" \
+"\n" \
+"The name of the pragma\n" 
+
+#define  VFSFcntlPragma_result_DOC ":type: str | None\n" \
+"\n" \
+"The first element which becomes the result or error message\n" 
+
+#define  VFSFcntlPragma_value_DOC ":type: str | None\n" \
+"\n" \
+"The value for the pragma, if provided else None,\n" 
+
 #define  VFSFile_class_DOC "Wraps access to a file.  You only need to derive from this class\n" \
 "if you want the file object returned from :meth:`VFS.xOpen` to\n" \
 "inherit from an existing VFS implementation.\n" \
@@ -2822,9 +2858,10 @@
 
 #define  VFSFile_excepthook_DOC "excepthook($self,etype,evalue,etraceback)\n--\n\nVFSFile.excepthook(etype: type[BaseException], evalue: BaseException, etraceback: Optional[types.TracebackType]) ->None\n\n" \
 "Called when there has been an exception in a :class:`VFSFile`\n" \
-"routine.  The default implementation calls ``sys.excepthook`` and\n" \
-"if that fails then ``PyErr_Display``.  The three arguments\n" \
-"correspond to what ``sys.exc_info()`` would return.\n" \
+"routine.  The default implementation passes the exception information\n" \
+"to sqlite3_log, and the first non-error of\n" \
+":func:`sys.unraisablehook` and :func:`sys.excepthook`, falling back to\n" \
+"`PyErr_Display`.\n" \
 "\n" \
 ":param etype: The exception type\n" \
 ":param evalue: The exception  value\n" \
@@ -2900,7 +2937,7 @@
 "                 obj=ctypes.py_object.from_address(ptr).value\n" \
 "             else:\n" \
 "                 # this ensures superclass implementation is called\n" \
-"                 return super(MyFile, self).xFileControl(op, ptr)\n" \
+"                 return super().xFileControl(op, ptr)\n" \
 " # we understood the op\n" \
 "       return True\n" 
 
@@ -3045,9 +3082,6 @@
 ":param exclude: A set of strings, naming the methods that will be filled in with ``NULL`` in the `sqlite3_vfs\n" \
 "    <https://sqlite.org/c3ref/vfs.html>`__  structure to indicate to SQLite that they are\n" \
 "    not supported.\n" \
-"\n" \
-":raises ValueError: If *base* is not *None* and the named vfs is not\n" \
-"  currently registered.\n" \
 "\n" \
 "Calls:\n" \
 "  * `sqlite3_vfs_register <https://sqlite.org/c3ref/vfs_find.html>`__\n" \

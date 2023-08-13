@@ -1228,6 +1228,10 @@ class Connection:
 
         :returns: True or False indicating if the VFS understood the op.
 
+        The :ref:`example <example_filecontrol>` shows getting
+        `SQLITE_FCNTL_DATA_VERSION
+        <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html#sqlitefcntldataversion>`__.
+
         If you want data returned back then the *pointer* needs to point to
         something mutable.  Here is an example using `ctypes
         <https://docs.python.org/3/library/ctypes.html>`_ of
@@ -1253,7 +1257,7 @@ class Connection:
                   return True
               else:
                   # pass to parent/superclass
-                  return super(MyFile, self).xFileControl(op, pointer)
+                  return super().xFileControl(op, pointer)
 
         This is how you set the chunk size by which the database grows.  Do
         not combine it into one line as the c_int would be garbage collected
@@ -2229,6 +2233,29 @@ class URIFilename:
         Calls: `sqlite3_uri_parameter <https://sqlite.org/c3ref/uri_boolean.html>`__"""
         ...
 
+@final
+class VFSFcntlPragma:
+    """A helper class to work with `SQLITE_FCNTL_PRAGMA
+    <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html#sqlitefcntlpragma>`__
+    in :meth:`VFSFile.xFileControl`. The :ref:`example <example_vfs>`
+    shows usage of this class.
+
+    It is only valid while in :meth:`VFSFile.xFileControl`, and using
+    outside of that will result in memory corruption and crashes."""
+
+    def __init__(self, pointer: int):
+        """The pointer must be what your xFileControl method received."""
+        ...
+
+    name: str
+    """The name of the pragma"""
+
+    result: str | None
+    """The first element which becomes the result or error message"""
+
+    value: str | None
+    """The value for the pragma, if provided else None,"""
+
 class VFSFile:
     """Wraps access to a file.  You only need to derive from this class
     if you want the file object returned from :meth:`VFS.xOpen` to
@@ -2241,9 +2268,10 @@ class VFSFile:
 
     def excepthook(self, etype: type[BaseException], evalue: BaseException, etraceback: Optional[types.TracebackType]) ->None:
         """Called when there has been an exception in a :class:`VFSFile`
-        routine.  The default implementation calls ``sys.excepthook`` and
-        if that fails then ``PyErr_Display``.  The three arguments
-        correspond to what ``sys.exc_info()`` would return.
+        routine.  The default implementation passes the exception information
+        to sqlite3_log, and the first non-error of
+        :func:`sys.unraisablehook` and :func:`sys.excepthook`, falling back to
+        `PyErr_Display`.
 
         :param etype: The exception type
         :param evalue: The exception  value
@@ -2313,7 +2341,7 @@ class VFSFile:
                          obj=ctypes.py_object.from_address(ptr).value
                      else:
                          # this ensures superclass implementation is called
-                         return super(MyFile, self).xFileControl(op, ptr)
+                         return super().xFileControl(op, ptr)
          # we understood the op
                return True"""
         ...
@@ -2415,9 +2443,6 @@ class VFS:
         :param exclude: A set of strings, naming the methods that will be filled in with ``NULL`` in the `sqlite3_vfs
             <https://sqlite.org/c3ref/vfs.html>`__  structure to indicate to SQLite that they are
             not supported.
-
-        :raises ValueError: If *base* is not *None* and the named vfs is not
-          currently registered.
 
         Calls:
           * `sqlite3_vfs_register <https://sqlite.org/c3ref/vfs_find.html>`__

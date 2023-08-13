@@ -6,6 +6,16 @@ Change History
 next
 ====
 
+Added documentation and :class:`helper class <VFSFcntlPragma>` for
+implementing custom `pragmas <https://sqlite.org/pragma.html>`__ in
+your own :ref:`VFS` (:issue:`464`)
+
+Reduced overhead of the Column method when using
+:meth:`apsw.ext.make_virtual_module` (:issue:`465`)
+
+3.42.0.1
+========
+
 Work with SQLite compiled with `SQLITE_OMIT_DEPRECATED
 <https://www.sqlite.org/compile.html#omit_deprecated>`__.
 :meth:`Connection.setprofile` was changed from using the deprecated
@@ -14,8 +24,9 @@ Work with SQLite compiled with `SQLITE_OMIT_DEPRECATED
 the same results.  When including the amalgamation,
 SQLITE_OMIT_DEPRECATED is defined. (:issue:`443`)
 
-:doc:`shell` updates adding various commands to match the SQLite
-shell, as well as code and documentation improvements. (:issue:`397`)
+:doc:`shell` updates adding :ref:`various commands <shell-commands>`
+to match the SQLite shell, as well as code and documentation
+improvements. (:issue:`397`)
 
 Added :meth:`Connection.read` and :func:`apsw.ext.dbinfo` to provide
 information from the database and journal/wal files.  The shell
@@ -1971,7 +1982,7 @@ The test code has been converted into using the unittest module. Run
 errors.
 
 Updated code to work correctly with new :c:type:`Py_ssize_t` introduced
-in Python 2.5. See :ref:`64 bit hosts, Python 2.5+ <x64bitpy25>` for
+in Python 2.5. See 64 bit hosts, Python 2.5+ for
 more details on how Python and SQLite handle 64 bit sized items.
 
 The following functions were added to SQLite and are wrapped. They are

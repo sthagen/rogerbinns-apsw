@@ -459,7 +459,8 @@ def dbinfo(db: apsw.Connection,
     Memory databases return `None` for both.
     """
 
-    dbinfo = journalinfo = None
+    dbinfo: DatabaseFileInfo | None = None
+    journalinfo: JournalFileInfo | WALFileInfo | None = None
 
     try:
         ok, header_page = db.read(schema, 0, 0, 128)
@@ -484,7 +485,7 @@ def dbinfo(db: apsw.Connection,
         return {0: "(pending)", 1: "UTF-8", 2: "UTF-16le", 3: "UTF-16be"}.get(v, f"<< INVALID VALUE { v } >>")
 
     if ok:
-        kw = {"filename": db.filename}
+        kw: dict[str, Any] = {"filename": db.filename}
         for name, offset, size, converter in (
             ("header", 0, 16, bytes),
             ("page_size", 16, 2, be_page_size),
@@ -506,7 +507,7 @@ def dbinfo(db: apsw.Connection,
             ("sqlite_version", 96, 4, be_int),
         ):
             b = header_page[offset:offset + size]
-            kw[name] = converter(b)
+            kw[name] = converter(b)  # type: ignore [operator]
         dbinfo = DatabaseFileInfo(**kw)
 
     try:
@@ -515,7 +516,7 @@ def dbinfo(db: apsw.Connection,
         ok = False
 
     if ok:
-        kw = {}
+        kw: dict[str, Any] = {}  # type: ignore [no-redef]
         if db.pragma("journal_mode") == "wal":
             kw["filename"] = db.filename_wal
             for name, offset, size, converter in (
@@ -529,7 +530,7 @@ def dbinfo(db: apsw.Connection,
                 ("checksum_2", 28, 4, be_int),
             ):
                 b = journal_page[offset:offset + size]
-                kw[name] = converter(b)
+                kw[name] = converter(b)  # type: ignore [operator]
             journalinfo = WALFileInfo(**kw)
         else:
             header_valid = lambda b: b == b"\xd9\xd5\x05\xf9\x20\xa1\x63\xd7"
@@ -544,7 +545,7 @@ def dbinfo(db: apsw.Connection,
                 ("page_size", 24, 4, be_int),
             ):
                 b = journal_page[offset:offset + size]
-                kw[name] = converter(b)
+                kw[name] = converter(b)  # type: ignore [operator]
             journalinfo = JournalFileInfo(**kw)
 
     return dbinfo, journalinfo
@@ -1137,6 +1138,13 @@ def make_virtual_module(db: apsw.Connection,
                 self.repr_invalid = module.repr_invalid
                 self.num_columns = len(self.columns)
                 self.access = self.module.column_access
+                col_func = f"_Column_{ self.access.name }"
+                f = getattr(self, col_func, self.Column)
+                if self.repr_invalid:
+                    setattr(self, "Column", self._Column_repr_invalid)
+                    setattr(self, "_Column_get", f)
+                else:
+                    setattr(self, "Column", f)
 
             def Filter(self, idx_num: int, idx_str: str, args: tuple[apsw.SQLiteValue]) -> None:
                 params: dict[str, apsw.SQLiteValue] = self.param_values.copy()
@@ -1159,21 +1167,36 @@ def make_virtual_module(db: apsw.Connection,
                     self.iterating = None
 
             def Column(self, which: int) -> apsw.SQLiteValue:
+                # This is the specification/documentation for the custom
+                # versions which should produce exactly the same output
                 if which >= self.num_columns:
                     return self.hidden_values[which - self.num_columns]
-                v: Any = None
-                if self.access == VTColumnAccess.By_Index:
+                if self.access is VTColumnAccess.By_Index:
                     v = self.current_row[which]
-                elif self.access == VTColumnAccess.By_Name:
+                elif self.access is VTColumnAccess.By_Name:
                     v = self.current_row[self.columns[which]]
-                elif self.access == VTColumnAccess.By_Attr:
+                elif self.access is VTColumnAccess.By_Attr:
                     v = getattr(self.current_row, self.columns[which])
-                if self.repr_invalid:
-                    try:
-                        apsw.format_sql_value(v)
-                    except TypeError:
-                        v = repr(v)
+                if self.repr_invalid and v is not None and not isinstance(v, (int, float, str, bytes)):
+                    v = repr(v)
                 return v  # type: ignore[no-any-return]
+
+            def _Column_repr_invalid(self, which: int) -> apsw.SQLiteValue:
+                v = self._Column_get(which)
+                return v if v is None or isinstance(v, (int, float, str, bytes)) else repr(v)
+
+            def _Column_By_Attr(self, which: int) -> apsw.SQLiteValue:
+                return getattr(
+                    self.current_row,
+                    self.columns[which]) if which < self.num_columns else self.hidden_values[which - self.num_columns]
+
+            def _Column_By_Name(self, which: int) -> apsw.SQLiteValue:
+                return self.current_row[self.columns[which]] if which < self.num_columns else self.hidden_values[
+                    which - self.num_columns]
+
+            def _Column_By_Index(self, which: int) -> apsw.SQLiteValue:
+                return self.current_row[which] if which < self.num_columns else self.hidden_values[which -
+                                                                                                   self.num_columns]
 
             def Next(self) -> None:
                 try:

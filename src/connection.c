@@ -1158,6 +1158,7 @@ Connection_setrollbackhook(Connection *self, PyObject *args, PyObject *kwds)
 static int
 profilecb(unsigned event, void *context, void *stmt, void *elapsed)
 {
+  assert(event == SQLITE_TRACE_PROFILE);
   PyGILState_STATE gilstate = PyGILState_Ensure();
 
   PyObject *retval = NULL;
@@ -3405,6 +3406,10 @@ Connection_createcollation(Connection *self, PyObject *args, PyObject *kwds)
 
   :returns: True or False indicating if the VFS understood the op.
 
+  The :ref:`example <example_filecontrol>` shows getting
+  `SQLITE_FCNTL_DATA_VERSION
+  <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html#sqlitefcntldataversion>`__.
+
   If you want data returned back then the *pointer* needs to point to
   something mutable.  Here is an example using `ctypes
   <https://docs.python.org/3/library/ctypes.html>`_ of
@@ -3430,7 +3435,7 @@ Connection_createcollation(Connection *self, PyObject *args, PyObject *kwds)
             return True
         else:
             # pass to parent/superclass
-            return super(MyFile, self).xFileControl(op, pointer)
+            return super().xFileControl(op, pointer)
 
   This is how you set the chunk size by which the database grows.  Do
   not combine it into one line as the c_int would be garbage collected

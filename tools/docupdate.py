@@ -108,7 +108,7 @@ for line in open("doc/shell.rst", "rt"):
 
         def backtickify(s):
             s = s.group(0)
-            if s in {"SQL", "APSW", "TCL", "C", "HTML", "JSON", "CSV", "TSV"}:
+            if s in {"SQL", "APSW", "TCL", "C", "HTML", "JSON", "CSV", "TSV", "US", "VFS"}:
                 return s
             if s == "'3'": # example in command_parameter
                 return "``'3'``"
@@ -122,6 +122,13 @@ for line in open("doc/shell.rst", "rt"):
         shell.stderr = s
         shell._terminal_width = tw
         shell.command_help([])
+
+        op.append(".. hlist::")
+        op.append("  :columns: 3")
+        op.append("")
+        for k in shell._help_info:
+            op.append(f"  * :ref:`{ k } <shell-cmd-{ k }>`")
+        op.append("")
 
         for k, v in shell._help_info.items():
             op.append(f".. _shell-cmd-{ k }:")

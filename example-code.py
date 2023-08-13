@@ -650,6 +650,46 @@ for max_num in connection.execute("select max(x) from numbers"):
 # Clear handler
 connection.setprogresshandler(None)
 
+### filecontrol: File Control
+# We can get/set low level information using the
+# :meth:`Connection.filecontrol` interface.  In this example we get
+# the `data version
+# <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html#sqlitefcntldataversion>`__.
+# There is a `pragma
+# <https://sqlite.org/pragma.html#pragma_data_version>`__ but it
+# doesn't change for commits on the same connection.
+
+# We use ctypes to provide the correct C level data types and pointers
+import ctypes
+
+
+def get_data_version(db):
+    # unsigned 32 bit integer
+    data_version = ctypes.c_uint32(0)
+    ok = db.filecontrol(
+        "main",  # or an attached database name
+        apsw.SQLITE_FCNTL_DATA_VERSION,  # code
+        ctypes.addressof(data_version))  # pass C level pointer
+    assert ok, "SQLITE_FCNTL_DATA_VERSION was not understood!"
+    return data_version.value
+
+
+# Show starting values
+print("fcntl", get_data_version(connection), "pragma", connection.pragma("data_version"))
+
+# See the fcntl value versus pragma value
+for sql in (
+        "create table fcntl_example(x)",
+        "begin ; insert into fcntl_example values(3)",
+        # we can see the version doesn't change inside a transaction
+        "insert into fcntl_example values(4)",
+        "commit",
+        "pragma user_version=1234",
+):
+    print(sql)
+    connection.execute(sql)
+    print("fcntl", get_data_version(connection), "pragma", connection.pragma("data_version"))
+
 ### commit_hook: Commit hook
 # A commit hook can allow or veto commits.  Register a commit hook
 # with  :meth:`Connection.setcommithook`.
@@ -858,7 +898,7 @@ class ObfuscatedVFS(apsw.VFS):
     def __init__(self, vfsname="obfuscated", basevfs=""):
         self.vfs_name = vfsname
         self.base_vfs = basevfs
-        apsw.VFS.__init__(self, self.vfs_name, self.base_vfs)
+        super().__init__(self.vfs_name, self.base_vfs)
 
     # We want to return our own file implementation, but also
     # want it to inherit
@@ -880,13 +920,23 @@ class ObfuscatedVFS(apsw.VFS):
 class ObfuscatedVFSFile(apsw.VFSFile):
 
     def __init__(self, inheritfromvfsname, filename, flags):
-        apsw.VFSFile.__init__(self, inheritfromvfsname, filename, flags)
+        super().__init__(inheritfromvfsname, filename, flags)
 
     def xRead(self, amount, offset):
         return obfuscate(super().xRead(amount, offset))
 
     def xWrite(self, data, offset):
         super().xWrite(obfuscate(data), offset)
+
+    def xFileControl(self, op: int, ptr: int) -> bool:
+        if op != apsw.SQLITE_FCNTL_PRAGMA:
+            return super().xFileControl(op, ptr)
+        # implement our own pragma
+        p = apsw.VFSFcntlPragma(ptr)
+        print(f"pragma received { p.name } = { p.value }")
+        p.result = "orange"
+        # return False if you don't understand
+        return True
 
 
 # To register the VFS we just instantiate it
@@ -913,6 +963,9 @@ print("What is on disk", repr(Path("myobfudb").read_bytes()[:20]))
 
 # And unobfuscating it
 print("Unobfuscated disk", repr(obfuscate(Path("myobfudb").read_bytes()[:20])))
+
+# Custom pragma
+print("pragma returned", obfudb.pragma("my_custom_pragma", "my value"))
 
 # Tidy up
 obfudb.close()

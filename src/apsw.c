@@ -29,7 +29,7 @@ Type Annotations
 Comprehensive `type annotations
 <https://docs.python.org/3/library/typing.html>`__ `are included <https://github.com/rogerbinns/apsw/blob/master/apsw/__init__.pyi>`__,
 and your code can be checked using tools like `mypy
-<http://mypy-lang.org/>`__.  You can refer to the types below for your
+<https://mypy-lang.org/>`__.  You can refer to the types below for your
 annotations (eg as :class:`apsw.SQLiteValue`)
 
 Your source files should include::
@@ -92,8 +92,8 @@ API Reference
 #include "sqlite3.h"
 #endif
 
-#if SQLITE_VERSION_NUMBER < 3042000
-#error Your SQLite version is too old.  It must be at least 3.42
+#if SQLITE_VERSION_NUMBER < 3043000
+#error Your SQLite version is too old.  It must be at least 3.43
 #endif
 
 /* system headers */
@@ -172,6 +172,9 @@ typedef struct
 } ZeroBlobBind;
 
 static void apsw_write_unraisable(PyObject *hookobject);
+
+/* string constants struct */
+#include "stringconstants.c"
 
 /* Augment tracebacks */
 #include "traceback.c"
@@ -959,6 +962,7 @@ apsw_fini(PyObject *Py_UNUSED(self))
 {
   Py_XDECREF(tls_errmsg);
   statementcache_fini();
+  fini_apsw_strings();
   Py_RETURN_NONE;
 }
 #endif
@@ -1169,7 +1173,7 @@ static sqlite3_mutex_methods apsw_mutex_methods =
   support the fork system call.
 
   SQLite does not allow the use of database connections across `forked
-  <http://en.wikipedia.org/wiki/Fork_(operating_system)>`__ processes
+  <https://en.wikipedia.org/wiki/Fork_(operating_system)>`__ processes
   (see the `SQLite FAQ Q6 <https://sqlite.org/faq.html#q6>`__).
   (Forking creates a child process that is a duplicate of the parent
   including the state of all data structures in the program.  If you
@@ -1179,17 +1183,17 @@ static sqlite3_mutex_methods apsw_mutex_methods =
 
   One example of how you may end up using fork is if you use the
   `multiprocessing module
-  <http://docs.python.org/library/multiprocessing.html>`__ which uses
+  <https://docs.python.org/library/multiprocessing.html>`__ which uses
   fork to make child processes.
 
   If you do use fork or multiprocessing on a platform that supports
   fork then you **must** ensure database connections and their objects
   (cursors, backup, blobs etc) are not used in the parent process, or
   are all closed before calling fork or starting a `Process
-  <http://docs.python.org/library/multiprocessing.html#process-and-exceptions>`__.
+  <https://docs.python.org/library/multiprocessing.html#process-and-exceptions>`__.
   (Note you must call close to ensure the underlying SQLite objects
   are closed.  It is also a good idea to call `gc.collect(2)
-  <http://docs.python.org/library/gc.html#gc.collect>`__ to ensure
+  <https://docs.python.org/library/gc.html#gc.collect>`__ to ensure
   anything you may have missed is also deallocated.)
 
   Once you run this method, extra checking code is inserted into
@@ -1880,6 +1884,9 @@ PyInit_apsw(void)
   if (init_exceptions(m))
     goto fail;
 
+  if (init_apsw_strings())
+    goto fail;
+
 /* we can't avoid leaks with failures until multi-phase initialisation is done */
 #define ADD(name, item)                                  \
   do                                                     \
@@ -1942,7 +1949,7 @@ PyInit_apsw(void)
       :type: bool
 
       If True then `SQLite amalgamation
-      <https://sqlite.org/cvstrac/wiki?p=TheAmalgamation>`__ is in
+      <https://www.sqlite.org/amalgamation.html>`__ is in
       use (statically compiled into APSW).  Using the amalgamation means
       that SQLite shared libraries are not used and will not affect your
       code.
@@ -1965,7 +1972,7 @@ PyInit_apsw(void)
     :meth:`VTTable.UpdateChangeRow`
   */
 
-  if (PyModule_AddObject(m, "no_change", Py_NewRef(&apsw_no_change_object)))
+  if (PyModule_AddObject(m, "no_change", Py_NewRef((PyObject *)&apsw_no_change_object)))
     goto fail;
 
 #ifdef APSW_TESTFIXTURES

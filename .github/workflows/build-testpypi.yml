@@ -18,14 +18,13 @@ jobs:
           python-version: "3.11"
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2.14.1
+        uses: pypa/cibuildwheel@v2.15
         env:
           CIBW_SKIP: pp*
           CIBW_ARCHS_MACOS: all
           CIBW_BEFORE_BUILD: python -c "import shutil ; shutil.copyfile('tools/setup-pypi.cfg','setup.apsw')"
           CIBW_TEST_COMMAND: python -m apsw.tests -v
           APSW_HEAVY_DURATION: 2
-          APSW_TEST_FSYNC_OFF: set
 
       - uses: actions/upload-artifact@v3
         with:
@@ -49,7 +48,7 @@ jobs:
             platforms: all
 
         - name: Build wheels
-          uses: pypa/cibuildwheel@v2.14.1
+          uses: pypa/cibuildwheel@v2.15
           env:
             CIBW_SKIP: pp*
             CIBW_ARCHS_LINUX: aarch64
@@ -57,7 +56,6 @@ jobs:
             CIBW_BEFORE_BUILD: python -c "import shutil ; shutil.copyfile('tools/setup-pypi.cfg','setup.apsw')"
             CIBW_TEST_COMMAND: python -m apsw.tests -v
             APSW_HEAVY_DURATION: 2
-            APSW_TEST_FSYNC_OFF: set
 
         - uses: actions/upload-artifact@v3
           with:
@@ -98,15 +96,9 @@ jobs:
       uses: actions/download-artifact@v3
       with:
         name: wheelhouse
-        path: wheelhouse
-
-    - run: |
-        mkdir -p dist
-        mv -v wheelhouse/* dist/
-        ls -l dist/
-
+        path: dist
     - name: Publish package
-      uses: pypa/gh-action-pypi-publish@v1.8.8
+      uses: pypa/gh-action-pypi-publish@release/v1
       with:
        repository-url: https://test.pypi.org/legacy/
 

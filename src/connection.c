@@ -1902,14 +1902,14 @@ collationneeded_cb(void *pAux, sqlite3 *Py_UNUSED(db), int eTextRep, const char 
 /** .. method:: collationneeded(callable: Optional[Callable[[Connection, str], None]]) -> None
 
   *callable* will be called if a statement requires a `collation
-  <http://en.wikipedia.org/wiki/Collation>`_ that hasn't been
+  <https://en.wikipedia.org/wiki/Collation>`_ that hasn't been
   registered. Your callable will be passed two parameters. The first
   is the connection object. The second is the name of the
   collation. If you have the collation code available then call
   :meth:`Connection.createcollation`.
 
   This is useful for creating collations on demand.  For example you
-  may include the `locale <http://en.wikipedia.org/wiki/Locale>`_ in
+  may include the `locale <https://en.wikipedia.org/wiki/Locale>`_ in
   the collation name, but since there are thousands of locales in
   popular use it would not be useful to :meth:`prereigster
   <Connection.createcollation>` them all.  Using
@@ -2188,7 +2188,7 @@ Connection_deserialize(Connection *self, PyObject *args, PyObject *kwds)
 /** .. method:: enableloadextension(enable: bool) -> None
 
   Enables/disables `extension loading
-  <https://sqlite.org/cvstrac/wiki/wiki?p=LoadableExtensions>`_
+  <https://www.sqlite.org/loadext.html>`_
   which is disabled by default.
 
   :param enable: If True then extension loading is enabled, else it is disabled.
@@ -2227,9 +2227,9 @@ Connection_enableloadextension(Connection *self, PyObject *args, PyObject *kwds)
 
 /** .. method:: loadextension(filename: str, entrypoint: Optional[str] = None) -> None
 
-  Loads *filename* as an `extension <https://sqlite.org/cvstrac/wiki/wiki?p=LoadableExtensions>`_
+  Loads *filename* as an `extension <https://www.sqlite.org/loadext.html>`_
 
-  :param filename: The file to load.  This must be Unicode or Unicode compatible
+  :param filename: The file to load.
 
   :param entrypoint: The initialization method to call.  If this
     parameter is not supplied then the SQLite default of
@@ -3329,7 +3329,7 @@ collation_destroy(void *context)
 /** .. method:: createcollation(name: str, callback: Optional[Callable[[str, str], int]]) -> None
 
   You can control how SQLite sorts (termed `collation
-  <http://en.wikipedia.org/wiki/Collation>`_) when giving the
+  <https://en.wikipedia.org/wiki/Collation>`_) when giving the
   ``COLLATE`` term to a `SELECT
   <https://sqlite.org/lang_select.html>`_.  For example your
   collation could take into account locale or do numeric sorting.
@@ -3726,9 +3726,7 @@ Connection_vtab_on_conflict(Connection *self)
   :param name: Function name
   :param nargs: How many arguments the function takes
 
-  Due to cvstrac 3507 underlying errors will not be returned.
-
-  -* sqlite3_overload_function
+    -* sqlite3_overload_function
 */
 static PyObject *
 Connection_overloadfunction(Connection *self, PyObject *args, PyObject *kwds)
@@ -3847,7 +3845,7 @@ Connection_getrowtrace(Connection *self)
 /** .. method:: __enter__() -> Connection
 
   You can use the database as a `context manager
-  <http://docs.python.org/reference/datamodel.html#with-statement-context-managers>`_
+  <https://docs.python.org/reference/datamodel.html#with-statement-context-managers>`_
   as defined in :pep:`0343`.  When you use *with* a transaction is
   started.  If the block finishes with an exception then the
   transaction is rolled back, otherwise it is committed.  For example::
@@ -4230,7 +4228,7 @@ Connection_txn_state(Connection *self, PyObject *args, PyObject *kwds)
   return PyErr_Format(PyExc_ValueError, "unknown schema");
 }
 
-/** .. method:: execute(statements: str, bindings: Optional[Bindings] = None, *, can_cache: bool = True, prepare_flags: int = 0) -> Cursor
+/** .. method:: execute(statements: str, bindings: Optional[Bindings] = None, *, can_cache: bool = True, prepare_flags: int = 0, explain: int = -1) -> Cursor
 
     Executes the statements using the supplied bindings.  Execution
     returns when the first row is available or all statements have
@@ -4266,7 +4264,7 @@ fail:
   return res;
 }
 
-/** .. method:: executemany(statements: str, sequenceofbindings:Sequence[Bindings], *, can_cache: bool = True, prepare_flags: int = 0) -> Cursor
+/** .. method:: executemany(statements: str, sequenceofbindings:Sequence[Bindings], *, can_cache: bool = True, prepare_flags: int = 0, explain: int = -1) -> Cursor
 
 This method is for when you want to execute the same statements over a
 sequence of bindings, such as inserting into a database.  (A cursor is
@@ -4333,7 +4331,7 @@ Connection_pragma(Connection *self, PyObject *args, PyObject *kwds)
   PyObject *query = NULL, *value_str = NULL, *exec_args = NULL, *cursor = NULL, *res = NULL;
   if (value)
   {
-    PyObject *value_str = formatsqlvalue(NULL, value);
+    value_str = formatsqlvalue(NULL, value);
     if (!value_str)
       goto error;
     const char *utf8 = PyUnicode_AsUTF8(value_str);
@@ -4423,6 +4421,9 @@ If `entries` is present, then each list entry is a dict with the following infor
   * - prepare_flags
     - Flags passed to `sqlite3_prepare_v3 <https://sqlite.org/c3ref/prepare.html>`__
       for this query
+  * - explain
+    - The value passed to `sqlite3_stmt_explain <https://sqlite.org/c3ref/stmt_explain.html>`__
+      if >= 0
   * - uses
     - How many times this entry has been (re)used
   * - has_more

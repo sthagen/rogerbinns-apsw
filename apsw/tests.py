@@ -5,20 +5,38 @@
 # This testing code deliberately does nasty stuff so mypy isn't helpful
 # mypy: ignore-errors
 
-import sys
-import os
-import types
-from typing import Optional
-import warnings
-import platform
-import typing
-import itertools
-import inspect
-import struct
+import array
+import collections
+import collections.abc
 import contextlib
+import dataclasses
+import gc
+import getpass
+import glob
+import inspect
+import io
+import itertools
+import json
+import logging
+import math
+import mmap
+import os
+import pickle
+import platform
+import queue
+import random
+import re
+import shlex
+import shutil
+import struct
+import sys
 import tempfile
 import textwrap
-import shlex
+import threading
+import time
+import traceback
+import typing
+import warnings
 
 
 def ShouldFault(name, pending_exception):
@@ -41,6 +59,8 @@ It needs to be compiled and in-place first.
     """.strip()
     sys.exit(msg)
 
+import apsw.bestpractice
+import apsw.ext
 import apsw.shell
 
 
@@ -50,7 +70,7 @@ def print_version_info():
     print("          APSW version ", apsw.apswversion())
     print("    SQLite lib version ", apsw.sqlitelibversion())
     print("SQLite headers version ", apsw.SQLITE_VERSION_NUMBER)
-    print("    Using amalgamation ", apsw.using_amalgamation)
+    print("    Using amalgamation ", apsw.using_amalgamation, flush=True)
 
 
 # sigh
@@ -93,20 +113,10 @@ def write_whole_file(name, mode, data, *, encoding=None):
 # unittest stuff from here on
 
 import unittest
-import math
-import random
-import time
-import threading
-import glob
-import pickle
-import shutil
-import getpass
-import queue
-import traceback
-import re
-import gc
+
 try:
     import ctypes
+
     import _ctypes
 except:
     ctypes = None
@@ -314,11 +324,10 @@ class APSW(unittest.TestCase):
                 if os.path.exists(TESTFILEPREFIX + name + i):
                     deletefile(TESTFILEPREFIX + name + i)
 
-    saved_connection_hooks = []
-
     def setUp(self):
+        apsw.config(apsw.SQLITE_CONFIG_LOG, None)
+        apsw.connection_hooks = []
         # clean out database and journals from last runs
-        self.saved_connection_hooks.append(apsw.connection_hooks)
         for c in apsw.connections():
             c.close()
         gc.collect()
@@ -336,10 +345,10 @@ class APSW(unittest.TestCase):
                 apsw.unregister_vfs(name)
 
     def tearDown(self):
+        apsw.config(apsw.SQLITE_CONFIG_LOG, None)
         if self.db is not None:
             self.db.close(True)
         del self.db
-        apsw.connection_hooks = self.saved_connection_hooks.pop()  # back to original value
         for c in apsw.connections():
             c.close()
         gc.collect()
@@ -568,10 +577,6 @@ class APSW(unittest.TestCase):
 
     def testBackwardsCompatibility(self):
         "Verifies changed names etc are still accessible through the old ones"
-        # depends on pep562 which is python 3.7 onwards
-        if sys.version_info >= (3, 7):
-            self.assertIs(apsw.main, apsw.shell.main)
-            self.assertIs(apsw.Shell, apsw.shell.Shell)
 
     def testModuleStringFunctions(self):
         "Tests various string comparison/matching functions"
@@ -1018,7 +1023,6 @@ class APSW(unittest.TestCase):
 
     def testIssue373(self):
         "issue 373: dict type checking in bindings"
-        import collections.abc
 
         class not_a_dict:
             pass
@@ -1265,11 +1269,6 @@ class APSW(unittest.TestCase):
 
     def testVTableStuff(self):
         "Test new stuff added for Virtual tables"
-        if sys.version_info < (3, 7):
-            # it works on 3.6 but apsw.ext doesn't because it uses dataclasses
-            return
-        # we also test apsw.ext
-        import apsw.ext
 
         columns = [f"c{ n }" for n in range(30)]
 
@@ -2209,7 +2208,7 @@ class APSW(unittest.TestCase):
         try:
             self.db.createscalarfunction("twelve", ilove7, 900)  # too many args
         except (apsw.SQLError, apsw.MisuseError):
-            # https://sqlite.org/cvstrac/tktview?tn=3875
+            # misuse can be returned for too many args
             pass
         # some unicode fun
         self.db.createscalarfunction, u"twelve\N{BLACK STAR}", ilove7
@@ -2331,7 +2330,7 @@ class APSW(unittest.TestCase):
             try:
                 self.db.createaggregatefunction("twelve", longest.factory, 923)  # max args is 127
             except (apsw.SQLError, apsw.MisuseError):
-                # used to be SQLerror then changed https://sqlite.org/cvstrac/tktview?tn=3875
+                # misuse is returned for too many args
                 pass
             self.db.createaggregatefunction("twelve", None)
 
@@ -3278,7 +3277,6 @@ class APSW(unittest.TestCase):
             'glue': 'Egg',
             'salmon': 'Fish',
             'burger': 'Mechanically recovered meat',
-            # From https://sqlite.org/cvstrac/wiki?p=FtsUsage
             'broccoli stew': 'broccoli peppers cheese tomatoes',
             'pumpkin stew': 'pumpkin onions garlic celery',
             'broccoli pie': 'broccoli cheese onions flour',
@@ -3485,7 +3483,6 @@ class APSW(unittest.TestCase):
             self.db.createmodule("x" * i, lambda x: i)
 
         # If shared cache is enabled then vtable creation is supposed to fail
-        # See https://sqlite.org/cvstrac/tktview?tn=3144
         try:
             apsw.enablesharedcache(True)
             db = apsw.Connection(TESTFILEPREFIX + "testdb2")
@@ -4062,8 +4059,7 @@ class APSW(unittest.TestCase):
         # findfunction
         # mess with overload function first
         self.assertRaises(TypeError, self.db.overloadfunction, 1, 1)
-        # https://sqlite.org/cvstrac/tktview?tn=3507
-        # self.db.overloadfunction("a"*1024, 1)
+        self.assertRaises(apsw.MisuseError, self.db.overloadfunction, "a" * 1024, 1)
         self.db.overloadfunction("xyz", 2)
         self.assertRaises(apsw.SQLError, cur.execute, "select xyz(item,description) from foo", can_cache=False)
         VTable.FindFunction = VTable.FindFunction1
@@ -4333,7 +4329,6 @@ class APSW(unittest.TestCase):
         "Verify handling of large strings/blobs (>2GB) [requires 64 bit platform]"
         assert is64bit
         # For binary/blobs I use an anonymous area slightly larger than 2GB chunk of memory, but don't touch any of it
-        import mmap
         f = mmap.mmap(-1, 2 * 1024 * 1024 * 1024 + 25000)
         c = self.db.cursor()
         c.execute("create table foo(theblob)")
@@ -4389,10 +4384,7 @@ class APSW(unittest.TestCase):
         self.db.limit(apsw.SQLITE_LIMIT_LENGTH, 1023)
         self.assertRaises(apsw.TooBigError, c.execute, "insert into foo values(?)", ("y" * 1024, ))
         self.assertEqual(1023, self.db.limit(apsw.SQLITE_LIMIT_LENGTH, 0))
-        # bug in sqlite - see https://sqlite.org/cvstrac/tktview?tn=3085
-        if False:
-            c.execute("insert into foo values(?)", ("x" * 1024, ))
-            self.assertEqual(apsw.SQLITE_MAX_LENGTH, self.db.limit(apsw.SQLITE_LIMIT_LENGTH))
+        self.assertRaises(apsw.TooBigError, c.execute, "insert into foo values(?)", ("x" * 1024, ))
 
     def testConnectionHooks(self):
         "Verify connection hooks"
@@ -4732,7 +4724,6 @@ class APSW(unittest.TestCase):
     def testTicket2158(self):
         "Check we are not affected by SQLite ticket #2158"
 
-        # https://sqlite.org/cvstrac/tktview?tn=2158
         def dummy(x, y):
             if x < y: return -1
             if x > y: return 1
@@ -4866,6 +4857,29 @@ class APSW(unittest.TestCase):
                 cur.execute(query)
             self.assertEqual(p[1], query)
             self.assertEqual(p[0].has_vdbe, "select" in query)
+
+    def testIssue475(self):
+        "Unused cursor attributes"
+        # The cause of this issue was a new cursor attribute access, so we check
+        # all objects to catch anything else
+        objects = [
+            apsw, apsw.Connection, apsw.Cursor, apsw.Blob, apsw.Error, apsw.VFS, apsw.VFSFile, self.db,
+            self.db.cursor()
+        ]
+        self.db.execute("create table x(y); insert into x values(x'abcdef1012');select * from x")
+        objects.append(self.db.blobopen("main", "x", "y", self.db.last_insert_rowid(), 0))
+        objects.append(apsw.VFS("aname", ""))
+        objects.append(
+            apsw.VFSFile("", self.db.db_filename("main"),
+                         [apsw.SQLITE_OPEN_MAIN_DB | apsw.SQLITE_OPEN_CREATE | apsw.SQLITE_OPEN_READWRITE, 0]))
+        objects.append(apsw.VFSFcntlPragma)
+
+        for o in objects:
+            for n in dir(o):
+                try:
+                    getattr(o, n)
+                except apsw.Error:
+                    pass
 
     def testCursorGet(self):
         "Cursor.get"
@@ -5102,6 +5116,43 @@ class APSW(unittest.TestCase):
         "Rerun statement cache tests with a large cache"
         self.db = apsw.Connection(TESTFILEPREFIX + "testdb", statementcachesize=17000)
         self.testStatementCache(170000)
+
+    def testStmtExplain(self):
+        "Verify sqlite3_stmt_explain operation"
+
+        # sanity check
+        for row in self.db.execute("explain select 3", explain=0):
+            self.assertEqual(row, (3, ))
+        for row in self.db.execute("explain query plan select 3", explain=0):
+            self.assertEqual(row, (3, ))
+        for row in self.db.execute("explain select 3", explain=1):
+            self.assertNotEqual(row, (3, ))
+
+        is_explain = -99
+
+        def ehook(cur, sql, bindings):
+            nonlocal is_explain
+            is_explain = cur.is_explain
+            return True
+
+        self.db.exectrace = ehook
+        cur = self.db.cursor()
+        cur.exectrace = ehook
+        queries = {"select 3": 0, "explain select 4": 1, "explain query plan select 5": 2}
+        for target in self.db, cur:
+            for explain in (-1, 0, 1, 2):
+                for meth in "execute", "executemany":
+                    bindings = None if meth == "execute" else (tuple(), )
+                    for q, v in queries.items():
+                        is_explain = -99
+                        for row in getattr(target, meth)(q, bindings, explain=explain):
+                            pass
+                        if explain < 0:
+                            self.assertEqual(is_explain, v)
+                        else:
+                            self.assertEqual(is_explain, explain)
+
+        self.assertRaises(apsw.SQLError, self.db.execute, "select 6", explain=7)
 
     # the text also includes characters that can't be represented in 16 bits (BMP)
     wikipedia_text = u"""Wikipedia\nThe Free Encyclopedia\nEnglish\n6 383 000+ articles\n日本語\n1 292 000+ 記事\nРусский\n1 756 000+ статей\nDeutsch\n2 617 000+ Artikel\nEspañol\n1 717 000+ artículos\nFrançais\n2 362 000+ articles\nItaliano\n1 718 000+ voci\n中文\n1 231 000+ 條目\nPolski\n1 490 000+ haseł\nPortuguês\n1 074 000+ artigos\nSearch Wikipedia\nEN\nEnglish\n\n Read Wikipedia in your language\n1 000 000+ articles\nPolski\nالعربية\nDeutsch\nEnglish\nEspañol\nFrançais\nItaliano\nمصرى\nNederlands\n日本語\nPortuguês\nРусский\nSinugboanong Binisaya\nSvenska\nУкраїнська\nTiếng Việt\nWinaray\n中文\n100 000+ articles\nAfrikaans\nSlovenčina\nAsturianu\nAzərbaycanca\nБългарски\nBân-lâm-gú / Hō-ló-oē\nবাংলা\nБеларуская\nCatalà\nČeština\nCymraeg\nDansk\nEesti\nΕλληνικά\nEsperanto\nEuskara\nفارسی\nGalego\n한국어\nՀայերեն\nहिन्दी\nHrvatski\nBahasa Indonesia\nעברית\nქართული\nLatina\nLatviešu\nLietuvių\nMagyar\nМакедонски\nBahasa Melayu\nBahaso Minangkabau\nNorskbokmålnynorsk\nНохчийн\nOʻzbekcha / Ўзбекча\nҚазақша / Qazaqşa / قازاقشا\nRomână\nSimple English\nSlovenščina\nСрпски / Srpski\nSrpskohrvatski / Српскохрватски\nSuomi\nதமிழ்\nТатарча / Tatarça\nภาษาไทย\nТоҷикӣ\nتۆرکجه\nTürkçe\nاردو\nVolapük\n粵語\nမြန်မာဘာသာ\n10 000+ articles\nBahsa Acèh\nAlemannisch\nአማርኛ\nAragonés\nBasa Banyumasan\nБашҡортса\nБеларуская (Тарашкевіца)\nBikol Central\nবিষ্ণুপ্রিয়া মণিপুরী\nBoarisch\nBosanski\nBrezhoneg\nЧӑвашла\nDiné Bizaad\nEmigliàn–Rumagnòl\nFøroyskt\nFrysk\nGaeilge\nGàidhlig\nગુજરાતી\nHausa\nHornjoserbsce\nIdo\nIlokano\nInterlingua\nИрон æвзаг\nÍslenska\nJawa\nಕನ್ನಡ\nKreyòl Ayisyen\nKurdî / كوردی\nکوردیی ناوەندی\nКыргызча\nКырык Мары\nLëtzebuergesch\nLimburgs\nLombard\nLìgure\nमैथिली\nMalagasy\nമലയാളം\n文言\nमराठी\nმარგალური\nمازِرونی\nMìng-dĕ̤ng-ngṳ̄ / 閩東語\nМонгол\nनेपाल भाषा\nनेपाली\nNnapulitano\nNordfriisk\nOccitan\nМарий\nଓଡି଼ଆ\nਪੰਜਾਬੀ (ਗੁਰਮੁਖੀ)\nپنجابی (شاہ مکھی)\nپښتو\nPiemontèis\nPlattdüütsch\nQırımtatarca\nRuna Simi\nसंस्कृतम्\nСаха Тыла\nScots\nShqip\nSicilianu\nසිංහල\nسنڌي\nŚlůnski\nBasa Sunda\nKiswahili\nTagalog\nతెలుగు\nᨅᨔ ᨕᨙᨁᨗ / Basa Ugi\nVèneto\nWalon\n吳語\nייִדיש\nYorùbá\nZazaki\nŽemaitėška\nisiZulu\n1 000+ articles\nАдыгэбзэ\nÆnglisc\nAkan\nаԥсшәа\nԱրեւմտահայերէն\nArmãneashce\nArpitan\nܐܬܘܪܝܐ\nAvañe’ẽ\nАвар\nAymar\nBasa Bali\nBahasa Banjar\nभोजपुरी\nBislama\nབོད་ཡིག\nБуряад\nChavacano de Zamboanga\nCorsu\nVahcuengh / 話僮\nDavvisámegiella\nDeitsch\nދިވެހިބަސް\nDolnoserbski\nЭрзянь\nEstremeñu\nFiji Hindi\nFurlan\nGaelg\nGagauz\nGĩkũyũ\nگیلکی\n贛語\nHak-kâ-ngî / 客家語\nХальмг\nʻŌlelo Hawaiʻi\nIgbo\nInterlingue\nKabɩyɛ\nKapampangan\nKaszëbsczi\nKernewek\nភាសាខ្មែរ\nKinyarwanda\nКоми\nKongo\nकोंकणी / Konknni\nKriyòl Gwiyannen\nພາສາລາວ\nDzhudezmo / לאדינו\nЛакку\nLatgaļu\nЛезги\nLingála\nlojban\nLuganda\nMalti\nReo Mā’ohi\nMāori\nMirandés\nМокшень\nߒߞߏ\nNa Vosa Vaka-Viti\nNāhuatlahtōlli\nDorerin Naoero\nNedersaksisch\nNouormand / Normaund\nNovial\nAfaan Oromoo\nঅসমীযা়\nपालि\nPangasinán\nPapiamentu\nПерем Коми\nPfälzisch\nPicard\nКъарачай–Малкъар\nQaraqalpaqsha\nRipoarisch\nRumantsch\nРусиньскый Язык\nGagana Sāmoa\nSardu\nSeeltersk\nSesotho sa Leboa\nChiShona\nSoomaaliga\nSranantongo\nTaqbaylit\nTarandíne\nTetun\nTok Pisin\nfaka Tonga\nTürkmençe\nТыва дыл\nУдмурт\nئۇيغۇرچه\nVepsän\nVõro\nWest-Vlams\nWolof\nisiXhosa\nZeêuws\n100+ articles\nBamanankan\nChamoru\nChichewa\nEʋegbe\nFulfulde\n𐌲𐌿𐍄𐌹𐍃𐌺\nᐃᓄᒃᑎᑐᑦ / Inuktitut\nIñupiak\nKalaallisut\nكٲشُر\nLi Niha\nNēhiyawēwin / ᓀᐦᐃᔭᐍᐏᐣ\nNorfuk / Pitkern\nΠοντιακά\nརྫོང་ཁ\nRomani\nKirundi\nSängö\nSesotho\nSetswana\nСловѣ́ньскъ / ⰔⰎⰑⰂⰡⰐⰠⰔⰍⰟ\nSiSwati\nThuɔŋjäŋ\nᏣᎳᎩ\nTsėhesenėstsestotse\nTshivenḓa\nXitsonga\nchiTumbuka\nTwi\nትግርኛ\nဘာသာ မန်\n"""
@@ -5466,7 +5517,6 @@ class APSW(unittest.TestCase):
 
     def testPickle(self):
         "Verify data etc can be pickled"
-        import pickle
         PicklingError = pickle.PicklingError
 
         # work out what protocol versions we can use
@@ -5751,7 +5801,6 @@ class APSW(unittest.TestCase):
         self.assertRaises(TypeError, blobro.readinto)
         self.assertRaises(TypeError, blobro.readinto, 3)
         buffers = []
-        import array
         buffers.append(array.array("b", b"\0\0\0\0"))
         buffers.append(bytearray(b"\0\0\0\0"))
 
@@ -6463,7 +6512,7 @@ class APSW(unittest.TestCase):
                 return math.exp(math.pi) * 26000
 
             def xCurrentTimeCorrect(self):
-                # actual correct implementation http://stackoverflow.com/questions/466321/convert-unix-timestamp-to-julian
+                # actual correct implementation https://stackoverflow.com/questions/466321/convert-unix-timestamp-to-julian
                 return time.time() / 86400.0 + 2440587.5
 
             def xCurrentTime99(self):
@@ -6485,7 +6534,7 @@ class APSW(unittest.TestCase):
                 return 2**65
 
             def xCurrentTimeCorrect(self):
-                # actual correct implementation http://stackoverflow.com/questions/466321/convert-unix-timestamp-to-julian
+                # actual correct implementation https://stackoverflow.com/questions/466321/convert-unix-timestamp-to-julian
                 return time.time() / 86400.0 + 2440587.5
 
             def xCurrentTime99(self):
@@ -7158,7 +7207,6 @@ class APSW(unittest.TestCase):
         self.assertRaises(OverflowError, t.xTruncate, 0xffffffffeeeeeeee0)
         if not iswindows:
             # windows is happy to truncate to -77 bytes
-            # see https://sqlite.org/cvstrac/tktview?tn=3415
             self.assertRaises(apsw.IOError, t.xTruncate, -77)
         TestFile.xTruncate = TestFile.xTruncate1
         self.assertRaises(apsw.SQLError, self.assertRaisesUnraisable, TypeError, testdb)
@@ -8087,19 +8135,8 @@ class APSW(unittest.TestCase):
         isempty(fh[2])
         v = get(fh[1]).strip()
         v = v[:-1]  # remove trailing comma
-        havejson = False
-        try:
-            import json
-            havejson = True
-        except ImportError:
-            try:
-                import simplejson as json
-                havejson = True
-            except ImportError:
-                pass
-        if havejson:
-            out = json.loads(v)
-            self.assertEqual(out, {"3": 3, "2.2": 2.2, "'string'": "string", "null": None, "x'0311'": "AxE="})
+        out = json.loads(v)
+        self.assertEqual(out, {"3": 3, "2.2": 2.2, "'string'": "string", "null": None, "x'0311'": "AxE="})
         # a regular table
         reset()
         cmd("create table jsontest([int], [float], [string], [null], [blob]);insert into jsontest values(" + all +
@@ -8107,9 +8144,8 @@ class APSW(unittest.TestCase):
         s.cmdloop()
         isempty(fh[2])
         v = get(fh[1]).strip()[:-1]
-        if havejson:
-            out = json.loads(v)
-            self.assertEqual(out, {"int": 3, "float": 2.2, "string": "string", "null": None, "blob": "AxE="})
+        out = json.loads(v)
+        self.assertEqual(out, {"int": 3, "float": 2.2, "string": "string", "null": None, "blob": "AxE="})
         testnasty()
 
         ###
@@ -9658,7 +9694,6 @@ shell.write(shell.stdout, "hello world\\n")
             ## xUnlockFails
             apsw.faultdict["xUnlockFails"] = True
             # Used to wrap in self.assertRaises(apsw.IOError, ...) but SQLite no longer passes on the error.
-            # See https://sqlite.org/cvstrac/tktview?tn=3946
             self.assertRaisesUnraisable(apsw.IOError,
                                         apsw.Connection(TESTFILEPREFIX + "testdb", vfs="faultvfs").cursor().execute,
                                         "select * from dummy1")
@@ -9723,9 +9758,32 @@ shell.write(shell.stdout, "hello world\\n")
         except apsw.SQLError as e:
             self.assertIn("unsafe use of donotcall", str(e))
 
+    def testBestPractice(self) -> None:
+        "apsw.bestpractice module"
+        out = io.StringIO()
+        root = logging.getLogger()
+        root.setLevel(logging.DEBUG)
+        handler = logging.StreamHandler(out)
+        root.addHandler(handler)
+        try:
+            apsw.log(apsw.SQLITE_NOMEM, "Zebras are striped")
+            self.assertNotIn("Zebras", out.getvalue())
+            apsw.bestpractice.apply(apsw.bestpractice.recommended)
+            apsw.log(apsw.SQLITE_NOMEM, "Zebras are striped")
+            self.assertIn("Zebras", out.getvalue())
+            # I was unable to find a ddl statement that errors
+            dqs = 'select "world"'
+            self.db.execute(dqs)  # no error
+            self.assertIn("world", out.getvalue())
+            apsw.bestpractice.apply(apsw.bestpractice.recommended)
+            con = apsw.Connection("")
+            # now fail
+            self.assertRaises(apsw.SQLError, con.execute, dqs)
+        finally:
+            root.removeHandler(handler)
+
     def testExtDataClassRowFactory(self) -> None:
         "apsw.ext.DataClassRowFactory"
-        import apsw.ext
         dcrf = apsw.ext.DataClassRowFactory()
         self.db.setrowtrace(dcrf)
         # sanity check
@@ -9743,7 +9801,6 @@ shell.write(shell.stdout, "hello world\\n")
         self.assertRaises(TypeError, self.db.execute("select 4 as [4]").fetchall)
         for row in self.db.execute("select 3 as three"):
             try:
-                import dataclasses
                 row.three = 4
             except dataclasses.FrozenInstanceError:
                 pass
@@ -9769,8 +9826,6 @@ shell.write(shell.stdout, "hello world\\n")
 
     def testExtTypesConverter(self) -> None:
         "apsw.ext.TypesConverterCursorFactory"
-        import apsw.ext
-
         tccf = apsw.ext.TypesConverterCursorFactory()
 
         class Point(apsw.ext.SQLiteTypeAdapter):
@@ -9813,8 +9868,6 @@ shell.write(shell.stdout, "hello world\\n")
 
     def testExtStuff(self):
         "Various apsw.ext functions"
-        import apsw.ext
-
         apsw.ext.make_virtual_module(self.db, "g1", apsw.ext.generate_series)
         vals = {row[0] for row in self.db.execute("select value from g1 where start=1 and stop=10")}
         self.assertEqual(vals, {i for i in range(1, 10 + 1)})
@@ -9875,8 +9928,6 @@ shell.write(shell.stdout, "hello world\\n")
             for row in stuff_dict():
                 yield tuple(row.values())
 
-        import dataclasses
-
         @dataclasses.dataclass
         class xx:
             one: str
@@ -9897,7 +9948,6 @@ shell.write(shell.stdout, "hello world\\n")
             yield os.stat(".")
             yield os.stat("..")
 
-        import collections
         nt = collections.namedtuple("nt", next(stuff_dict()).keys(), rename=True)
 
         def stuff_namedtuple():
@@ -10040,8 +10090,6 @@ shell.write(shell.stdout, "hello world\\n")
 
     def testExtQueryInfo(self) -> None:
         "apsw.ext.query_info"
-        import apsw.ext
-
         qd = apsw.ext.query_info(self.db, "select 3; a syntax error")
         self.assertEqual(qd.query, "select 3; a syntax error")
         self.assertEqual(qd.bindings, None)
@@ -10399,12 +10447,6 @@ def setup():
     if not getattr(memdb, "enableloadextension", None):
         del APSW.testLoadExtension
 
-    # py 3.6 can't load apsw.ext
-    if sys.version_info < (3, 7):
-        for name in list(dir(APSW)):
-            if name.startswith("testExt"):
-                delattr(APSW, name)
-
     # earlier py versions make recursion error fatal
     if sys.version_info < (3, 10):
         del APSW.testIssue425
@@ -10447,7 +10489,7 @@ test_types_vals = (
     "0123456789" * 200000,  # a longer string
     u"a \u1234 unicode \ufe54 string \u0089",  # simple unicode string
     u"\N{BLACK STAR} \N{WHITE STAR} \N{LIGHTNING} \N{COMET} ",  # funky unicode or an episode of b5
-    u"\N{MUSICAL SYMBOL G CLEF}",  # http://www.cmlenz.net/archives/2008/07/the-truth-about-unicode-in-python
+    u"\N{MUSICAL SYMBOL G CLEF}",  # https://www.cmlenz.net/archives/2008/07/the-truth-about-unicode-in-python
     97,  # integer
     2147483647,  # numbers on 31 bit boundary (32nd bit used for integer sign), and then
     -2147483647,  # start using 32nd bit (must be represented by 64bit to avoid losing
@@ -10476,35 +10518,12 @@ if __name__ == '__main__':
     setup()
 
     def runtests():
-
-        def set_wal_mode(c):
-            # Note that WAL won't be on for memory databases.  This
-            # execution returns the active mode
-            c.execute("PRAGMA journal_mode=WAL").fetchall()
-
-        def fsync_off(c):
-            try:
-                c.execute("PRAGMA synchronous=OFF ; PRAGMA fullfsync=OFF; PRAGMA checkpoint_fullfsync=OFF")
-            except apsw.BusyError:
-                pass
-
-        b4 = apsw.connection_hooks[:]
-        try:
-            if "APSW_TEST_WALMODE" in os.environ:
-                apsw.connection_hooks.append(set_wal_mode)
-                print("WAL mode testing")
-
-            if "APSW_TEST_FSYNC_OFF" in os.environ:
-                apsw.connection_hooks.append(fsync_off)
-
-            if os.getenv("PYTRACE"):
-                import trace
-                t = trace.Trace(count=0, trace=1, ignoredirs=[sys.prefix, sys.exec_prefix])
-                t.runfunc(unittest.main)
-            else:
-                unittest.main()
-        finally:
-            apsw.connection_hooks = b4
+        if os.getenv("PYTRACE"):
+            import trace
+            t = trace.Trace(count=0, trace=1, ignoredirs=[sys.prefix, sys.exec_prefix])
+            t.runfunc(unittest.main)
+        else:
+            unittest.main()
 
     v = os.environ.get("APSW_TEST_ITERATIONS", None)
     if v is None:
@@ -10537,20 +10556,10 @@ if __name__ == '__main__':
     if hasattr(apsw, "_fini"):
         apsw._fini()
         gc.collect()
+    del apsw.ext
+    del apsw.bestpractice
     del apsw
 
-    exit = sys.exit
-
-    # modules
-    del unittest
-    del os
-    del math
-    del random
-    del time
-    del threading
-    del queue
-    del traceback
-    del re
     gc.collect()
 
-    exit(exitcode)
+    sys.exit(exitcode)

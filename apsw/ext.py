@@ -253,21 +253,24 @@ class TypesConverterCursorFactory:
                     bindings: apsw.Bindings | None = None,
                     *,
                     can_cache: bool = True,
-                    prepare_flags: int = 0) -> apsw.Cursor:
+                    prepare_flags: int = 0,
+                    explain: int = -1) -> apsw.Cursor:
             """Executes the statements doing conversions on supplied and returned values
 
             See :meth:`apsw.Cursor.execute` for parameter details"""
             return super().execute(statements,
                                    self.factory.wrap_bindings(bindings),
                                    can_cache=can_cache,
-                                   prepare_flags=prepare_flags)
+                                   prepare_flags=prepare_flags,
+                                   explain=explain)
 
         def executemany(self,
                         statements: str,
                         sequenceofbindings: Sequence[apsw.Bindings],
                         *,
                         can_cache: bool = True,
-                        prepare_flags: int = 0) -> apsw.Cursor:
+                        prepare_flags: int = 0,
+                        explain: int = -1) -> apsw.Cursor:
             """Executes the statements against each item in sequenceofbindings, doing conversions on supplied and returned values
 
             See :meth:`apsw.Cursor.executemany` for parameter details"""
@@ -275,18 +278,25 @@ class TypesConverterCursorFactory:
                 statements,
                 self.factory.wrap_sequence_bindings(sequenceofbindings),  # type: ignore[arg-type]
                 can_cache=can_cache,
-                prepare_flags=prepare_flags)
+                prepare_flags=prepare_flags,
+                explain=explain)
 
 
 def log_sqlite(*, level: int = logging.ERROR) -> None:
     """Send SQLite log messages to :mod:`logging`
 
-    :param level: level to log at (default *logging.ERROR*)
+    :param level: level to log at
+
+    SQLite's `logging <https://www.sqlite.org/errlog.html>`__ has many
+    useful messages, including those that aren't raised as exceptions.
     """
 
     def handler(errcode: int, message: str) -> None:
-        err_str = apsw.mapping_result_codes[errcode & 255]
+        nonlocal level
+        err_str = apsw.mapping_result_codes.get(errcode & 255, str(errcode))
         extra = {"sqlite_code": errcode, "sqlite_code_name": err_str, "sqlite_message": message}
+        if errcode & 0xff == apsw.SQLITE_WARNING:
+            level = min(level, logging.WARNING)
         logging.log(level,
                     "SQLITE_LOG: %s (%d) %s %s",
                     message,
@@ -1182,7 +1192,7 @@ def make_virtual_module(db: apsw.Connection,
                 return v  # type: ignore[no-any-return]
 
             def _Column_repr_invalid(self, which: int) -> apsw.SQLiteValue:
-                v = self._Column_get(which)
+                v = self._Column_get(which) # type: ignore[attr-defined]
                 return v if v is None or isinstance(v, (int, float, str, bytes)) else repr(v)
 
             def _Column_By_Attr(self, which: int) -> apsw.SQLiteValue:
@@ -1433,7 +1443,7 @@ def query_info(db: apsw.Connection,
 
     if explain and not res["is_explain"]:
         vdbe: list[VDBEInstruction] = []
-        for row in cur.execute("EXPLAIN " + res["first_query"], bindings):
+        for row in cur.execute(res["first_query"], bindings, explain=1):
             vdbe.append(
                 VDBEInstruction(**dict((v[0][0], v[1]) for v in zip(cur.getdescription(), row) if v[1] is not None)))
         res["explain"] = vdbe
@@ -1442,7 +1452,7 @@ def query_info(db: apsw.Connection,
         subn = "sub"
         byid: Any = {0: {"detail": "QUERY PLAN"}}
 
-        for row in cur.execute("EXPLAIN QUERY PLAN " + res["first_query"], bindings):
+        for row in cur.execute(res["first_query"], bindings, explain=2):
             node = dict((v[0][0], v[1]) for v in zip(cur.getdescription(), row) if v[0][0] != "notused")
             assert len(node) == 3  # catch changes in returned format
             parent: list[str | dict[str, Any]] = byid[node["parent"]]

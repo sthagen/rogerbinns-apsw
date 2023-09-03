@@ -1,8 +1,8 @@
 
-SQLITEVERSION=3.42.0
-APSWSUFFIX=.1
+SQLITEVERSION=3.43.0
+APSWSUFFIX=.0
 
-RELEASEDATE="20 May 2023"
+RELEASEDATE="27 August 2023"
 
 VERSION=$(SQLITEVERSION)$(APSWSUFFIX)
 VERDIR=apsw-$(VERSION)
@@ -27,7 +27,7 @@ help: ## Show this help
 	@egrep -h '\s##\s' $(MAKEFILE_LIST) | sort | \
 	awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-all: src/apswversion.h src/apsw.docstrings apsw/__init__.pyi src/constants.c test docs ## Update generated files, build, test, make doc
+all: src/apswversion.h src/apsw.docstrings apsw/__init__.pyi src/constants.c src/stringconstants.c test docs ## Update generated files, build, test, make doc
 
 tagpush: ## Tag with version and push
 	git tag -af $(SQLITEVERSION)$(APSWSUFFIX)
@@ -70,7 +70,8 @@ doc-depends: ## pip installs packages needed to build doc
 	$(PYTHON) -m pip install -U --upgrade-strategy eager sphinx sphinx_rtd_theme
 
 dev-depends: ## pip installs packages useful for development (none are necessary except setuptools)
-	$(PYTHON) -m pip install -U --upgrade-strategy eager yapf mypy pdbpp coverage build wheel setuptools
+	$(PYTHON) -m pip install -U --upgrade-strategy eager build wheel setuptools pip
+	$(PYTHON) -m pip install -U --upgrade-strategy eager yapf mypy pdbpp coverage
 
 # This is probably gnu make specific but only developers use this makefile
 $(GENDOCS): doc/%.rst: src/%.c tools/code2rst.py
@@ -82,6 +83,10 @@ apsw/__init__.pyi src/apsw.docstrings: $(GENDOCS) tools/gendocstrings.py src/aps
 src/constants.c: Makefile tools/genconstants.py src/apswversion.h
 	-rm -f src/constants.c
 	env PYTHONPATH=. $(PYTHON) tools/genconstants.py > src/constants.c
+
+src/stringconstants.c: Makefile tools/genstrings.py src/apswversion.h
+	-rm -f src/stringconstants.c
+	$(PYTHON) tools/genstrings.py > src/stringconstants.c
 
 build_ext: src/apswversion.h  ## Fetches SQLite and builds the extension
 	env $(PYTHON) setup.py fetch --version=$(SQLITEVERSION) --all build_ext -DSQLITE_ENABLE_COLUMN_METADATA --inplace --force --enable-all-extensions
@@ -118,7 +123,7 @@ test_debug: $(PYDEBUG_DIR)/bin/python3  src/faultinject.h ## Testing in debug mo
 fulltest: test test_debug
 
 linkcheck:  ## Checks links from doc
-	make RELEASEDATE=$(RELEASEDATE) VERSION=$(VERSION) -C doc linkcheck
+	env PYTHONPATH="`pwd`" make RELEASEDATE=$(RELEASEDATE) VERSION=$(VERSION) -C doc linkcheck
 
 unwrapped:  ## Find SQLite APIs that are not wrapped by APSW
 	env PYTHONPATH=. $(PYTHON) tools/find_unwrapped_apis.py
@@ -149,9 +154,6 @@ showsymbols:  ## Finds any C symbols that aren't static(private)
 	test -f apsw/__init__`$(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))"`
 	set +e; nm --extern-only --defined-only apsw/__init__`$(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))"` | egrep -v ' (__bss_start|_edata|_end|_fini|_init|initapsw|PyInit_apsw)$$' ; test $$? -eq 1 || false
 
-# config used in CI
-WINCICONFIG=set APSW_TEST_FSYNC_OFF=set &
-
 compile-win:  ## Builds and tests against all the Python versions on Windows
 	-del /q apsw\\*.pyd
 	-del /q dist\\*.egg
@@ -174,10 +176,6 @@ compile-win:  ## Builds and tests against all the Python versions on Windows
 	$(MAKE) compile-win-one PYTHON=c:/python39/python
 	$(MAKE) compile-win-one PYTHON=c:/python38/python
 	$(MAKE) compile-win-one PYTHON=c:/python38-64/python
-	$(MAKE) compile-win-one PYTHON=c:/python37-64/python
-	$(MAKE) compile-win-one PYTHON=c:/python37/python
-	$(MAKE) compile-win-one PYTHON=c:/python36-64/python
-	$(MAKE) compile-win-one PYTHON=c:/python36/python
 
 # I did try to make this use venv but then the pip inside the venv and
 # other packages were skipped due to metadata issues
@@ -188,7 +186,7 @@ compile-win-one:  ## Does one Windows build - set PYTHON variable
 	$(PYTHON)  -m pip --no-cache-dir wheel -v .
 	cmd /c FOR %i in (*.whl) DO $(PYTHON)  -m pip --no-cache-dir install --force-reinstall %i
 	$(PYTHON) setup.py build_test_extension
-	$(WINCICONFIG) $(PYTHON) -m apsw.tests
+	$(PYTHON) -m apsw.tests
 	-del /q setup.apsw *.whl
 
 source_nocheck: src/apswversion.h

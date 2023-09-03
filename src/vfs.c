@@ -1253,10 +1253,10 @@ apswvfs_xCurrentTime(sqlite3_vfs *vfs, double *julian)
 /** .. method:: xCurrentTime()  -> float
 
   Return the `Julian Day Number
-  <http://en.wikipedia.org/wiki/Julian_day>`_ as a floating point
+  <https://en.wikipedia.org/wiki/Julian_day>`_ as a floating point
   number where the integer portion is the day and the fractional part
   is the time. Do not adjust for timezone (ie use `UTC
-  <http://en.wikipedia.org/wiki/Universal_Time>`_).
+  <https://en.wikipedia.org/wiki/Universal_Time>`_).
 */
 static PyObject *
 apswvfspy_xCurrentTime(APSWVFS *self)
@@ -1305,7 +1305,7 @@ apswvfs_xCurrentTimeInt64(sqlite3_vfs *vfs, sqlite3_int64 *time)
 /** .. method:: xCurrentTimeInt64()  -> int
 
   Returns as an integer the `Julian Day Number
-  <http://en.wikipedia.org/wiki/Julian_day>`__ multiplied by 86400000
+  <https://en.wikipedia.org/wiki/Julian_day>`__ multiplied by 86400000
   (the number of milliseconds in a 24-hour day).
 */
 static PyObject *
@@ -2156,7 +2156,7 @@ apswvfsfile_xRead(sqlite3_file *file, void *bufout, int amount, sqlite3_int64 of
   if (py3buffer.len < amount)
   {
     result = SQLITE_IOERR_SHORT_READ;
-    memset(bufout, 0, amount); /* see https://sqlite.org/cvstrac/chngview?cn=5867 */
+    memset(bufout, 0, amount);
     memcpy(bufout, py3buffer.buf, py3buffer.len);
   }
   else
@@ -2218,8 +2218,7 @@ apswvfsfilepy_xRead(APSWVFSFile *self, PyObject *args, PyObject *kwds)
   if (res == SQLITE_IOERR_SHORT_READ)
   {
     /* We don't know how short the read was, so look for first
-         non-trailing null byte.  See
-         https://sqlite.org/cvstrac/chngview?cn=5867 */
+         non-trailing null byte.  */
     while (amount && PyBytes_AS_STRING(buffy)[amount - 1] == 0)
       amount--;
     if (_PyBytes_Resize(&buffy, amount))

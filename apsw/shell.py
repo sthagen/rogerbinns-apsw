@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 
-# This supports Python 3.6 onwards
-# Python 3.6 doesn't let us do from __future__ import annotations
-# so we can't do correct typing.
+from __future__ import annotations
 
 # mypy: ignore-errors
 
@@ -34,7 +32,7 @@ class Shell:
     :param stderr: Where to send errors (default sys.stderr)
     :param encoding: Default encoding for files opened/created by the
       Shell.  If you want stdin/out/err to use a particular encoding
-      then you need to provide them `already configured <http://docs.python.org/library/codecs.html#codecs.open>`__ that way.
+      then you need to provide them `already configured <https://docs.python.org/library/codecs.html#codecs.open>`__ that way.
     :param args: This should be program arguments only (ie if
       passing in sys.argv do not include sys.argv[0] which is the
       program name.  You can also pass in None and then call
@@ -859,8 +857,7 @@ Enter ".help" for instructions
 
     def _query_details(self, sql, bindings):
         "Internal routine to iterate over statements"
-        # The return from this would be way better as a dataclass
-        # but Py 3.6 doesn't have them
+        # ::ToDO:: The return from this would be way better as a dataclass
         cur = self.db.cursor()
         saved = sql
         explain = None
@@ -1515,8 +1512,7 @@ Enter ".help" for instructions
                 # schema reread
                 blank()
                 comment("We need to force SQLite to reread the schema because otherwise it doesn't know that "
-                        "the virtual tables we inserted directly into sqlite_schema exist.  See "
-                        "last comments of https://sqlite.org/cvstrac/tktview?tn=3425")
+                        "the virtual tables we inserted directly into sqlite_schema exist.")
                 self.write(self.stdout, "BEGIN;\nCREATE TABLE no_such_table(x,y,z);\nROLLBACK;\n")
 
         finally:

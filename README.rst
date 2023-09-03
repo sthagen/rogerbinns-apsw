@@ -39,7 +39,7 @@ Mailing lists/contacts
 ======================
 
 * `Python SQLite discussion group
-  <http://groups.google.com/group/python-sqlite>`__  (preferred)
+  <https://groups.google.com/group/python-sqlite>`__  (preferred)
 * `Github discussions <https://github.com/rogerbinns/apsw/discussions>`__
 * You can also email the author at `rogerb@rogerbinns.com
   <mailto:rogerb@rogerbinns.com>`__
@@ -52,12 +52,12 @@ Releases are made to `PyPI <https://pypi.org/project/apsw/>`__
 <https://github.com/rogerbinns/apsw/releases>`__
 
 New release announcements are sent to the `Python SQLite discussion
-group <http://groups.google.com/group/python-sqlite>`__ and there is
+group <https://groups.google.com/group/python-sqlite>`__ and there is
 an `RSS feed from PyPI
 <https://pypi.org/rss/project/apsw/releases.xml>`__.
 
 `Full detailed list of changes
-<http://rogerbinns.github.io/apsw/changes.html>`__
+<https://rogerbinns.github.io/apsw/changes.html>`__
 
 Bugs
 ====
@@ -72,12 +72,3 @@ License
 See `LICENSE
 <https://github.com/rogerbinns/apsw/blob/master/LICENSE>`__ - in
 essence any OSI approved open source license.
-
-Older Python versions
-=====================
-
-A `release
-<https://www.rogerbinns.com/blog/apsw-ending-python2early3.html>`__
-from January 2022 supports all CPython versions back to 2.3.  The
-`tips <https://rogerbinns.github.io/apsw/tips.html>`__ include more
-information about versions.

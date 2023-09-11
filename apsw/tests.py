@@ -360,8 +360,31 @@ class APSW(unittest.TestCase):
         if hasattr(__builtins__, name):
             warnings.simplefilter("ignore", getattr(__builtins__, name))
 
-    def assertRaisesRegexCompat(self, etype, pattern, func, *args):
-        self.assertRaises(etype, func)
+    def assertRaisesRoot(self, exctype, *args, **kwargs):
+        # With chained exceptions verifies the first exception raised matches type
+        # assertRaises checks the last raised type not the root cause
+        if not args and not kwargs:  # context manager
+
+            class mgr:
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(innerself, etype, e, etb):
+                    if not etype or not e:
+                        self.fail("Expected an exception in assertRaisesRoot context manager")
+                    while e.__context__:
+                        e = e.__context__
+                    self.assertIsInstance(e, exctype)
+                    return True
+
+            return mgr()
+        try:
+            args[0](*args[1:], **kwargs)
+        except BaseException as e:
+            while e.__context__:
+                e = e.__context__
+            self.assertIsInstance(e, exctype)
 
     def assertTableExists(self, tablename):
         self.assertTrue(self.db.table_exists(None, tablename))
@@ -376,8 +399,8 @@ class APSW(unittest.TestCase):
         l = dbl.cursor()
         r = dbr.cursor()
         # check same number of rows
-        lcount = l.execute("select count(*) from [" + left + "]").fetchall()[0][0]
-        rcount = r.execute("select count(*) from [" + right + "]").fetchall()[0][0]
+        lcount = l.execute("select count(*) from [" + left + "]").get
+        rcount = r.execute("select count(*) from [" + right + "]").get
         self.assertEqual(lcount, rcount)
         # check same number and names and order for columns
         lnames = [row[1] for row in l.execute("pragma table_info([" + left + "])")]
@@ -2557,6 +2580,28 @@ class APSW(unittest.TestCase):
         self.db.execute(query, can_cache=True)
         self.db.close()
 
+    def testFastcall(self):
+        "fastcall argument processing"
+        # function that takes one argument
+        self.assertRaisesRegex(TypeError, "Missing required parameter", apsw.sleep)
+        self.assertRaisesRegex(TypeError, "'fred' is an invalid keyword argument", apsw.sleep, fred=3)
+        self.assertRaisesRegex(TypeError, "argument 'milliseconds' given by name and position", apsw.sleep, 10, milliseconds=20)
+        self.assertRaisesRegex(TypeError, "Too many positional arguments", apsw.sleep, 10, 20)
+
+        # many args where varargs had to be converted to fastcall
+        self.assertRaisesRegex(TypeError, "Missing required parameter", apsw.Connection)
+        apsw.Connection("")
+        apsw.Connection("", vfs=None)
+        self.assertRaisesRegex(apsw.SQLError, "no such vfs", apsw.Connection, "", vfs="fred")
+        c = apsw.Connection(statementcachesize=22, flags=apsw.SQLITE_OPEN_READONLY, vfs=None, filename="")
+        self.assertEqual(22, c.cache_stats()["size"])
+        self.assertRaisesRegex(TypeError, "Missing required parameter", apsw.Connection, statementcachesize=22, flags=apsw.SQLITE_OPEN_READONLY, vfs=None)
+
+        # keyword only args
+        self.assertRaisesRegex(TypeError, "Too many positional arguments", c.execute, "select 3", None, False)
+        self.assertEqual(3, c.execute(explain=0, prepare_flags=1, can_cache=1, bindings=None, statements="select 3").get)
+        self.assertRaisesRegex(TypeError, "argument 'statements' given by name and position", c.execute, "select 4", explain=0, prepare_flags=1, can_cache=1, bindings=None, statements="select 3")
+
     def testCollation(self):
         "Verify collations"
         # create a whole bunch to check they are freed
@@ -3407,7 +3452,7 @@ class APSW(unittest.TestCase):
         self.assertRaises(apsw.ExtensionLoadingError, self.db.loadextension, LOADEXTENSIONFILENAME)
         self.assertEqual(self.db.config(apsw.SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION, -1), 0)
         self.db.enableloadextension(False)
-        self.assertRaises(TypeError, self.db.enableloadextension, BadIsTrue())
+        self.assertRaises(ZeroDivisionError, self.db.enableloadextension, BadIsTrue())
         # should still be disabled
         self.assertEqual(self.db.config(apsw.SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION, 0), 0)
         self.assertRaises(apsw.ExtensionLoadingError, self.db.loadextension, LOADEXTENSIONFILENAME)
@@ -3907,11 +3952,7 @@ class APSW(unittest.TestCase):
         for i in range(6):
             VTable._bestindexreturn = i
             Cursor._bestindexreturn = i
-            try:
-                cur.execute(" " + allconstraints +
-                            " " * i)  # defeat statement cache - bestindex is called during prepare
-            except ZeroDivisionError:
-                pass
+            self.assertRaisesRoot(ZeroDivisionError, cur.execute, " " + allconstraints + " " * i)
 
         # error cases ok, return real values and move on to cursor methods
         del VTable.Open
@@ -3927,37 +3968,37 @@ class APSW(unittest.TestCase):
         self.assertRaises(AttributeError, cur.execute, allconstraints)
         # put in filter
         Cursor.Filter = Cursor.Filter1
-        self.assertRaises(TypeError, cur.execute, allconstraints)
+        self.assertRaisesRoot(TypeError, cur.execute, allconstraints)
         Cursor.Filter = Cursor.Filter2
-        self.assertRaises(ZeroDivisionError, cur.execute, allconstraints)
+        self.assertRaisesRoot(ZeroDivisionError, cur.execute, allconstraints)
         Cursor.Filter = Cursor.Filter99
-        self.assertRaises(AttributeError, cur.execute, allconstraints)
+        self.assertRaisesRoot(AttributeError, cur.execute, allconstraints)
         Cursor.Eof = Cursor.Eof1
-        self.assertRaises(TypeError, cur.execute, allconstraints)
+        self.assertRaisesRoot(TypeError, cur.execute, allconstraints)
         Cursor.Eof = Cursor.Eof2
-        self.assertRaises(ZeroDivisionError, cur.execute, allconstraints)
+        self.assertRaisesRoot(ZeroDivisionError, cur.execute, allconstraints)
         Cursor.Eof = Cursor.Eof3
-        self.assertRaises(ZeroDivisionError, cur.execute, allconstraints)
+        self.assertRaisesRoot(ZeroDivisionError, cur.execute, allconstraints)
         Cursor.Eof = Cursor.Eof99
-        self.assertRaises(AttributeError, cur.execute, allconstraints)
+        self.assertRaisesRoot(AttributeError, cur.execute, allconstraints)
         # now onto to rowid
         Cursor.Rowid = Cursor.Rowid1
-        self.assertRaises(TypeError, cur.execute, allconstraints)
+        self.assertRaisesRoot(TypeError, cur.execute, allconstraints)
         Cursor.Rowid = Cursor.Rowid2
-        self.assertRaises(ZeroDivisionError, cur.execute, allconstraints)
+        self.assertRaisesRoot(ZeroDivisionError, cur.execute, allconstraints)
         Cursor.Rowid = Cursor.Rowid3
-        self.assertRaises(ValueError, cur.execute, allconstraints)
+        self.assertRaisesRoot(ValueError, cur.execute, allconstraints)
         Cursor.Rowid = Cursor.Rowid99
-        self.assertRaises(AttributeError, cur.execute, allconstraints)
+        self.assertRaisesRoot(AttributeError, cur.execute, allconstraints)
         # column
         Cursor.Column = Cursor.Column1
-        self.assertRaises(TypeError, cur.execute, allconstraints)
+        self.assertRaisesRoot(TypeError, cur.execute, allconstraints)
         Cursor.Column = Cursor.Column2
-        self.assertRaises(TypeError, cur.execute, allconstraints)
+        self.assertRaisesRoot(TypeError, cur.execute, allconstraints)
         Cursor.Column = Cursor.Column3
-        self.assertRaises(ZeroDivisionError, cur.execute, allconstraints)
+        self.assertRaisesRoot(ZeroDivisionError, cur.execute, allconstraints)
         Cursor.Column = Cursor.Column4
-        self.assertRaises(TypeError, cur.execute, allconstraints)
+        self.assertRaisesRoot(TypeError, cur.execute, allconstraints)
         Cursor.Column = Cursor.Column99
         try:
             for row in cur.execute(allconstraints):
@@ -3966,23 +4007,17 @@ class APSW(unittest.TestCase):
             pass
         # next
         Cursor.Next = Cursor.Next1
-        try:
+        with self.assertRaisesRoot(TypeError):
             for row in cur.execute(allconstraints):
                 pass
-        except TypeError:
-            pass
         Cursor.Next = Cursor.Next2
-        try:
+        with self.assertRaisesRoot(ZeroDivisionError):
             for row in cur.execute(allconstraints):
                 pass
-        except ZeroDivisionError:
-            pass
         Cursor.Next = Cursor.Next99
-        try:
+        with self.assertRaisesRoot(AttributeError):
             for row in cur.execute(allconstraints):
                 pass
-        except AttributeError:
-            pass
         # close
         Cursor.Close = Cursor.Close1
         try:
@@ -4010,7 +4045,7 @@ class APSW(unittest.TestCase):
         VTable.UpdateInsertRow = VTable.UpdateInsertRow4
         self.assertRaises(TypeError, cur.execute, sql)
         VTable.UpdateInsertRow = VTable.UpdateInsertRow5
-        self.assertRaises(ValueError, cur.execute, sql)
+        self.assertRaises(TypeError, cur.execute, sql)
         VTable.UpdateInsertRow = VTable.UpdateInsertRow6
         self.assertRaises(OverflowError, cur.execute, sql)
         VTable.UpdateInsertRow = VTable.UpdateInsertRow7
@@ -6308,8 +6343,8 @@ class APSW(unittest.TestCase):
                 super().xDelete("bad", "arguments")
 
             def xDelete99(self, name, syncdir):
-                assert (type(name) == type(""))
-                assert (type(syncdir) == type(1))
+                assert isinstance(name, str)
+                assert isinstance(syncdir, bool)
                 return super().xDelete(name, syncdir)
 
             def xAccess1(self, bad, number, of, args):
@@ -6889,7 +6924,7 @@ class APSW(unittest.TestCase):
         self.assertRaises(TypeError, vfs.xOpen, 3)
         self.assertRaises(TypeError, vfs.xOpen, 3, 3)
         self.assertRaises(TypeError, vfs.xOpen, None, (1, 2))
-        self.assertRaises(ValueError, vfs.xOpen, None, [1, 2, 3])
+        self.assertRaises(TypeError, vfs.xOpen, None, [1, 2, 3])
         self.assertRaises(TypeError, vfs.xOpen, None, ["1", 2])
         self.assertRaises(TypeError, vfs.xOpen, None, [1, "2"])
         self.assertRaises(OverflowError, vfs.xOpen, None, [0xffffffffeeeeeeee0, 2])
@@ -7129,7 +7164,7 @@ class APSW(unittest.TestCase):
         TestFile.__init__ = TestFile.init3
         self.assertRaises(apsw.SQLError, self.assertRaisesUnraisable, TypeError, testdb)
         TestFile.__init__ = TestFile.init4
-        self.assertRaises(apsw.SQLError, self.assertRaisesUnraisable, ValueError, testdb)
+        self.assertRaises(apsw.SQLError, self.assertRaisesUnraisable, TypeError, testdb)
         TestFile.__init__ = TestFile.init5
         self.assertRaises(apsw.SQLError, self.assertRaisesUnraisable, OverflowError, testdb)
         TestFile.__init__ = TestFile.init6
@@ -10476,10 +10511,6 @@ def setup():
         print("Not doing the optional LoadExtension test.  You need to compile the extension first\n")
         print("  python3 setup.py build_test_extension")
         del APSW.testLoadExtension
-
-    # python version compatibility
-    if not hasattr(APSW, "assertRaisesRegex"):
-        APSW.assertRaisesRegex = APSW.assertRaisesRegexCompat
 
     del memdb
 

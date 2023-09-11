@@ -39,6 +39,29 @@ Py_IsNone(const PyObject *val)
 
 #endif
 
+/* Vectorcall added in 3.9 officially and provisional in 3.8  */
+#if PY_VERSION_HEX < 0x03090000
+#undef PyObject_Vectorcall
+static PyObject *PyObject_Vectorcall(PyObject *callable, PyObject *const *args, size_t nargsf, PyObject *kwnames)
+{
+  return _PyObject_Vectorcall(callable, args, nargsf, kwnames);
+}
+
+/* The actual CPython implementation of this is a little more
+   sophisticated but doesn't matter for our usage */
+#undef PyObject_VectorcallMethod
+static PyObject *PyObject_VectorcallMethod(PyObject *name, PyObject *const *args, size_t nargsf, PyObject *kwnames)
+{
+  PyObject *res = NULL, *callable = PyObject_GetAttr(args[0], name);
+  if (callable)
+  {
+    res = PyObject_Vectorcall(callable, args + 1, PyVectorcall_NARGS(nargsf) - 1, kwnames);
+    Py_DECREF(callable);
+  }
+  return res;
+}
+#endif
+
 /* used in calls to AddTraceBackHere where O format takes non-null but
    we often have null so convert to None.  This can't be done as a portable
    macro because v would end up double evaluated */
@@ -60,76 +83,30 @@ OBJ(PyObject *v)
     }                                           \
   } while (0)
 
-#undef Call_PythonMethod
-/* Calls the named method of object with the provided args */
-static PyObject *
-Call_PythonMethod(PyObject *obj, const char *methodname, int mandatory, PyObject *args)
+/* CONVENIENCE FUNCTIONS */
+
+/* decref an array of PyObjects */
+static void Py_DECREF_ARRAY(PyObject *array[], int argc)
+{
+  int i;
+  for (i = 0; i < argc; i++)
+    Py_DECREF(array[i]);
+}
+
+/* get buffer and check it is contiguous */
+#undef PyObject_GetBufferContiguous
+static int PyObject_GetBufferContiguous(PyObject *source, Py_buffer *buffer, int flags)
 {
 #include "faultinject.h"
-  PyObject *method = NULL;
-  PyObject *res = NULL;
-
-  /* we may be called when there is already an error.  eg if you return an error in
-     a cursor method, then SQLite calls vtabClose which calls us.  We don't want to
-     clear pre-existing errors, but we do want to clear ones when the function doesn't
-     exist but is optional */
-  PyObject *etype = NULL, *evalue = NULL, *etraceback = NULL;
-  void *pyerralreadyoccurred = PyErr_Occurred();
-  if (pyerralreadyoccurred)
-    PyErr_Fetch(&etype, &evalue, &etraceback);
-
-  /* we should only be called with ascii methodnames so no need to do
-   character set conversions etc */
-  method = PyObject_GetAttrString(obj, methodname);
-
-  assert(method != obj);
-  if (!method)
+  int res = PyObject_GetBuffer(source, buffer, flags);
+  if (res == 0 && !PyBuffer_IsContiguous(buffer, 'C'))
   {
-    if (!mandatory)
-    {
-      /* pretend method existed and returned None */
-      PyErr_Clear();
-      res = Py_NewRef(Py_None);
-    }
-    goto finally;
+    PyBuffer_Release(buffer);
+    PyErr_Format(PyExc_TypeError, "Expected a contiguous buffer");
+    res = -1;
   }
-
-  assert(!PyErr_Occurred());
-
-  res = PyObject_CallObject(method, args);
-  if (!pyerralreadyoccurred && PyErr_Occurred())
-    AddTraceBackHere(__FILE__, __LINE__, "Call_PythonMethod", "{s: s, s: i, s: O, s: O}",
-                     "methodname", methodname,
-                     "mandatory", mandatory,
-                     "args", OBJ(args),
-                     "method", OBJ(method));
-
-finally:
-  if (pyerralreadyoccurred)
-    PyErr_Restore(etype, evalue, etraceback);
-  Py_XDECREF(method);
   return res;
 }
-
-#undef Call_PythonMethodV
-static PyObject *
-Call_PythonMethodV(PyObject *obj, const char *methodname, int mandatory, const char *format, ...)
-{
-#include "faultinject.h"
-  PyObject *args = NULL, *result = NULL;
-  va_list list;
-  va_start(list, format);
-  args = Py_VaBuildValue(format, list);
-  va_end(list);
-
-  if (args)
-    result = Call_PythonMethod(obj, methodname, mandatory, args);
-
-  Py_XDECREF(args);
-  return result;
-}
-
-/* CONVENIENCE FUNCTIONS */
 
 #undef convertutf8string
 /* Convert a NULL terminated UTF-8 string into a Python object.  None
@@ -189,75 +166,56 @@ PyObject_IsTrueStrict(PyObject *o)
   return PyObject_IsTrue(o);
 }
 
-/*
-
-This is necessary for calling into CPython for methods that cannot
-handle an existing exception, such as PyObject_Call*.  If those
-methods are called with an existing exception then when they return
-CPython will raise:
-
-SystemError: _PyEval_EvalFrameDefault returned a result with an
-exception set
-
-If there was an exception coming in, then this macro will turn any
-exception in `x` into an unraisable exception and requires the
-parameters for AddTraceBackHere to be provided.
-
-*/
-
-#define PY_EXC_HANDLE(x, func_name, locals_dict_spec, ...)                              \
-  do                                                                                    \
-  {                                                                                     \
-    PyObject *e_type = NULL, *e_value = NULL, *e_traceback = NULL;                      \
-    PyErr_Fetch(&e_type, &e_value, &e_traceback);                                       \
-                                                                                        \
-    x;                                                                                  \
-                                                                                        \
-    if ((e_type || e_value || e_traceback))                                             \
-    {                                                                                   \
-      if (PyErr_Occurred())                                                             \
-      {                                                                                 \
-        /* report the new error as unraisable because of the existing error */          \
-        AddTraceBackHere(__FILE__, __LINE__, func_name, locals_dict_spec, __VA_ARGS__); \
-        apsw_write_unraisable(NULL);                                                    \
-      } /* put the old error back */                                                    \
-      PyErr_Restore(e_type, e_value, e_traceback);                                      \
-    }                                                                                   \
-                                                                                        \
-  } while (0)
-
 /* similar space to the above but if there was an
    exception coming in and the call to `x` results
-   in an exception, then the incoming exception
-   is chained to the `x` exception so you'd get
+   in an exception, then `x` exception is  chained \
+   to the incoming exception.  The type is that
+   from `x` though!
 
-   Exception in `x`
-     which happened while handling
-        incoming exception
+   Exception incoming exception
+   During the handling of the above, another occurred:
+      `x exception`
    */
 #if PY_VERSION_HEX < 0x030c0000
-#define _chainexcapi(a1,a2,a3) _PyErr_ChainExceptions(a1,a2,a3)
+#define _chainexcapi(a1, a2, a3) _PyErr_ChainExceptions(a1, a2, a3)
 #else
-#define _chainexcapi(a1,a2,a3) _PyErr_ChainExceptions1(a2)
+#define _chainexcapi(a1, a2, a3) _PyErr_ChainExceptions1(a2)
 #endif
-#define CHAIN_EXC(x)                           \
-  do                                           \
-  {                                            \
-    PyObject *_exc = PyErr_Occurred();         \
-    PyObject *_e1, *_e2, *_e3;                 \
-    if (_exc)                                  \
-      PyErr_Fetch(&_e1, &_e2, &_e3);           \
-    {                                          \
-      x;                                       \
-    }                                          \
-    if (_exc)                                  \
-    {                                          \
-      if (PyErr_Occurred())                    \
-        _chainexcapi(_e1, _e2, _e3);           \
-      else                                     \
-        PyErr_Restore(_e1, _e2, _e3);          \
-    }                                          \
-  } while (0)
+#define CHAIN_EXC_BEGIN                \
+  do                                   \
+  {                                    \
+    PyObject *_exc = PyErr_Occurred(); \
+    PyObject *_e1, *_e2, *_e3;         \
+    if (_exc)                          \
+      PyErr_Fetch(&_e1, &_e2, &_e3);   \
+    do                                 \
+    {
+
+/* the seemingly spurious first do-while0 is because immediately
+   preceding this can be a label in which case the compiler would
+   complain that the block didn't end in a statement, so we put a
+   pointless one there;
+*/
+#define CHAIN_EXC_END               \
+  do                                \
+  {                                 \
+  } while (0);                      \
+  }                                 \
+  while (0)                         \
+    ;                               \
+  if (_exc)                         \
+  {                                 \
+    if (PyErr_Occurred())           \
+      _chainexcapi(_e1, _e2, _e3);  \
+    else                            \
+      PyErr_Restore(_e1, _e2, _e3); \
+  }                                 \
+  }                                 \
+  while (0)
+
+#define CHAIN_EXC(x) \
+  CHAIN_EXC_BEGIN x; \
+  CHAIN_EXC_END
 
 /* Some functions can clear the error indicator
    so this keeps it */
@@ -271,3 +229,32 @@ parameters for AddTraceBackHere to be provided.
                                    \
     PyErr_Restore(_e1, _e2, _e3);  \
   } while (0)
+
+/* See PEP 678 */
+static void PyErr_AddExceptionNoteV(const char *format, ...)
+{
+  (void)format;
+#if PY_VERSION_HEX >= 0x030b0000
+  va_list fmt_args;
+  va_start(fmt_args, format);
+
+  PyObject *message;
+  message = PyUnicode_FromFormatV(format, fmt_args);
+
+  if (message)
+  {
+    PyObject *n0, *n1, *n2, *nres;
+    PyErr_Fetch(&n0, &n1, &n2);
+    PyErr_NormalizeException(&n0, &n1, &n2);
+    PyErr_Restore(n0, n1, n2);
+
+    PyObject *vargs[] = {NULL, n1, message};
+    CHAIN_EXC(nres = PyObject_VectorcallMethod(apst.add_note, vargs + 1, 2 | PY_VECTORCALL_ARGUMENTS_OFFSET, NULL));
+    Py_XDECREF(nres);
+
+    Py_DECREF(message);
+  }
+
+  va_end(fmt_args);
+#endif
+}

@@ -12,10 +12,31 @@
 # The output is intentionally formatted so that vscode autoformat
 # makes no changes
 
-names = """
-Connect Create ShadowName
-Begin BestIndex BestIndexObject Commit
+names = ""
 
+# virtual table
+names += """
+Begin BestIndex BestIndexObject Close Column ColumnNoChange Commit
+Connect Create Destroy Disconnect Eof Filter FindFunction Next Open
+Release Rename Rollback RollbackTo Rowid Savepoint ShadowName Sync
+UpdateChangeRow UpdateDeleteRow UpdateInsertRow
+"""
+
+# vfs
+names += """
+xAccess xCheckReservedLock xClose xCurrentTime xCurrentTimeInt64
+xDeviceCharacteristics xFileControl xFileSize xGetLastError
+xGetSystemCall xDelete xDlClose xDlError xDlOpen xDlSym xFullPathname
+xLock xNextSystemCall xOpen xRandomness xRead xSectorSize
+xSetSystemCall xSleep xSync xTruncate xUnlock xWrite
+"""
+
+# other
+names +="""
+close connection_hooks cursor error_offset excepthook execute
+executemany extendedresult get Mapping result add_note
+
+step final value inverse
 """
 
 # tokenize names
@@ -30,13 +51,6 @@ header = """\
 */
 """
 
-decl = """
-static struct _apsw_string_table {
-
-} = {0};
-
-"""
-
 print(header)
 
 print("static struct _apsw_string_table\n{")
@@ -44,11 +58,10 @@ for n in names:
     print(f"    PyObject *{ n };")
 print("""} apst = {0};""")
 
-
 print("""
 static void
 fini_apsw_strings(void)
-{ """)
+{""")
 for n in names:
     print(f"    Py_CLEAR(apst.{ n });")
 print("}")

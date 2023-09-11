@@ -11,18 +11,18 @@ APSW_FaultInjectControl(const char *faultfunction, const char *filename, const c
 
 call_pattern = """
 ({
-    __auto_type _res = 0 ? PySet_New(__VA_ARGS__) : 0;
+    __auto_type _res_PySet_New = 0 ? PySet_New(__VA_ARGS__) : 0;
 
-    _res = (typeof (_res))APSW_FaultInjectControl("PySet_New", __FILE__, __func__, __LINE__, #__VA_ARGS__);
+    _res_PySet_New = (typeof (_res_PySet_New))APSW_FaultInjectControl("PySet_New", __FILE__, __func__, __LINE__, #__VA_ARGS__);
 
-    if ((typeof (_res))0x1FACADE == _res)
-       _res = PySet_New(__VA_ARGS__);
-    else if ((typeof(_res))0x2FACADE == _res)
+    if ((typeof (_res_PySet_New))0x1FACADE == _res_PySet_New)
+       _res_PySet_New = PySet_New(__VA_ARGS__);
+    else if ((typeof(_res_PySet_New))0x2FACADE == _res_PySet_New)
     {
         PySet_New(__VA_ARGS__);
-        _res = (typeof (_res))18;
+        _res_PySet_New = (typeof (_res_PySet_New))18;
     }
-    _res;
+    _res_PySet_New;
 })
 """
 
@@ -70,22 +70,21 @@ returns = {
     # return a pointer, NULL on failure
     "pointer":
     """
-            convert_value_to_pyobject convert_column_to_pyobject getfunctionargs allocfunccbinfo
-            Call_PythonMethodV apsw_strdup convertutf8string
-            Call_PythonMethod MakeExistingException
-            get_window_function_context
+            convert_value_to_pyobject convert_column_to_pyobject  allocfunccbinfo
+            apsw_strdup convertutf8string MakeExistingException get_window_function_context
 
             PyModule_Create2 PyErr_NewExceptionWithDoc PySet_New
-            PyUnicode_New  PyUnicode_AsUTF8 PyObject_GetAttrString _PyObject_New PyUnicode_FromString
+            PyUnicode_New  PyUnicode_AsUTF8 PyObject_GetAttr _PyObject_New PyUnicode_FromString
             PyObject_Str PyUnicode_AsUTF8AndSize PyTuple_New PyDict_New Py_BuildValue PyList_New
             PyWeakref_NewRef PyMem_Calloc PyLong_FromLong PyObject_GetIter
             PyObject_CallObject PyLong_AsInt PyUnicode_FromStringAndSize
             PySequence_GetItem PyLong_FromLongLong PySequence_GetSlice PyBytes_FromStringAndSize
             PyFloat_FromDouble  PyBool_FromLong PyCode_NewEmpty PyFloat_AsDouble
             PyIter_Next PyList_GetItem PyList_SetItem PyLong_FromVoidPtr PyMapping_GetItemString PyNumber_Float
-            PyNumber_Long PySequence_Fast PySequence_List PySequence_SetItem PyObject_CallFunction
-            PyObject_CallMethod PyFrame_New PyStructSequence_NewType PyStructSequence_New
+            PyNumber_Long PySequence_Fast PySequence_List PySequence_SetItem
+            PyFrame_New PyStructSequence_NewType PyStructSequence_New
             PyMem_Realloc PyUnicode_FromFormat
+            PyObject_VectorcallMethod PyObject_Vectorcall
             """.split(),
     # numeric return
     "sqlite":
@@ -127,13 +126,17 @@ returns = {
     "number":
     """
         PyType_Ready PyModule_AddObject PyModule_AddIntConstant PyLong_AsLong
-        PyLong_AsLongLong PyObject_GetBuffer PyList_Append PyDict_SetItemString
-        PyObject_SetAttrString _PyBytes_Resize PyDict_SetItem PyList_SetSlice
+        PyLong_AsLongLong PyList_Append PyDict_SetItemString
+        PyObject_SetAttr _PyBytes_Resize PyDict_SetItem PyList_SetSlice
         PyObject_IsTrue PySequence_Size PySet_Add PyObject_IsTrueStrict
         PyStructSequence_InitType2 PyList_Size
 
-        connection_trace_and_exec
+        PyObject_GetBufferContiguous PyObject_GetBuffer
+
+        connection_trace_and_exec getfunctionargs
         """.split(),
+        # PyBuffer_IsContiguous is on an error path although the
+        # function itself can't error
 }
 
 # some calls like Py_BuildValue are #defined to _Py_BuildValue_SizeT
@@ -141,8 +144,6 @@ returns = {
 call_map = {
     "Py_BuildValue": "_Py_BuildValue_SizeT",
     "PyArg_ParseTuple": "_PyArg_ParseTuple_SizeT",
-    "PyObject_CallFunction": "_PyObject_CallFunction_SizeT",
-    "PyObject_CallMethod": "_PyObject_CallMethod_SizeT",
     "Py_VaBuildValue": "_Py_VaBuildValue_SizeT",
 }
 
@@ -162,18 +163,17 @@ no_error = set("""PyBuffer_Release PyDict_GetItem PyMem_Free PyDict_GetItemStrin
     PyErr_Display PyErr_Fetch PyErr_Format PyErr_NoMemory PyErr_NormalizeException
     PyErr_Occurred PyErr_Print PyErr_Restore PyErr_SetObject PyEval_RestoreThread
     PyEval_SaveThread PyGILState_Ensure PyGILState_Release PyOS_snprintf
-    PyObject_CheckBuffer PyObject_ClearWeakRefs PyObject_GC_UnTrack PyObject_HasAttrString
+    PyObject_CheckBuffer PyObject_ClearWeakRefs PyObject_GC_UnTrack PyObject_HasAttr
     PyThreadState_Get PyThread_get_thread_ident PyTraceBack_Here
     PyType_IsSubtype PyUnicode_CopyCharacters PyWeakref_GetObject _Py_Dealloc
     _Py_HashBytes _Py_NegativeRefcount _Py_RefTotal PyThreadState_GetFrame
-    _PyArg_ParseTupleAndKeywords_SizeT
 """.split())
 
 # these could error but are only used in a small number of places where
 # errors are already dealt with
 no_error.update("""PyArg_ParseTuple PyBytes_AsString PyErr_GivenExceptionMatches PyFrame_GetBack
-    PyImport_ImportModule PyLong_AsLongAndOverflow PyLong_AsVoidPtr PyObject_Call
-    PyObject_CallFunctionObjArgs PyObject_IsInstance PySys_GetObject PyErr_ExceptionMatches
+    PyImport_ImportModule PyLong_AsLongAndOverflow PyLong_AsVoidPtr
+    PyObject_IsInstance PySys_GetObject PyErr_ExceptionMatches
     PyErr_SetString PyStructSequence_SetItem PyObject_Print Py_EnterRecursiveCall
     Py_GetRecursionLimit Py_LeaveRecursiveCall Py_SetRecursionLimit _PyErr_ChainExceptions
 

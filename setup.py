@@ -2,6 +2,8 @@
 
 # See the accompanying LICENSE file.
 
+from __future__ import annotations
+
 import os
 import sys
 import shlex
@@ -14,12 +16,20 @@ import subprocess
 import sysconfig
 import shutil
 import pathlib
+import subprocess
+import contextlib
+from dataclasses import dataclass
 
 from setuptools import setup, Extension, Command
 from setuptools.command import build_ext, sdist
-from distutils.command import build
+try:
+    # current setuptools has build
+    from setuptools.command import build
+except ImportError:
+    # but older pythons with older versions don't
+    from distutils.command import build
 
-# This is used to find the compiler for building the test extension
+# This is used to find the compiler and flags for building the test extension
 import distutils.ccompiler
 
 include_dirs = ['src']
@@ -479,14 +489,6 @@ def findamalgamation():
     return None
 
 
-def find_in_path(name):
-    for loc in os.getenv("PATH").split(os.pathsep):
-        f = os.path.abspath(os.path.join(loc, name))
-        if os.path.exists(f) or os.path.exists(f.lower()) or os.path.exists(f.lower() + ".exe"):
-            return f
-    return None
-
-
 beparent = build_ext.build_ext
 
 
@@ -519,11 +521,8 @@ class apsw_build_ext(beparent):
                 "math_functions"
             ]
             if not self.omit or "icu" not in self.omit.split(","):
-                if find_in_path("icu-config"):
+                if get_icu_config():
                     exts.append("icu")
-                elif find_in_path("pkg-config"):
-                    if len(os.popen("pkg-config --silence-errors --cflags --libs icu-uc icu-i18n", "r").read().strip()):
-                        exts.append("icu")
             if not self.enable:
                 self.enable = ",".join(exts)
             else:
@@ -617,46 +616,31 @@ class apsw_build_ext(beparent):
 
         # icu
         if addicuinclib:
-            foundicu = False
-            method = "pkg-config"
-            kwargs = {}
-            cmds = {
-                "icu-config": ["icu-config --cppflags", "icu-config --ldflags"],
-                "pkg-config": ["pkg-config --cflags icu-uc icu-i18n", "pkg-config --libs icu-uc icu-i18n"],
-            }
+            icc = get_icu_config()
+            if icc:
+                # if posix is true then quotes get stripped such as from -Dfoo="bar"
+                kwargs = {"posix": False}
+                for part in shlex.split(icc.cflags, **kwargs):
+                    if part.startswith("-I"):
+                        ext.include_dirs.append(part[2:])
+                    elif part.startswith("-D"):
+                        part = part[2:]
+                        if '=' in part:
+                            part = tuple(part.split('=', 1))
+                        else:
+                            part = (part, '1')
+                        ext.define_macros.append(part)
 
-            if find_in_path("icu-config"):
-                method = "icu-config"
+                for part in shlex.split(icc.ldflags, **kwargs):
+                    if part.startswith("-L"):
+                        ext.library_dirs.append(part[2:])
+                    elif part.startswith("-l"):
+                        ext.libraries.append(part[2:])
 
-            # if posix is true then quotes get stripped such as from -Dfoo="bar"
-            kwargs["posix"] = False
-            for part in shlex.split(os.popen(cmds[method][0], "r").read(), **kwargs):
-                if part.startswith("-I"):
-                    ext.include_dirs.append(part[2:])
-                    foundicu = True
-                elif part.startswith("-D"):
-                    part = part[2:]
-                    if '=' in part:
-                        part = tuple(part.split('=', 1))
-                    else:
-                        part = (part, '1')
-                    ext.define_macros.append(part)
-                    foundicu = True
-
-            for part in shlex.split(os.popen(cmds[method][1], "r").read(), **kwargs):
-                if part.startswith("-L"):
-                    ext.library_dirs.append(part[2:])
-                    foundicu = True
-                elif part.startswith("-l"):
-                    ext.libraries.append(part[2:])
-                    foundicu = True
-
-            if foundicu:
-                write("ICU: Added includes, flags and libraries from " + method)
+                write("ICU: Added includes, flags and libraries from " + icc.tool)
                 os.putenv("APSW_TEST_ICU", "1")
             else:
                 write("ICU: Unable to determine includes/libraries for ICU using pkg-config or icu-config")
-                write("ICU: You will need to manually edit setup.py or setup.cfg to set them")
 
         # done ...
         return v
@@ -797,46 +781,71 @@ def add_doc(archive, topdir):
         raise Exception("Don't know what to do with " + archive)
 
 
+@dataclass
+class IcuConfig:
+    tool: str
+    cflags: str
+    ldflags: str
+
+
+def get_icu_config() -> IcuConfig | None:
+    skw = {"text": True, "capture_output": True}
+    cflags = ldflags = ""
+
+    if shutil.which("pkg-config"):
+        with contextlib.suppress(subprocess.CalledProcessError):
+            cflags = subprocess.run(["pkg-config", "--cflags", "icu-uc", "icu-i18n"], **skw).stdout.strip()
+        with contextlib.suppress(subprocess.CalledProcessError):
+            ldflags = subprocess.run(["pkg-config", "--libs", "icu-uc", "icu-i18n"], **skw).stdout.strip()
+        if cflags or ldflags:
+            return IcuConfig(tool="pkg-config", cflags=cflags, ldflags=ldflags)
+    if shutil.which("icu-config"):
+        cflags = subprocess.run(["icu-config", "--cppflags"], **skw).stdout.strip()
+        ldflags = subprocess.run(["icu-config", "--ldflags"], **skw).stdout.strip()
+        return IcuConfig(tool="icu-config", cflags=cflags, ldflags=ldflags)
+
+    return None
+
+
 # We depend on every .[ch] file in src
 depends = [f for f in glob.glob("src/*.[ch]") if f != "src/apsw.c"]
 
-if __name__ == '__main__':
-    setup(name="apsw",
-          version=version,
-          python_requires=">=3.8",
-          description="Another Python SQLite Wrapper",
-          long_description=pathlib.Path("README.rst").read_text(encoding="utf8"),
-          long_description_content_type="text/x-rst",
-          author="Roger Binns",
-          author_email="rogerb@rogerbinns.com",
-          url="https://github.com/rogerbinns/apsw/",
-          project_urls=project_urls,
-          classifiers=[
-              "Development Status :: 5 - Production/Stable",
-              "Intended Audience :: Developers",
-              "License :: OSI Approved",
-              "Programming Language :: C",
-              "Programming Language :: Python :: 3",
-              "Topic :: Database :: Front-Ends",
-          ],
-          keywords=["database", "sqlite"],
-          license="OSI Approved",
-          platforms="any",
-          ext_modules=[
-              Extension("apsw.__init__", ["src/apsw.c"],
-                        include_dirs=include_dirs,
-                        library_dirs=library_dirs,
-                        libraries=libraries,
-                        define_macros=define_macros,
-                        depends=depends)
-          ],
-          packages=["apsw"],
-          package_data={"apsw": ["__init__.pyi", "py.typed"]},
-          cmdclass={
-              'test': run_tests,
-              'build_test_extension': build_test_extension,
-              'fetch': fetch,
-              'build_ext': apsw_build_ext,
-              'build': apsw_build,
-              'sdist': apsw_sdist,
-          })
+setup(name="apsw",
+        version=version,
+        python_requires=">=3.8",
+        description="Another Python SQLite Wrapper",
+        long_description=pathlib.Path("README.rst").read_text(encoding="utf8"),
+        long_description_content_type="text/x-rst",
+        author="Roger Binns",
+        author_email="rogerb@rogerbinns.com",
+        url="https://github.com/rogerbinns/apsw/",
+        project_urls=project_urls,
+        classifiers=[
+            "Development Status :: 5 - Production/Stable",
+            "Intended Audience :: Developers",
+            "License :: OSI Approved",
+            "Programming Language :: C",
+            "Programming Language :: Python :: 3",
+            "Topic :: Database :: Front-Ends",
+        ],
+        keywords=["database", "sqlite"],
+        license="OSI Approved",
+        platforms="any",
+        ext_modules=[
+            Extension("apsw.__init__", ["src/apsw.c"],
+                    include_dirs=include_dirs,
+                    library_dirs=library_dirs,
+                    libraries=libraries,
+                    define_macros=define_macros,
+                    depends=depends)
+        ],
+        packages=["apsw"],
+        package_data={"apsw": ["__init__.pyi", "py.typed"]},
+        cmdclass={
+            'test': run_tests,
+            'build_test_extension': build_test_extension,
+            'fetch': fetch,
+            'build_ext': apsw_build_ext,
+            'build': apsw_build,
+            'sdist': apsw_sdist,
+        })

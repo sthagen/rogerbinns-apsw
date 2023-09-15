@@ -2,27 +2,27 @@
 
 from __future__ import annotations
 
-# mypy: ignore-errors
-
-import sys
-import apsw
-import shlex
-import os
-import io
-import inspect
+import argparse
+import base64
+import code
+import codecs
+import contextlib
 import csv
+import dataclasses
+import inspect
+import io
+import json
+import os
 import re
+import shlex
+import sys
 import textwrap
 import time
-import codecs
-import base64
-import argparse
-import contextlib
 import traceback
-import code
-import json
+from typing import Optional, TextIO
 
-from typing import TextIO, Optional
+import apsw
+import apsw.ext
 
 
 class Shell:
@@ -80,12 +80,12 @@ class Shell:
         pass
 
     def __init__(self,
-                 stdin: Optional[TextIO] = None,
-                 stdout=None,
-                 stderr=None,
+                 stdin: TextIO | None = None,
+                 stdout: TextIO | None = None,
+                 stderr: TextIO | None = None,
                  encoding: str = "utf8",
-                 args=None,
-                 db=None):
+                 args: list[str] | None = None,
+                 db: apsw.Connection | None = None):
         """Create instance, set defaults and do argument processing."""
         # The parameter doc has to be in main class doc as sphinx
         # ignores any described here
@@ -109,8 +109,8 @@ class Shell:
         self.timer = False
         self.header = False
         self.nullvalue = ""
-        self.output = self.output_list
-        self._output_table = self._fmt_sql_identifier("table")
+        self.output : Callable = self.output_list
+        self._output_table : str = self._fmt_sql_identifier("table")
         self.widths = []
         # do we truncate output in list mode?
         self.truncate = True
@@ -338,6 +338,7 @@ OPTIONS include:
    -line                set output mode to 'line'
    -list                set output mode to 'list'
    -python              set output mode to 'python'
+   -jsonl               set output mode to 'jsonl'
    -separator 'x'       set output field separator (|)
    -nullvalue 'text'    set text string for NULL values
    -version             show SQLite version
@@ -358,7 +359,7 @@ OPTIONS include:
         ord(x) for x in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789~!@#$%^&*()`_-+={}[]:;,.<>/?|"
     ]
 
-    def _fmt_c_string(self, v):
+    def _fmt_c_string(self, v: apsw.SQLiteValue) -> str:
         "Format as a C string including surrounding double quotes"
         if isinstance(v, str):
             op = ['"']
@@ -594,17 +595,24 @@ OPTIONS include:
         out = "INSERT INTO " + self._output_table + " VALUES(" + ",".join([fmt(l) for l in line]) + ");\n"
         self.write(self.stdout, out)
 
-    def output_json(self, header, line):
+    def output_json(self, header, line: Shell.Row):
         """
-        Each line as a JSON object with a trailing comma.  Blobs are
-        output as base64 encoded strings.
+        Output a JSON array.  Blobs are output as base64 encoded strings.
         """
-        if header:
-            self._output_json_cols = line
-            return
+        if header: return
         fmt = lambda x: self.colour.colour_value(x, self._fmt_json_value(x))
-        out = ["%s: %s" % (self._fmt_json_value(k), fmt(line[i])) for i, k in enumerate(self._output_json_cols)]
-        self.write(self.stdout, "{ " + ", ".join(out) + "},\n")
+        out = ["%s: %s" % (self._fmt_json_value(k), fmt(line.row[i])) for i, k in enumerate(line.columns)]
+        self.write(self.stdout,
+                   ("[" if line.is_first else "") + "{ " + ", ".join(out) + "}" + ("]" if line.is_last else ",") + "\n")
+
+    def output_jsonl(self, header, line: Shell.Row):
+        """
+        Output as JSON objects, newline separated.  Blobs are output as base64 encoded strings.
+        """
+        if header: return
+        fmt = lambda x: self.colour.colour_value(x, self._fmt_json_value(x))
+        out = ["%s: %s" % (self._fmt_json_value(k), fmt(line.row[i])) for i, k in enumerate(line.columns)]
+        self.write(self.stdout, "{ " + ", ".join(out) + "}\n")
 
     def output_line(self, header, line):
         """
@@ -678,6 +686,8 @@ OPTIONS include:
             kwargs["text_width"] = self._terminal_width(32)
 
         kwargs.update({"colour": self.colour != self._colours["off"]})
+
+        rows = list(list(row) for row in rows)
 
         self.stdout.write(apsw.ext.format_query_table._format_table(column_names, rows, **kwargs))
 
@@ -822,9 +832,17 @@ Enter ".help" for instructions
         if self.bail:
             raise
 
-    def _query_details(self, sql, bindings):
+    @dataclasses.dataclass(**({"slots": True, "frozen": True} if sys.version_info >= (3, 10) else {}))
+    class _qd:
+        query: str | None
+        remaining: str | None
+        error_text: str | None
+        error_offset: int | None
+        exception: Exception | None
+        explain: int | None
+
+    def _query_details(self, sql, bindings) -> _qd:
         "Internal routine to iterate over statements"
-        # ::ToDO:: The return from this would be way better as a dataclass
         cur = self.db.cursor()
         saved = sql
         explain = None
@@ -842,14 +860,15 @@ Enter ".help" for instructions
         except apsw.ExecTraceAbort:
             pass
         except apsw.Error as e:
-            return (sql[:len(saved)], sql[len(saved):], str(e), e.error_offset, e, explain)
+            return Shell._qd(sql[:len(saved)], sql[len(saved):], str(e), e.error_offset, e, explain)
         except KeyError as e:
             var = e.args[0]
-            return (None, None, f"No binding present for '{ var }' - use .parameter set { var } VALUE to provide one",
-                    -1, e, explain)
-        return (sql[:len(saved)], sql[len(saved):], None, None, explain)
+            return Shell._qd(None, None,
+                             f"No binding present for '{ var }' - use .parameter set { var } VALUE to provide one", -1,
+                             e, explain)
+        return Shell._qd(sql[:len(saved)], sql[len(saved):], None, None, None, explain)
 
-    def process_sql(self, sql, bindings=None, internal=False, summary=None):
+    def process_sql(self, sql: str, bindings=None, internal=False, summary=None):
         """Processes SQL text consisting of one or more statements
 
         :param sql: SQL to execute
@@ -883,34 +902,40 @@ Enter ".help" for instructions
 
         while sql.strip():
             qd = self._query_details(sql, bindings)
-            sql = qd[1]
+            sql = qd.remaining
             if not internal:
                 if self.echo:
-                    self.write_error(fmt_sql(qd[0]) + "\n")
-            if qd[2]:
-                self.write_error(f"{ qd[2] }\n")
-                if qd[3] >= 0:
-                    offset = qd[3]
-                    query = qd[0].encode("utf8")
+                    self.write_error(fmt_sql(qd.query) + "\n")
+            if qd.error_text:
+                self.write_error(f"{ qd.error_text }\n")
+                if qd.error_offset >= 0:
+                    offset = qd.error_offset
+                    query = qd.query.encode("utf8")
                     before, after = fixws(query[:offset][-35:].decode("utf8")), \
                         fixws(query[offset:][:35].decode("utf8"))
                     print("  ", before + after, file=self.stderr)
                     print("   " + (" " * len(before)) + "^--- error here", file=self.stderr)
-                qd[4]._handle_exception_saw_this = True
-                raise qd[4]
+                qd.exception._handle_exception_saw_this = True
+                raise qd.exception
 
-            if qd[4] == 1:  # explain
+            if qd.explain == 1:  # explain
                 self.push_output()
                 self.header = True
                 self.widths = [-4, 13, 4, 4, 4, 13, 2, 13]
                 self.truncate = False
                 self.output = self.output_column
-            elif qd[4] == 2:  # explain query plan
+            elif qd.explain == 2:  # explain query plan
                 self.push_output()
                 self.header = True
                 self.widths = [-4, -6, 22]
                 self.truncate = False
                 self.output = self.output_column
+
+            use_prow = False
+            sig = inspect.signature(self.output)
+            param_name = list(sig.parameters.keys())[1]
+            p = sig.parameters[param_name]
+            use_prow = p.annotation == "Shell.Row"
 
             timing_start = self.get_resource_usage()
 
@@ -923,23 +948,25 @@ Enter ".help" for instructions
             if self.db.rowtrace:
                 cur.rowtrace = lambda x, y: y
 
-            for row in cur.execute(qd[0], bindings):
+            for prow in Shell.PositionRow(cur.execute(qd.query, bindings)):
+                row = prow.row
                 if column_names is None:
-                    column_names = [h for h, d in cur.getdescription()]
-                    if qd[4] == 2:
-                        del column_names[2]
+                    column_names = prow.columns
+                    if qd.explain == 2:
+                        # column 2 is "notused"
+                        column_names = tuple(c for i, c in enumerate(column_names) if i != 2)
                     if summary:
                         self._output_summary(summary[0])
                     if rows is None:
                         self.output(True, column_names)
-                if qd[4] == 2:
-                    row = list(row)
-                    del row[2]
-                    row = tuple(row)
+                if qd.explain == 2:
+                    row = tuple(c for i, c in enumerate(row) if i != 2)
+
+                row = prow if use_prow else row
                 if rows is None:
                     self.output(False, row)
                 else:
-                    rows.append(list(row))
+                    rows.append(row)
 
             if column_names and rows:
                 self.output(column_names, rows)
@@ -950,7 +977,7 @@ Enter ".help" for instructions
             if self.timer:
                 self.display_timing(timing_start, self.get_resource_usage())
 
-            if qd[4]:
+            if qd.explain:
                 self.pop_output()
 
         changes = self.db.totalchanges() - changes_start
@@ -3235,7 +3262,9 @@ Enter ".help" for instructions
         .timer command shows the difference between before and after
         results of what this returns by calling :meth:`display_timing`"""
         if sys.platform == "win32":
-            import ctypes, time, platform
+            import ctypes
+            import platform
+            import time
             ctypes.windll.kernel32.GetProcessTimes.argtypes = [
                 platform.architecture()[0] == '64bit' and ctypes.c_int64 or ctypes.c_int32, ctypes.c_void_p,
                 ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p
@@ -3260,7 +3289,8 @@ Enter ".help" for instructions
                 }
             return {}
         else:
-            import resource, time
+            import resource
+            import time
             r = resource.getrusage(resource.RUSAGE_SELF)
             res = {'Wall clock': time.time()}
             for i, desc in (
@@ -3305,6 +3335,53 @@ Enter ".help" for instructions
                         self.write(self.stderr, "+ %s: %.4f\n" % (k, val))
                     else:
                         self.write(self.stderr, "+ %s: %d\n" % (k, val))
+
+    ### Output helpers
+    @dataclasses.dataclass(**({"slots": True, "frozen": True} if sys.version_info >= (3, 10) else {}))
+    class Row:
+        "Returned by :class:`Shell.PositionRow`"
+        is_first: bool
+        is_last: bool
+        row: apsw.SQLiteValues
+        columns: tuple[str, ...]
+
+    class PositionRow:
+        "Wraps an iterator so you know if a row is first, last, both, or neither"
+
+        def __init__(self, source):
+            self.source = source
+            self.rows = []
+            self.end = False
+            self.index = -1
+            try:
+                self.columns = tuple(h for h, _ in source.getdescription())
+            except apsw.ExecutionCompleteError:
+                self.columns = None
+
+        def __iter__(self):
+            return self
+
+        def __next__(self) -> Shell.Row:
+            if self.end:
+                if not self.rows:
+                    raise StopIteration
+                assert len(self.rows) == 1
+                row = self.rows.pop(0)
+                if self.index == 0:
+                    return Shell.Row(is_first=True, is_last=True, row=row, columns=self.columns)
+                return Shell.Row(is_first=False, is_last=True, row=row, columns=self.columns)
+            try:
+                self.rows.append(next(self.source))
+            except StopIteration:
+                self.end = True
+                return next(self)
+            self.index += 1
+            if self.index == 0:
+                return next(self)
+            if self.index == 1:
+                return Shell.Row(is_first=True, is_last=False, row=self.rows.pop(0), columns=self.columns)
+            assert len(self.rows) == 2
+            return Shell.Row(is_first=False, is_last=False, row=self.rows.pop(0), columns=self.columns)
 
     ### Colour support
 
@@ -3408,16 +3485,6 @@ Enter ".help" for instructions
         del v
     except Exception:
         pass
-
-
-try:
-    # uses dataclasses and annotations, only available in Python 3.7+
-    import apsw.ext
-    import dataclasses
-except (ImportError, SyntaxError):
-    for n in "box", "table", "qbox":
-        delattr(Shell, f"output_{ n }")
-    delattr(Shell, "command_dbinfo")
 
 
 def main() -> None:

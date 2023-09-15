@@ -2585,7 +2585,11 @@ class APSW(unittest.TestCase):
         # function that takes one argument
         self.assertRaisesRegex(TypeError, "Missing required parameter", apsw.sleep)
         self.assertRaisesRegex(TypeError, "'fred' is an invalid keyword argument", apsw.sleep, fred=3)
-        self.assertRaisesRegex(TypeError, "argument 'milliseconds' given by name and position", apsw.sleep, 10, milliseconds=20)
+        self.assertRaisesRegex(TypeError,
+                               "argument 'milliseconds' given by name and position",
+                               apsw.sleep,
+                               10,
+                               milliseconds=20)
         self.assertRaisesRegex(TypeError, "Too many positional arguments", apsw.sleep, 10, 20)
 
         # many args where varargs had to be converted to fastcall
@@ -2595,12 +2599,26 @@ class APSW(unittest.TestCase):
         self.assertRaisesRegex(apsw.SQLError, "no such vfs", apsw.Connection, "", vfs="fred")
         c = apsw.Connection(statementcachesize=22, flags=apsw.SQLITE_OPEN_READONLY, vfs=None, filename="")
         self.assertEqual(22, c.cache_stats()["size"])
-        self.assertRaisesRegex(TypeError, "Missing required parameter", apsw.Connection, statementcachesize=22, flags=apsw.SQLITE_OPEN_READONLY, vfs=None)
+        self.assertRaisesRegex(TypeError,
+                               "Missing required parameter",
+                               apsw.Connection,
+                               statementcachesize=22,
+                               flags=apsw.SQLITE_OPEN_READONLY,
+                               vfs=None)
 
         # keyword only args
         self.assertRaisesRegex(TypeError, "Too many positional arguments", c.execute, "select 3", None, False)
-        self.assertEqual(3, c.execute(explain=0, prepare_flags=1, can_cache=1, bindings=None, statements="select 3").get)
-        self.assertRaisesRegex(TypeError, "argument 'statements' given by name and position", c.execute, "select 4", explain=0, prepare_flags=1, can_cache=1, bindings=None, statements="select 3")
+        self.assertEqual(3,
+                         c.execute(explain=0, prepare_flags=1, can_cache=1, bindings=None, statements="select 3").get)
+        self.assertRaisesRegex(TypeError,
+                               "argument 'statements' given by name and position",
+                               c.execute,
+                               "select 4",
+                               explain=0,
+                               prepare_flags=1,
+                               can_cache=1,
+                               bindings=None,
+                               statements="select 3")
 
     def testCollation(self):
         "Verify collations"
@@ -8017,11 +8035,10 @@ class APSW(unittest.TestCase):
 
         def testnasty():
             reset()
-            # py 3 barfs with any codepoints above 0xffff whining
-            # about surrogates not being allowed.  If only it
-            # implemented unicode properly.
-            cmd(u"create table if not exists nastydata(x,y); insert into nastydata values(null,'xxx\\u1234\\uabcdyyy\r\n\t\"this is nasty\u0001stuff!');"
-                )
+            cmd("""create table if not exists nastydata(x,y);
+                 insert into nastydata values(x'', 1e999); -- see issue 482 for zero sized blob
+                 insert into nastydata values(null,'xxx\\u1234\\uabcdyyy\r\n\t\"this is nasty\u0001stuff!');
+                """)
             s.cmdloop()
             isempty(fh[1])
             isempty(fh[2])
@@ -8168,19 +8185,36 @@ class APSW(unittest.TestCase):
         cmd(".mode json\n.header ON\n select " + all + ";")
         s.cmdloop()
         isempty(fh[2])
-        v = get(fh[1]).strip()
-        v = v[:-1]  # remove trailing comma
-        out = json.loads(v)
-        self.assertEqual(out, {"3": 3, "2.2": 2.2, "'string'": "string", "null": None, "x'0311'": "AxE="})
+        out = json.loads(get(fh[1]))
+        self.assertEqual(out, [{"3": 3, "2.2": 2.2, "'string'": "string", "null": None, "x'0311'": "AxE="}])
         # a regular table
         reset()
-        cmd("create table jsontest([int], [float], [string], [null], [blob]);insert into jsontest values(" + all +
-            ");select * from jsontest;")
+        cmd(f"""create table jsontest([int], [float], [string], [null], [blob]);
+                insert into jsontest values({ all });
+                insert into jsontest values({ all });
+                select * from jsontest;""")
         s.cmdloop()
         isempty(fh[2])
-        v = get(fh[1]).strip()[:-1]
+        out = json.loads(get(fh[1]))
+        self.assertEqual(out, [{"int": 3, "float": 2.2, "string": "string", "null": None, "blob": "AxE="}] * 2)
+        testnasty()
+
+        ###
+        ### Output formats - jsonl
+        ###
+        reset()
+        cmd(".mode jsonl\n.header ON\n select " + all + ";")
+        s.cmdloop()
+        isempty(fh[2])
+        v = get(fh[1]).strip()
         out = json.loads(v)
-        self.assertEqual(out, {"int": 3, "float": 2.2, "string": "string", "null": None, "blob": "AxE="})
+        self.assertEqual(out, {"3": 3, "2.2": 2.2, "'string'": "string", "null": None, "x'0311'": "AxE="})
+        reset()
+        cmd("select * from jsontest;")
+        s.cmdloop()
+        isempty(fh[2])
+        out = [json.loads(line) for line in get(fh[1]).splitlines()]
+        self.assertEqual(out, [{"int": 3, "float": 2.2, "string": "string", "null": None, "blob": "AxE="}] * 2)
         testnasty()
 
         ###
@@ -9552,10 +9586,10 @@ shell.write(shell.stdout, "hello world\\n")
                 continue
             # all others
             if mode not in noheadermodes:
-                self.assertTrue(colname in get(fh[1]))
+                self.assertIn(colname if "json" not in mode else json.dumps(colname), get(fh[1]))
             cnt = 0
             for o in outputs:
-                cnt += o in get(fh[1])
+                cnt += (o if "json" not in mode else json.dumps(o)) in get(fh[1])
             self.assertTrue(cnt)
 
         # clean up files
@@ -9795,27 +9829,28 @@ shell.write(shell.stdout, "hello world\\n")
 
     def testBestPractice(self) -> None:
         "apsw.bestpractice module"
-        out = io.StringIO()
-        root = logging.getLogger()
-        root.setLevel(logging.DEBUG)
-        handler = logging.StreamHandler(out)
-        root.addHandler(handler)
-        try:
+        if sys.version_info >= (3, 10):
+            with self.assertNoLogs():
+                apsw.log(apsw.SQLITE_NOMEM, "Zebras are striped")
+        apsw.bestpractice.apply(apsw.bestpractice.recommended)
+        with self.assertLogs() as l:
             apsw.log(apsw.SQLITE_NOMEM, "Zebras are striped")
-            self.assertNotIn("Zebras", out.getvalue())
-            apsw.bestpractice.apply(apsw.bestpractice.recommended)
-            apsw.log(apsw.SQLITE_NOMEM, "Zebras are striped")
-            self.assertIn("Zebras", out.getvalue())
-            # I was unable to find a ddl statement that errors
-            dqs = 'select "world"'
-            self.db.execute(dqs)  # no error
-            self.assertIn("world", out.getvalue())
-            apsw.bestpractice.apply(apsw.bestpractice.recommended)
-            con = apsw.Connection("")
-            # now fail
-            self.assertRaises(apsw.SQLError, con.execute, dqs)
-        finally:
-            root.removeHandler(handler)
+        self.assertIn("Zebras", str(l.output))
+
+        dqs = 'select "world"'
+
+        with self.assertLogs() as l:
+            # this connection was made before applying bestpractice
+            self.db.execute(dqs)  # no error but does log
+
+        self.assertIn("double-quoted string literal", str(l.output))
+
+        con = apsw.Connection("")
+        # now fail
+        apsw.config(apsw.SQLITE_CONFIG_LOG, None)
+        if sys.version_info >= (3, 10):
+            with self.assertNoLogs():
+                self.assertRaises(apsw.SQLError, con.execute, dqs)
 
     def testExtDataClassRowFactory(self) -> None:
         "apsw.ext.DataClassRowFactory"

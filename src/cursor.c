@@ -178,15 +178,13 @@ static int
 resetcursor(APSWCursor *self, int force)
 {
   int res = SQLITE_OK;
-  PyObject *etype, *eval, *etb;
   int hasmore = statementcache_hasmore(self->statement);
 
   Py_CLEAR(self->description_cache[0]);
   Py_CLEAR(self->description_cache[1]);
   Py_CLEAR(self->description_cache[2]);
 
-  if (force)
-    PyErr_Fetch(&etype, &eval, &etb);
+  PY_ERR_FETCH_IF(force, exc_save);
 
   if (self->statement)
   {
@@ -241,7 +239,7 @@ resetcursor(APSWCursor *self, int force)
   }
 
   if (force)
-    PyErr_Restore(etype, eval, etb);
+    PY_ERR_RESTORE(exc_save);
 
   return res;
 }
@@ -249,16 +247,14 @@ resetcursor(APSWCursor *self, int force)
 static int
 APSWCursor_close_internal(APSWCursor *self, int force)
 {
-  PyObject *err_type, *err_value, *err_traceback;
   int res;
 
-  if (force == 2)
-    PyErr_Fetch(&err_type, &err_value, &err_traceback);
+  PY_ERR_FETCH_IF(force == 2, exc_save);
 
   res = resetcursor(self, force);
 
   if (force == 2)
-    PyErr_Restore(err_type, err_value, err_traceback);
+    PY_ERR_RESTORE(exc_save);
   else
   {
     if (res)
@@ -296,8 +292,7 @@ APSWCursor_dealloc(APSWCursor *self)
 {
   /* dealloc is not allowed to return an exception or
      clear the current exception */
-  PyObject *one, *two, *three;
-  PyErr_Fetch(&one, &two, &three);
+  PY_ERR_FETCH(exc_save);
 
   PyObject_GC_UnTrack(self);
   APSW_CLEAR_WEAKREFS;
@@ -307,7 +302,7 @@ APSWCursor_dealloc(APSWCursor *self)
   if (PyErr_Occurred())
     apsw_write_unraisable(NULL);
 
-  PyErr_Restore(one, two, three);
+  PY_ERR_RESTORE(exc_save);
   Py_TpFree((PyObject *)self);
 }
 
@@ -1067,7 +1062,7 @@ APSWCursor_execute(APSWCursor *self, PyObject *const *fast_args, Py_ssize_t fast
     ARG_OPTIONAL ARG_bool(can_cache);
     ARG_OPTIONAL ARG_int(prepare_flags);
     ARG_OPTIONAL ARG_int(explain);
-    ARG_EPILOG(NULL, Cursor_execute_USAGE,);
+    ARG_EPILOG(NULL, Cursor_execute_USAGE, );
   }
   self->bindings = bindings;
 
@@ -1185,7 +1180,7 @@ APSWCursor_executemany(APSWCursor *self, PyObject *const *fast_args, Py_ssize_t 
     ARG_OPTIONAL ARG_bool(can_cache);
     ARG_OPTIONAL ARG_int(prepare_flags);
     ARG_OPTIONAL ARG_int(explain);
-    ARG_EPILOG(NULL, Cursor_executemany_USAGE,);
+    ARG_EPILOG(NULL, Cursor_executemany_USAGE, );
   }
   self->emiter = PyObject_GetIter(sequenceofbindings);
   if (!self->emiter)
@@ -1296,7 +1291,7 @@ APSWCursor_close(APSWCursor *self, PyObject *const *fast_args, Py_ssize_t fast_n
     Cursor_close_CHECK;
     ARG_PROLOG(1, Cursor_close_KWNAMES);
     ARG_OPTIONAL ARG_bool(force);
-    ARG_EPILOG(NULL, Cursor_close_USAGE,);
+    ARG_EPILOG(NULL, Cursor_close_USAGE, );
   }
   APSWCursor_close_internal(self, !!force);
 
@@ -1396,7 +1391,7 @@ APSWCursor_setexectrace(APSWCursor *self, PyObject *const *fast_args, Py_ssize_t
     Cursor_setexectrace_CHECK;
     ARG_PROLOG(1, Cursor_setexectrace_KWNAMES);
     ARG_MANDATORY ARG_optional_Callable(callable);
-    ARG_EPILOG(NULL, Cursor_setexectrace_USAGE,);
+    ARG_EPILOG(NULL, Cursor_setexectrace_USAGE, );
   }
 
   Py_XINCREF(callable);
@@ -1422,7 +1417,7 @@ APSWCursor_setrowtrace(APSWCursor *self, PyObject *const *fast_args, Py_ssize_t 
     Cursor_setrowtrace_CHECK;
     ARG_PROLOG(1, Cursor_setrowtrace_KWNAMES);
     ARG_MANDATORY ARG_optional_Callable(callable);
-    ARG_EPILOG(NULL, Cursor_setrowtrace_USAGE,);
+    ARG_EPILOG(NULL, Cursor_setrowtrace_USAGE, );
   }
 
   Py_XINCREF(callable);

@@ -39,17 +39,14 @@ instance that has your overridden :class:`VFSFile` methods.  The
 :ref:`example <example_vfs>` demonstrates obfuscating the database
 file contents.
 
-.. _vfserrors:
-
 Exceptions and errors
 =====================
 
 To return an error from any routine you should raise an exception. The
-exception will be translated into the appropriate SQLite error code
-for SQLite. To return a specific SQLite error code use
-:meth:`exceptionfor`.  If the exception does not map to any specific
-error code then *SQLITE_ERROR* which corresponds to
-:exc:`SQLError` is returned to SQLite.
+exception will be translated into the corresponding SQLite error code.
+To return a specific SQLite error code use :meth:`exceptionfor`.  If
+the exception does not map to any specific error code then
+*SQLITE_ERROR* which corresponds to :exc:`SQLError` is returned to SQLite.
 
 The SQLite code that deals with VFS errors behaves in varying
 ways. Some routines have no way to return an error (eg `xDlOpen
@@ -65,57 +62,11 @@ database can result in many different VFS function calls such as hot
 journals being detected, locking, and read/writes for
 playback/rollback.
 
-To avoid confusion with exceptions being raised in the VFS and
-exceptions from normal code to open Connections or execute SQL
-queries, VFS exceptions are not raised in the normal way. (If they
-were, only one could be raised and it would obscure whatever
-exceptions the :class:`Connection` open or SQL query execute wanted to
-raise.)  Instead the :func:`VFS.excepthook` or
-:func:`VFSFile.excepthook` method is called with a tuple of exception
-type, exception value and exception traceback. The default
-implementation of ``excepthook`` calls :func:`sys.unraisablehook`,
-or if that fails :func:`sys.excepthook`.
-
-In normal VFS usage there will be no exceptions raised, or specific
-expected ones which APSW clears after noting them and returning the
-appropriate value back to SQLite. The exception hooking behaviour
-helps you find issues in your code or unexpected behaviour of the
-external environment. Remember that :ref:`augmented stack traces
-<augmentedstacktraces>` are available which significantly increase
-detail about the exceptions.
-
-As an example, lets say you have a divide by zero error in your xWrite
-routine. The table below shows what happens with time going down and
-across.
-
-+----------------------------------------------+--------------------------------+---------------------------------------------+
-| Python Query Code                            | SQLite and APSW C code         | Python VFS code                             |
-+==============================================+================================+=============================================+
-| ``cursor.execute("update table set foo=3")`` |                                |                                             |
-+----------------------------------------------+--------------------------------+---------------------------------------------+
-|                                              | SQLite starts executing query  |                                             |
-+----------------------------------------------+--------------------------------+---------------------------------------------+
-|                                              |                                | Your VFS routines are called                |
-+----------------------------------------------+--------------------------------+---------------------------------------------+
-|                                              |                                | Your xWrite divides by zero                 |
-+----------------------------------------------+--------------------------------+---------------------------------------------+
-|                                              |                                | :meth:`VFSFile.excepthook` is called with   |
-|                                              |                                | ZeroDivision exception                      |
-+----------------------------------------------+--------------------------------+---------------------------------------------+
-|                                              | *SQLITE_ERROR* (closest        |                                             |
-|                                              | matching SQLite error code) is |                                             |
-|                                              | returned to SQLite by APSW     |                                             |
-+----------------------------------------------+--------------------------------+---------------------------------------------+
-|                                              | SQLite error handling and      | More VFS routines are called.  Any          |
-|                                              | recovery operates which calls  | exceptions in these routines will result in |
-|                                              | more VFS routines.             | :meth:`VFSFile.excepthook` being called with|
-|                                              |                                | them.                                       |
-+----------------------------------------------+--------------------------------+---------------------------------------------+
-|                                              | SQLite returns                 |                                             |
-|                                              | *SQLITE_FULL* to APSW          |                                             |
-+----------------------------------------------+--------------------------------+---------------------------------------------+
-| APSW returns :class:`apsw.FullError`         |                                |                                             |
-+----------------------------------------------+--------------------------------+---------------------------------------------+
+If multiple exceptions occur during the same SQLite control flow, then
+they will be :doc:`chained <exceptions>` together.  Remember that
+:ref:`augmented stack traces <augmentedstacktraces>` are available
+which significantly increase detail about the exceptions and help with
+debugging.
 
 */
 
@@ -199,7 +150,10 @@ apswfcntl_pragma_set_result(apswfcntl_pragma *self, PyObject *value)
       return -1;
     self->strings[0] = sqlite3_mprintf("%s", cstr);
     if (!self->strings[0])
+    {
+      PyErr_NoMemory();
       return -1;
+    }
   }
   return 0;
 }
@@ -300,17 +254,15 @@ static PyTypeObject apswfcntl_pragma_Type = {
     return PyErr_Format(ExcVFSFileClosed, "VFSFileClosed: Attempting operation on closed file"); \
   }
 
-#define VFSPREAMBLE                                     \
-  PyGILState_STATE gilstate;                            \
-  gilstate = PyGILState_Ensure();                       \
-  MakeExistingException();                              \
-  if (PyErr_Occurred())                                 \
-    apsw_write_unraisable((PyObject *)(vfs->pAppData)); \
+#define VFSPREAMBLE               \
+  PyGILState_STATE gilstate;      \
+  gilstate = PyGILState_Ensure(); \
+  MakeExistingException();        \
+  CHAIN_EXC_BEGIN                 \
   CHECKVFS;
 
-#define VFSPOSTAMBLE                                    \
-  if (PyErr_Occurred())                                 \
-    apsw_write_unraisable((PyObject *)(vfs->pAppData)); \
+#define VFSPOSTAMBLE \
+  CHAIN_EXC_END;     \
   PyGILState_Release(gilstate);
 
 #define FILEPREAMBLE                                           \
@@ -318,13 +270,11 @@ static PyTypeObject apswfcntl_pragma_Type = {
   PyGILState_STATE gilstate;                                   \
   gilstate = PyGILState_Ensure();                              \
   MakeExistingException();                                     \
-  if (PyErr_Occurred())                                        \
-    apsw_write_unraisable(apswfile->file);                     \
+  CHAIN_EXC_BEGIN                                              \
   CHECKVFSFILE;
 
-#define FILEPOSTAMBLE                      \
-  if (PyErr_Occurred())                    \
-    apsw_write_unraisable(apswfile->file); \
+#define FILEPOSTAMBLE \
+  CHAIN_EXC_END;      \
   PyGILState_Release(gilstate);
 
 typedef struct
@@ -381,7 +331,9 @@ typedef struct
 
 /** .. method:: excepthook(etype: type[BaseException], evalue: BaseException, etraceback: Optional[types.TracebackType]) -> Any
 
-    Called when there has been an exception in a :class:`VFS` routine.
+    Called when there has been an exception in a :class:`VFS` routine,
+    and it can't be reported to the caller as usual.
+
     The default implementation passes the exception information
     to sqlite3_log, and the first non-error of
     :func:`sys.unraisablehook` and :func:`sys.excepthook`, falling back to
@@ -631,7 +583,11 @@ apswvfspy_xFullPathname(APSWVFS *self, PyObject *const *fast_args, Py_ssize_t fa
 
   resbuf = PyMem_Calloc(1, self->basevfs->mxPathname + 1);
   if (resbuf)
+  {
     res = self->basevfs->xFullPathname(self->basevfs, name, self->basevfs->mxPathname + 1, resbuf);
+    if (PyErr_Occurred())
+      res = MakeSqliteMsgFromPyException(NULL);
+  }
 
   if (res == SQLITE_OK)
     result = convertutf8string(resbuf);
@@ -854,10 +810,10 @@ apswvfs_xDlOpen(sqlite3_vfs *vfs, const char *zName)
   Py_XDECREF(vargs[2]);
   if (pyresult)
   {
-    if (PyLong_Check(pyresult))
+    if (PyLong_Check(pyresult) && PyLong_AsDouble(pyresult) >= 0)
       result = PyLong_AsVoidPtr(pyresult);
     else
-      PyErr_Format(PyExc_TypeError, "Pointer returned must be int/long");
+      PyErr_Format(PyExc_TypeError, "Pointer returned must be int and non-negative");
   }
   if (PyErr_Occurred())
   {
@@ -899,7 +855,7 @@ apswvfspy_xDlOpen(APSWVFS *self, PyObject *const *fast_args, Py_ssize_t fast_nar
   }
   res = self->basevfs->xDlOpen(self->basevfs, filename);
 
-  return PyLong_FromVoidPtr(res);
+  return PyErr_Occurred() ? NULL : PyLong_FromVoidPtr(res);
 }
 
 static void (*apswvfs_xDlSym(sqlite3_vfs *vfs, void *handle, const char *zName))(void)
@@ -1437,7 +1393,7 @@ apswvfs_xGetLastError(sqlite3_vfs *vfs, int nByte, char *zErrMsg)
 
 end:
   if (PyErr_Occurred())
-    AddTraceBackHere(__FILE__, __LINE__, "vfs.xGetLastError", NULL);
+    AddTraceBackHere(__FILE__, __LINE__, "vfs.xGetLastError", "{s:O}", "pyresult", OBJ(pyresult));
 
   Py_XDECREF(pyresult);
   Py_XDECREF(item0);
@@ -1458,30 +1414,32 @@ apswvfspy_xGetLastError(APSWVFS *self)
   PyObject *res = NULL, *text = NULL;
   int errval;
   size_t msglen;
-  const Py_ssize_t size = 1024;
+  const size_t size = 1024;
+  char *buffer = NULL;
 
   CHECKVFSPY;
   VFSNOTIMPLEMENTED(xGetLastError, 1);
 
-  text = PyBytes_FromStringAndSize(NULL, size);
-  if (!text)
+  /* the plus one is to ensure it is always null terminated */
+  buffer = (char *)sqlite3_malloc64(size + 1);
+  if (!buffer)
+  {
+    PyErr_NoMemory();
     goto error;
+  }
+  memset(buffer, 0, size + 1);
 
-  /* SQLite before 3.12 said the buffer may be left unterminated.  3.12 says
-     nothing useful, so as a defensive measure we ensure the buffer is zero
-     filled */
-  memset(PyBytes_AS_STRING(text), 0, size);
+  errval = self->basevfs->xGetLastError(self->basevfs, (int)size, buffer);
 
-  errval = self->basevfs->xGetLastError(self->basevfs, size, PyBytes_AS_STRING(text));
-  msglen = strnlen(PyBytes_AS_STRING(text), size);
+  msglen = strnlen(buffer, size);
   if (msglen > 0)
   {
-    if (_PyBytes_Resize(&text, msglen))
+    text = PyUnicode_FromStringAndSize(buffer, msglen);
+    if (!text)
       goto error;
   }
   else
   {
-    Py_CLEAR(text);
     text = Py_NewRef(Py_None);
   }
 
@@ -1494,10 +1452,13 @@ apswvfspy_xGetLastError(APSWVFS *self)
   if (PyErr_Occurred())
     goto error;
 
+  sqlite3_free(buffer);
+
   return res;
 
 error:
   assert(PyErr_Occurred());
+  sqlite3_free(buffer);
   AddTraceBackHere(__FILE__, __LINE__, "vfspy.xGetLastError", "{s: O, s: i}", "self", self, "size", (int)size);
   Py_XDECREF(text);
   Py_XDECREF(res);
@@ -1596,20 +1557,20 @@ apswvfs_xGetSystemCall(sqlite3_vfs *vfs, const char *zName)
   VFSPREAMBLE;
   PyObject *vargs[] = {NULL, (PyObject *)(vfs->pAppData), PyUnicode_FromString(zName)};
   if (vargs[2])
+  {
     pyresult = PyObject_VectorcallMethod(apst.xGetSystemCall, vargs + 1, 2 | PY_VECTORCALL_ARGUMENTS_OFFSET, NULL);
-  Py_DECREF(vargs[2]);
-  if (!pyresult)
-    goto finally;
-
-  if (PyLong_Check(pyresult))
-    ptr = PyLong_AsVoidPtr(pyresult);
-  else
-    PyErr_Format(PyExc_TypeError, "Pointer must be int/long");
-
+    Py_DECREF(vargs[2]);
+    if (pyresult)
+    {
+      if (PyLong_Check(pyresult))
+        ptr = PyLong_AsVoidPtr(pyresult);
+      else
+        PyErr_Format(PyExc_TypeError, "Pointer must be int/long");
+    }
+  }
   if (PyErr_Occurred())
     AddTraceBackHere(__FILE__, __LINE__, "vfs.xGetSystemCall", "{s:O}", "pyresult", OBJ(pyresult));
 
-finally:
   Py_XDECREF(pyresult);
   VFSPOSTAMBLE;
   return ptr;
@@ -1639,6 +1600,8 @@ apswvfspy_xGetSystemCall(APSWVFS *self, PyObject *const *fast_args, Py_ssize_t f
 
   if (ptr)
     return PyLong_FromVoidPtr(ptr);
+  if (PyErr_Occurred())
+    return NULL;
   Py_RETURN_NONE;
 }
 
@@ -1698,13 +1661,12 @@ apswvfspy_xNextSystemCall(APSWVFS *self, PyObject *const *fast_args, Py_ssize_t 
   }
 
   zName = self->basevfs->xNextSystemCall(self->basevfs, name);
-  if (zName)
+  if (PyErr_Occurred())
+    AddTraceBackHere(__FILE__, __LINE__, "vfspy.xNextSystemCall", "{s:s}", "name", name);
+  else if (zName)
     res = convertutf8string(zName);
   else
     res = Py_NewRef(Py_None);
-
-  if (PyErr_Occurred())
-    AddTraceBackHere(__FILE__, __LINE__, "vfspy.xNextSystemCall", "{s:s}", "name", name);
 
   return res;
 }
@@ -1757,15 +1719,13 @@ APSWVFS_dealloc(APSWVFS *self)
     PyObject *xx;
 
     /* not allowed to clobber existing exception */
-    PyObject *etype = NULL, *evalue = NULL, *etraceback = NULL;
-    PyErr_Fetch(&etype, &evalue, &etraceback);
-
+    PY_ERR_FETCH(exc_save);
     xx = apswvfspy_unregister(self);
     Py_XDECREF(xx);
 
     if (PyErr_Occurred())
       apsw_write_unraisable(NULL);
-    PyErr_Restore(etype, evalue, etraceback);
+    PY_ERR_RESTORE(exc_save);
 
     /* some cleanups */
     self->containingvfs->pAppData = NULL;
@@ -1884,21 +1844,17 @@ APSWVFS_init(APSWVFS *self, PyObject *args, PyObject *kwargs)
   if (!self->containingvfs->zName)
     goto error;
   self->containingvfs->pAppData = self;
-#define METHOD(meth)                                         \
-  do                                                         \
-  {                                                          \
-    int include = 1;                                         \
-    if (exclude)                                             \
-    {                                                        \
-      PyObject *tmpstring = PyUnicode_FromString("x" #meth); \
-      if (!tmpstring)                                        \
-        goto error;                                          \
-      if (1 == PySet_Contains(exclude, tmpstring))           \
-        include = 0;                                         \
-      Py_DECREF(tmpstring);                                  \
-    }                                                        \
-    if (include)                                             \
-      self->containingvfs->x##meth = apswvfs_x##meth;        \
+#define METHOD(meth)                                  \
+  do                                                  \
+  {                                                   \
+    int include = 1;                                  \
+    if (exclude)                                      \
+    {                                                 \
+      if (1 == PySet_Contains(exclude, apst.x##meth)) \
+        include = 0;                                  \
+    }                                                 \
+    if (include)                                      \
+      self->containingvfs->x##meth = apswvfs_x##meth; \
   } while (0)
 
   METHOD(Delete);
@@ -1976,6 +1932,13 @@ static PyTypeObject APSWVFSType =
         .tp_new = APSWVFS_new,
 };
 
+static int is_apsw_vfs(sqlite3_vfs *vfs)
+{
+#define M(n) (vfs->n == NULL || vfs->n == apswvfs_##n)
+  return vfs->iVersion >= 1 && M(xOpen) && M(xDelete) && M(xAccess) && M(xFullPathname) && M(xDlOpen) && M(xDlError) && M(xDlSym) && M(xDlClose) && M(xRandomness) && M(xSleep) && M(xCurrentTime) && M(xGetLastError);
+#undef M
+}
+
 /** .. class:: VFSFile
 
     Wraps access to a file.  You only need to derive from this class
@@ -1991,15 +1954,12 @@ static PyTypeObject APSWVFSType =
 /** .. method:: excepthook(etype: type[BaseException], evalue: BaseException, etraceback: Optional[types.TracebackType]) ->None
 
     Called when there has been an exception in a :class:`VFSFile`
-    routine.  The default implementation passes the exception information
+    routine, and it can't be reported to the caller as usual.
+
+    The default implementation passes the exception information
     to sqlite3_log, and the first non-error of
     :func:`sys.unraisablehook` and :func:`sys.excepthook`, falling back to
     `PyErr_Display`.
-
-    :param etype: The exception type
-    :param evalue: The exception  value
-    :param etraceback: The exception traceback.  Note this
-      includes all frames all the way up to the thread being started.
 */
 
 static PyObject *apswvfsfilepy_xClose(APSWVFSFile *self);
@@ -2007,9 +1967,7 @@ static PyObject *apswvfsfilepy_xClose(APSWVFSFile *self);
 static void
 APSWVFSFile_dealloc(APSWVFSFile *self)
 {
-  PyObject *a, *b, *c;
-
-  PyErr_Fetch(&a, &b, &c);
+  PY_ERR_FETCH(exc_save);
 
   if (self->base)
   {
@@ -2027,7 +1985,7 @@ APSWVFSFile_dealloc(APSWVFSFile *self)
   }
   Py_TpFree((PyObject *)self);
 
-  PyErr_Restore(a, b, c);
+  PY_ERR_RESTORE(exc_save);
 }
 
 static PyObject *
@@ -2165,7 +2123,7 @@ finally:
   if (res != 0 && file)
   {
     if (xopenresult == SQLITE_OK)
-      PRESERVE_EXC(file->pMethods->xClose(file));
+      CHAIN_EXC(file->pMethods->xClose(file));
 
     PyMem_Free(file);
   }
@@ -2633,7 +2591,7 @@ apswvfsfilepy_xSectorSize(APSWVFSFile *self)
 
   res = self->base->pMethods->xSectorSize(self->base);
 
-  return PyLong_FromLong(res);
+  return PyErr_Occurred() ? NULL : PyLong_FromLong(res);
 }
 
 static int
@@ -2642,27 +2600,31 @@ apswvfsfile_xDeviceCharacteristics(sqlite3_file *file)
   int result = 0;
   PyObject *pyresult = NULL;
   FILEPREAMBLE;
-  PyObject *vargs[] = {NULL, apswfile->file};
-  pyresult = PyObject_VectorcallMethod(apst.xDeviceCharacteristics, vargs + 1, 1 | PY_VECTORCALL_ARGUMENTS_OFFSET, NULL);
-  if (!pyresult)
-    result = MakeSqliteMsgFromPyException(NULL);
-  else if (!Py_IsNone(pyresult))
-  {
-    if (PyLong_Check(pyresult))
-      result = PyLong_AsInt(pyresult); /* sets to -1 on error */
-    else
-      PyErr_Format(PyExc_TypeError, "xDeviceCharacteristics should return a number");
-  }
 
-  /* We can't return errors so use unraisable */
-  if (PyErr_Occurred())
+  if (PyObject_HasAttr(apswfile->file, apst.xDeviceCharacteristics))
   {
-    AddTraceBackHere(__FILE__, __LINE__, "apswvfsfile_xDeviceCharacteristics", "{s: O}", "result", OBJ(pyresult));
-    apsw_write_unraisable(apswfile->file);
-    result = 0; /* harmless value for error cases */
-  }
+    PyObject *vargs[] = {NULL, apswfile->file};
+    pyresult = PyObject_VectorcallMethod(apst.xDeviceCharacteristics, vargs + 1, 1 | PY_VECTORCALL_ARGUMENTS_OFFSET, NULL);
+    if (!pyresult)
+      result = MakeSqliteMsgFromPyException(NULL);
+    else if (!Py_IsNone(pyresult))
+    {
+      if (PyLong_Check(pyresult))
+        result = PyLong_AsInt(pyresult); /* sets to -1 on error */
+      else
+        PyErr_Format(PyExc_TypeError, "xDeviceCharacteristics should return a number");
+    }
 
-  Py_XDECREF(pyresult);
+    /* We can't return errors so use unraisable */
+    if (PyErr_Occurred())
+    {
+      AddTraceBackHere(__FILE__, __LINE__, "apswvfsfile_xDeviceCharacteristics", "{s: O}", "result", OBJ(pyresult));
+      apsw_write_unraisable(apswfile->file);
+      result = 0; /* harmless value for error cases */
+    }
+
+    Py_XDECREF(pyresult);
+  }
   FILEPOSTAMBLE;
   return result;
 }

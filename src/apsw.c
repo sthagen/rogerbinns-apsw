@@ -104,8 +104,6 @@ API Reference
 #include <stdarg.h>
 #ifdef _MSC_VER
 #include <malloc.h>
-#else
-#include <alloca.h>
 #endif
 
 /* Get the version number */
@@ -1365,7 +1363,7 @@ formatsqlvalue(PyObject *Py_UNUSED(self), PyObject *value)
 {
   /* NULL/None */
   if (Py_IsNone(value))
-    return PyUnicode_FromString("NULL");
+    return Py_NewRef(apst.sNULL);
 
   /* Integer */
   if (PyLong_Check(value))
@@ -1376,11 +1374,11 @@ formatsqlvalue(PyObject *Py_UNUSED(self), PyObject *value)
   {
     double d = PyFloat_AS_DOUBLE(value);
     if (isnan(d))
-      return PyUnicode_FromString("NULL");
+      return Py_NewRef(apst.sNULL);
     if (isinf(d))
-      return PyUnicode_FromString(signbit(d) ? "-1e999" : "1e999");
+      return Py_NewRef(signbit(d) ? apst.s_1e999 : apst.s1e999);
     if (d == 0 && signbit(d))
-      return PyUnicode_FromString("0.0");
+      return Py_NewRef(apst.s0_0);
     return PyObject_Str(value);
   }
 
@@ -2216,8 +2214,8 @@ APSW_Should_Fault(const char *name)
   callres = Py_IsTrue(res);
   Py_DECREF(res);
 
-  PY_ERR_RESTORE(exc_save);
 end:
+  PY_ERR_RESTORE(exc_save);
   PyGILState_Release(gilstate);
   return callres;
 }

@@ -19,14 +19,20 @@
 static int
 ARG_WHICH_KEYWORD(PyObject *item, const char *kwlist[], size_t n_kwlist, const char **kwname)
 {
-    *kwname = PyUnicode_AsUTF8(item);
+    const char *n = PyUnicode_AsUTF8(item);
     size_t cmp;
-    for (cmp = 0; cmp < n_kwlist; cmp++)
-    {
-        if (0 == strcmp(*kwname, kwlist[cmp]))
-            return (int)cmp;
-    }
-    return -1;
+    int res = -1;
+    if (n)
+        for (cmp = 0; cmp < n_kwlist; cmp++)
+        {
+            if (0 == strcmp(n, kwlist[cmp]))
+            {
+                res = (int)cmp;
+                break;
+            }
+        }
+    *kwname = n;
+    return res;
 }
 
 #define ARG_PROLOG(maxpos_args, kwname_list)                                                      \
@@ -70,31 +76,36 @@ ARG_WHICH_KEYWORD(PyObject *item, const char *kwlist[], size_t n_kwlist, const c
         argp_optindex++;               \
     else
 
-#define ARG_EPILOG(retval, usage, cleanup)                                                                                                  \
-    assert(argp_optindex == actual_nargs);                                                                                                  \
-    goto success;                                                                                                                           \
-    /* this wont be hit but is here to stop warnings about unused label */                                                                  \
-    goto missing_required;                                                                                                                  \
-    too_many_args:                                                                                                                          \
-    PyErr_Format(PyExc_TypeError, "Too many positional arguments %d (max %d) provided to %s", (int)actual_nargs, (int)maxpos_args_, usage); \
-    goto error_return;                                                                                                                      \
-    missing_required:                                                                                                                       \
-    PyErr_Format(PyExc_TypeError, "Missing required parameter #%d '%s' of %s", (int)argp_optindex + 1, kwlist[argp_optindex], usage);       \
-    goto error_return;                                                                                                                      \
-    unknown_keyword_arg:                                                                                                                    \
-    PyErr_Format(PyExc_TypeError, "'%s' is an invalid keyword argument for %s", unknown_keyword, usage);                                    \
-    goto error_return;                                                                                                                      \
-    pos_and_keyword:                                                                                                                        \
-    PyErr_Format(PyExc_TypeError, "argument '%s' given by name and position for %s", unknown_keyword, usage);                               \
-    goto error_return;                                                                                                                      \
-    param_error:                                                                                                                            \
-    PyErr_AddExceptionNoteV("Processing parameter #%d '%s' of %s", (int)argp_optindex + 1, kwlist[argp_optindex], usage);                   \
-    goto error_return;                                                                                                                      \
-    error_return:                                                                                                                           \
-    assert(PyErr_Occurred());                                                                                                               \
-    cleanup;                                                                                                                                \
-    return retval;                                                                                                                          \
-    success:                                                                                                                                \
+#define ARG_EPILOG(retval, usage, cleanup)                                                                                                      \
+    assert(argp_optindex == actual_nargs);                                                                                                      \
+    goto success;                                                                                                                               \
+    /* this wont be hit but is here to stop warnings about unused label */                                                                      \
+    goto missing_required;                                                                                                                      \
+    too_many_args:                                                                                                                              \
+    if (!PyErr_Occurred())                                                                                                                      \
+        PyErr_Format(PyExc_TypeError, "Too many positional arguments %d (max %d) provided to %s", (int)actual_nargs, (int)maxpos_args_, usage); \
+    goto error_return;                                                                                                                          \
+    missing_required:                                                                                                                           \
+    if (!PyErr_Occurred())                                                                                                                      \
+        PyErr_Format(PyExc_TypeError, "Missing required parameter #%d '%s' of %s", (int)argp_optindex + 1, kwlist[argp_optindex], usage);       \
+    goto error_return;                                                                                                                          \
+    unknown_keyword_arg:                                                                                                                        \
+    if (!PyErr_Occurred())                                                                                                                      \
+        PyErr_Format(PyExc_TypeError, "'%s' is an invalid keyword argument for %s", unknown_keyword, usage);                                    \
+    goto error_return;                                                                                                                          \
+    pos_and_keyword:                                                                                                                            \
+    if (!PyErr_Occurred())                                                                                                                      \
+        PyErr_Format(PyExc_TypeError, "argument '%s' given by name and position for %s", unknown_keyword, usage);                               \
+    goto error_return;                                                                                                                          \
+    param_error:                                                                                                                                \
+    assert(PyErr_Occurred());                                                                                                                   \
+    PyErr_AddExceptionNoteV("Processing parameter #%d '%s' of %s", (int)argp_optindex + 1, kwlist[argp_optindex], usage);                       \
+    goto error_return;                                                                                                                          \
+    error_return:                                                                                                                               \
+    assert(PyErr_Occurred());                                                                                                                   \
+    cleanup;                                                                                                                                    \
+    return retval;                                                                                                                              \
+    success:                                                                                                                                    \
     cleanup;
 
 #define ARG_pyobject(varname)                                                                    \
@@ -261,27 +272,29 @@ ARG_WHICH_KEYWORD(PyObject *item, const char *kwlist[], size_t n_kwlist, const c
         }                                                                                                                                                                  \
     } while (0)
 
-#define ARG_List_int_int(varname)                                                                                                            \
-    do                                                                                                                                       \
-    {                                                                                                                                        \
-        if (!PyList_Check(useargs[argp_optindex]) || PyList_Size(useargs[argp_optindex]) != 2)                                               \
-        {                                                                                                                                    \
-            PyErr_Format(PyExc_TypeError, "Expected a two item list of int");                                                                \
-            goto param_error;                                                                                                                \
-        }                                                                                                                                    \
-        for (int i = 0; i < 2; i++)                                                                                                          \
-        {                                                                                                                                    \
-            PyObject *list_item = PyList_GetItem(useargs[argp_optindex], i);                                                                 \
-            if (!list_item)                                                                                                                  \
-                goto param_error;                                                                                                            \
-            if (!PyLong_Check(list_item))                                                                                                    \
-            {                                                                                                                                \
-                PyErr_Format(PyExc_TypeError, "Function argument list[int,int] expected int for item %d not %s", i, Py_TypeName(list_item)); \
-                goto param_error;                                                                                                            \
-            }                                                                                                                                \
-        }                                                                                                                                    \
-        varname = useargs[argp_optindex];                                                                                                    \
-        argp_optindex++;                                                                                                                     \
+#define ARG_List_int_int(varname)                                                                                                                \
+    do                                                                                                                                           \
+    {                                                                                                                                            \
+        if (!PyList_Check(useargs[argp_optindex]) || PyList_Size(useargs[argp_optindex]) != 2)                                                   \
+        {                                                                                                                                        \
+            if (!PyErr_Occurred())                                                                                                               \
+                PyErr_Format(PyExc_TypeError, "Expected a two item list of int");                                                                \
+            goto param_error;                                                                                                                    \
+        }                                                                                                                                        \
+        for (int i = 0; i < 2; i++)                                                                                                              \
+        {                                                                                                                                        \
+            PyObject *list_item = PyList_GetItem(useargs[argp_optindex], i);                                                                     \
+            if (!list_item)                                                                                                                      \
+                goto param_error;                                                                                                                \
+            if (!PyLong_Check(list_item))                                                                                                        \
+            {                                                                                                                                    \
+                if (!PyErr_Occurred())                                                                                                           \
+                    PyErr_Format(PyExc_TypeError, "Function argument list[int,int] expected int for item %d not %s", i, Py_TypeName(list_item)); \
+                goto param_error;                                                                                                                \
+            }                                                                                                                                    \
+        }                                                                                                                                        \
+        varname = useargs[argp_optindex];                                                                                                        \
+        argp_optindex++;                                                                                                                         \
     } while (0)
 
 #define ARG_optional_set(varname)                                                                               \
@@ -311,25 +324,27 @@ ARG_WHICH_KEYWORD(PyObject *item, const char *kwlist[], size_t n_kwlist, const c
         argp_optindex++;                                                                                                                                \
     } while (0)
 
-#define ARG_CONVERT_VARARGS_TO_FASTCALL                                                                        \
-    Py_ssize_t fast_nargs = PyTuple_GET_SIZE(args);                                                            \
-    PyObject **fast_args = alloca(sizeof(PyObject *) * (fast_nargs + (kwargs ? PyDict_GET_SIZE(kwargs) : 0))); \
-    PyObject *fast_kwnames = NULL;                                                                             \
-    Py_ssize_t acvtf_i;                                                                                        \
-    for (acvtf_i = 0; acvtf_i < fast_nargs; acvtf_i++)                                                         \
-        fast_args[acvtf_i] = PyTuple_GET_ITEM(args, acvtf_i);                                                  \
-    if (kwargs)                                                                                                \
-    {                                                                                                          \
-        fast_kwnames = PyTuple_New(PyDict_GET_SIZE(kwargs));                                                   \
-        if (!fast_kwnames)                                                                                     \
-            return -1;                                                                                         \
-        PyObject *pkey, *pvalue;                                                                               \
-        int fa_pos = (int)fast_nargs;                                                                          \
-        acvtf_i = 0;                                                                                           \
-        while (PyDict_Next(kwargs, &acvtf_i, &pkey, &pvalue))                                                  \
-        {                                                                                                      \
-            fast_args[fa_pos] = pvalue; /* borrowing reference */                                              \
-            PyTuple_SET_ITEM(fast_kwnames, fa_pos - fast_nargs, Py_NewRef(pkey));                              \
-            fa_pos++;                                                                                          \
-        }                                                                                                      \
+/* 1 is added to the size of fast_args to ensure the vla is always at
+   least 1 item long.  If it ends up as zero then sanitizers complain. */
+#define ARG_CONVERT_VARARGS_TO_FASTCALL                                           \
+    Py_ssize_t fast_nargs = PyTuple_GET_SIZE(args);                               \
+    VLA_PYO(fast_args, 1 + fast_nargs + (kwargs ? PyDict_GET_SIZE(kwargs) : 0));  \
+    PyObject *fast_kwnames = NULL;                                                \
+    Py_ssize_t acvtf_i;                                                           \
+    for (acvtf_i = 0; acvtf_i < fast_nargs; acvtf_i++)                            \
+        fast_args[acvtf_i] = PyTuple_GET_ITEM(args, acvtf_i);                     \
+    if (kwargs)                                                                   \
+    {                                                                             \
+        fast_kwnames = PyTuple_New(PyDict_GET_SIZE(kwargs));                      \
+        if (!fast_kwnames)                                                        \
+            return -1;                                                            \
+        PyObject *pkey, *pvalue;                                                  \
+        int fa_pos = (int)fast_nargs;                                             \
+        acvtf_i = 0;                                                              \
+        while (PyDict_Next(kwargs, &acvtf_i, &pkey, &pvalue))                     \
+        {                                                                         \
+            fast_args[fa_pos] = pvalue; /* borrowing reference */                 \
+            PyTuple_SET_ITEM(fast_kwnames, fa_pos - fast_nargs, Py_NewRef(pkey)); \
+            fa_pos++;                                                             \
+        }                                                                         \
     }

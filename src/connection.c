@@ -204,7 +204,7 @@ Connection_close_internal(Connection *self, int force)
 {
   int res;
 
-  PY_ERR_FETCH_IF(force == 2 , exc_save);
+  PY_ERR_FETCH_IF(force == 2, exc_save);
 
   /* close out dependents by repeatedly processing first item until
      list is empty.  note that closing an item will cause the list to
@@ -402,7 +402,7 @@ Connection_new(PyTypeObject *type, PyObject *Py_UNUSED(args), PyObject *Py_UNUSE
 
 */
 /* forward declaration so we can tell if it is one of ours */
-static int apswvfs_xAccess(sqlite3_vfs *vfs, const char *zName, int flags, int *pResOut);
+static int is_apsw_vfs(sqlite3_vfs *vfs);
 
 static int
 Connection_init(Connection *self, PyObject *args, PyObject *kwargs)
@@ -446,7 +446,7 @@ Connection_init(Connection *self, PyObject *args, PyObject *kwargs)
   if (res != SQLITE_OK || PyErr_Occurred())
     goto pyexception;
 
-  if (vfsused && vfsused->xAccess == apswvfs_xAccess)
+  if (vfsused && is_apsw_vfs(vfsused))
     self->vfs = Py_NewRef((PyObject *)(vfsused->pAppData));
 
   /* record information */
@@ -2311,10 +2311,14 @@ Connection_loadextension(Connection *self, PyObject *const *fast_args, Py_ssize_
   /* load_extension doesn't set the error message on the db so we have to make exception manually */
   if (res != SQLITE_OK)
   {
-    PyErr_Format(ExcExtensionLoading, "ExtensionLoadingError: %s", errmsg ? errmsg : "<unspecified error>");
+    if (!PyErr_Occurred())
+      PyErr_Format(ExcExtensionLoading, "ExtensionLoadingError: %s", errmsg ? errmsg : "<unspecified error>");
     sqlite3_free(errmsg);
-    return NULL;
   }
+
+  if (PyErr_Occurred())
+    return NULL;
+
   Py_RETURN_NONE;
 }
 #endif
@@ -2460,6 +2464,8 @@ cbdispatch_func(sqlite3_context *context, int argc, sqlite3_value **argv)
   FunctionCBInfo *cbinfo = (FunctionCBInfo *)sqlite3_user_data(context);
   assert(cbinfo);
 
+  VLA_PYO(vargs, 1 + argc);
+
   gilstate = PyGILState_Ensure();
 
   assert(cbinfo->scalarfunc);
@@ -2473,7 +2479,6 @@ cbdispatch_func(sqlite3_context *context, int argc, sqlite3_value **argv)
     goto finalfinally;
   }
 
-  PyObject **vargs = alloca(sizeof(PyObject *) * (1 + argc));
   if (getfunctionargs(vargs + 1, context, argc, argv))
     goto finally;
 
@@ -2586,6 +2591,8 @@ cbdispatch_step(sqlite3_context *context, int argc, sqlite3_value **argv)
   PyObject *retval;
   aggregatefunctioncontext *aggfc = NULL;
 
+  VLA_PYO(vargs, 2 + argc);
+
   gilstate = PyGILState_Ensure();
 
   MakeExistingException();
@@ -2600,7 +2607,6 @@ cbdispatch_step(sqlite3_context *context, int argc, sqlite3_value **argv)
 
   assert(aggfc);
 
-  PyObject **vargs = alloca(sizeof(PyObject *) * (2 + argc));
   vargs[1] = aggfc->aggvalue;
   if (getfunctionargs(vargs + 2, context, argc, argv))
     goto finally;
@@ -2677,7 +2683,7 @@ finally:
   if (PyErr_Occurred() && PY_ERR_NOT_NULL(exc_save))
     apsw_write_unraisable(NULL);
 
-  if(PY_ERR_NOT_NULL(exc_save))
+  if (PY_ERR_NOT_NULL(exc_save))
     PY_ERR_RESTORE(exc_save);
 
   if (PyErr_Occurred())
@@ -2842,6 +2848,8 @@ cbw_step(sqlite3_context *context, int argc, sqlite3_value **argv)
   windowfunctioncontext *winfc = NULL;
   PyObject *retval = NULL;
 
+  VLA_PYO(vargs, 2 + argc);
+
   gilstate = PyGILState_Ensure();
 
   MakeExistingException();
@@ -2853,7 +2861,6 @@ cbw_step(sqlite3_context *context, int argc, sqlite3_value **argv)
   if (!winfc)
     goto error;
 
-  PyObject **vargs = alloca(sizeof(PyObject *) * (2 + argc));
   int offset = (winfc->aggvalue) ? 1 : 0;
   vargs[1] = winfc->aggvalue;
   if (getfunctionargs(vargs + 1 + offset, context, argc, argv))
@@ -2965,6 +2972,8 @@ cbw_inverse(sqlite3_context *context, int argc, sqlite3_value **argv)
   windowfunctioncontext *winfc;
   PyObject *retval = NULL;
 
+  VLA_PYO(vargs, 2 + argc);
+
   gilstate = PyGILState_Ensure();
 
   MakeExistingException();
@@ -2976,7 +2985,6 @@ cbw_inverse(sqlite3_context *context, int argc, sqlite3_value **argv)
   if (!winfc)
     goto error;
 
-  PyObject **vargs = alloca(sizeof(PyObject *) * (2 + argc));
   int offset = (winfc->aggvalue) ? 1 : 0;
   vargs[1] = winfc->aggvalue;
   if (getfunctionargs(vargs + 1 + offset, context, argc, argv))

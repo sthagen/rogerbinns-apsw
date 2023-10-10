@@ -600,6 +600,8 @@ class APSW(unittest.TestCase):
 
     def testBackwardsCompatibility(self):
         "Verifies changed names etc are still accessible through the old ones"
+        self.assertIs(apsw.main, apsw.shell.main)
+        self.assertIs(apsw.Shell, apsw.shell.Shell)
 
     def testModuleStringFunctions(self):
         "Tests various string comparison/matching functions"
@@ -1043,6 +1045,9 @@ class APSW(unittest.TestCase):
         c.execute("pragma user_version=73", bindings=None, can_cache=False, prepare_flags=0).fetchall()
         c.executemany(statements="select ?", sequenceofbindings=((1, ), (2, )), can_cache=False,
                       prepare_flags=0).fetchall()
+
+        # non-contiguous buffers
+        self.assertRaises(BufferError, c.execute, "select ?", (memoryview(b"234567890")[::2], ))
 
     def testIssue373(self):
         "issue 373: dict type checking in bindings"

@@ -12,7 +12,7 @@ from pathlib import Path
 
 # Note: this code uses Python's optional typing annotations.  You can
 # ignore them and do not need to use them
-from typing import Optional, Iterator
+from typing import Optional, Iterator, Any
 
 ### version_check: Checking APSW and SQLite versions
 
@@ -303,14 +303,8 @@ class longest:
         # Called at the very end
         return self.longest
 
-    @classmethod
-    def factory(cls) -> apsw.AggregateCallbacks:
-        return cls(), cls.step, cls.final
-
-
-connection.createaggregatefunction("longest", longest.factory)
-for row in connection.execute("select longest(event) from log"):
-    print(row)
+connection.createaggregatefunction("longest", longest)
+print(connection.execute("select longest(event) from log").get)
 
 ### window: Defining window functions
 # Window functions input values come from a "window" around a row of
@@ -911,7 +905,7 @@ class ObfuscatedVFS(apsw.VFS):
 
     # We want to return our own file implementation, but also
     # want it to inherit
-    def xOpen(self, name, flags: int):
+    def xOpen(self, name, flags):
         if isinstance(name, apsw.URIFilename):
             print("xOpen of", name.filename())
             # We can look at uri parameters

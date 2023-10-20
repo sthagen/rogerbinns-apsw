@@ -378,7 +378,7 @@ static const char *description_formats[] = {
     "(sssss)"};
 
 static PyObject *
-APSWCursor_internal_getdescription(APSWCursor *self, int fmtnum)
+APSWCursor_internal_get_description(APSWCursor *self, int fmtnum)
 {
   int ncols, i;
   PyObject *result = NULL;
@@ -455,7 +455,7 @@ error:
   return NULL;
 }
 
-/** .. method:: getdescription() -> tuple[tuple[str, str], ...]
+/** .. method:: get_description() -> tuple[tuple[str, str], ...]
 
    If you are trying to get information about a table or view,
    then `pragma table_info <https://sqlite.org/pragma.html#pragma_table_info>`__
@@ -467,11 +467,11 @@ error:
    before you have finished::
 
       # This will error
-      cursor.getdescription()
+      cursor.get_description()
 
       for row in cursor.execute("select ....."):
          # this works
-         print (cursor.getdescription())
+         print (cursor.get_description())
          print (row)
 
    The information about each column is a tuple of ``(column_name,
@@ -492,7 +492,7 @@ error:
       cursor.execute("insert into books values(?,?,?)", ("fjfjfj", 3.7, 97))
 
       for row in cursor.execute("select * from books"):
-         print (cursor.getdescription())
+         print (cursor.get_description())
          print (row)
 
    Output::
@@ -509,9 +509,9 @@ error:
    -* sqlite3_column_name sqlite3_column_decltype
 
 */
-static PyObject *APSWCursor_getdescription(APSWCursor *self)
+static PyObject *APSWCursor_get_description(APSWCursor *self)
 {
-  return APSWCursor_internal_getdescription(self, 0);
+  return APSWCursor_internal_get_description(self, 0);
 }
 
 /** .. attribute:: description
@@ -519,13 +519,13 @@ static PyObject *APSWCursor_getdescription(APSWCursor *self)
 
     Based on the `DB-API cursor property
     <https://www.python.org/dev/peps/pep-0249/>`__, this returns the
-    same as :meth:`getdescription` but with 5 Nones appended.  See
+    same as :meth:`get_description` but with 5 Nones appended.  See
     also :issue:`131`.
 */
 
 static PyObject *APSWCursor_getdescription_dbapi(APSWCursor *self)
 {
-  return APSWCursor_internal_getdescription(self, 1);
+  return APSWCursor_internal_get_description(self, 1);
 }
 
 /** .. attribute:: description_full
@@ -542,9 +542,9 @@ name, table name, and origin name.
 
 */
 #ifdef SQLITE_ENABLE_COLUMN_METADATA
-static PyObject *APSWCursor_getdescription_full(APSWCursor *self)
+static PyObject *APSWCursor_get_description_full(APSWCursor *self)
 {
-  return APSWCursor_internal_getdescription(self, 2);
+  return APSWCursor_internal_get_description(self, 2);
 }
 #endif
 
@@ -752,7 +752,7 @@ APSWCursor_dobindings(APSWCursor *self)
 }
 
 static int
-APSWCursor_doexectrace(APSWCursor *self, Py_ssize_t savedbindingsoffset)
+APSWCursor_do_exec_trace(APSWCursor *self, Py_ssize_t savedbindingsoffset)
 {
   PyObject *retval = NULL;
   PyObject *sqlcmd = NULL;
@@ -820,7 +820,7 @@ APSWCursor_doexectrace(APSWCursor *self, Py_ssize_t savedbindingsoffset)
 }
 
 static PyObject *
-APSWCursor_dorowtrace(APSWCursor *self, PyObject *retval)
+APSWCursor_do_row_trace(APSWCursor *self, PyObject *retval)
 {
   PyObject *rowtrace = ROWTRACE;
 
@@ -962,7 +962,7 @@ APSWCursor_step(APSWCursor *self)
 
     if (EXECTRACE)
     {
-      if (APSWCursor_doexectrace(self, savedbindingsoffset))
+      if (APSWCursor_do_exec_trace(self, savedbindingsoffset))
       {
         assert(self->status == C_DONE);
         assert(PyErr_Occurred());
@@ -1111,7 +1111,7 @@ APSWCursor_execute(APSWCursor *self, PyObject *const *fast_args, Py_ssize_t fast
 
   if (EXECTRACE)
   {
-    if (APSWCursor_doexectrace(self, savedbindingsoffset))
+    if (APSWCursor_do_exec_trace(self, savedbindingsoffset))
     {
       assert(PyErr_Occurred());
       return NULL;
@@ -1244,7 +1244,7 @@ APSWCursor_executemany(APSWCursor *self, PyObject *const *fast_args, Py_ssize_t 
 
   if (EXECTRACE)
   {
-    if (APSWCursor_doexectrace(self, savedbindingsoffset))
+    if (APSWCursor_do_exec_trace(self, savedbindingsoffset))
     {
       assert(PyErr_Occurred());
       return NULL;
@@ -1351,7 +1351,7 @@ again:
   }
   if (ROWTRACE)
   {
-    PyObject *r2 = APSWCursor_dorowtrace(self, retval);
+    PyObject *r2 = APSWCursor_do_row_trace(self, retval);
     Py_DECREF(retval);
     if (!r2)
       return NULL;
@@ -1382,22 +1382,22 @@ APSWCursor_iter(APSWCursor *self)
   return Py_NewRef((PyObject *)self);
 }
 
-/** .. method:: setexectrace(callable: Optional[ExecTracer]) -> None
+/** .. method:: set_exec_trace(callable: Optional[ExecTracer]) -> None
 
-  Sets the :attr:`execution tracer <Cursor.exectrace>`
+  Sets the :attr:`execution tracer <Cursor.exec_trace>`
 */
 static PyObject *
-APSWCursor_setexectrace(APSWCursor *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+APSWCursor_set_exec_trace(APSWCursor *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
 {
   PyObject *callable = NULL;
   CHECK_USE(NULL);
   CHECK_CURSOR_CLOSED(NULL);
 
   {
-    Cursor_setexectrace_CHECK;
-    ARG_PROLOG(1, Cursor_setexectrace_KWNAMES);
+    Cursor_set_exec_trace_CHECK;
+    ARG_PROLOG(1, Cursor_set_exec_trace_KWNAMES);
     ARG_MANDATORY ARG_optional_Callable(callable);
-    ARG_EPILOG(NULL, Cursor_setexectrace_USAGE, );
+    ARG_EPILOG(NULL, Cursor_set_exec_trace_USAGE, );
   }
 
   Py_XINCREF(callable);
@@ -1407,23 +1407,23 @@ APSWCursor_setexectrace(APSWCursor *self, PyObject *const *fast_args, Py_ssize_t
   Py_RETURN_NONE;
 }
 
-/** .. method:: setrowtrace(callable: Optional[RowTracer]) -> None
+/** .. method:: set_row_trace(callable: Optional[RowTracer]) -> None
 
-  Sets the :attr:`row tracer <Cursor.rowtrace>`
+  Sets the :attr:`row tracer <Cursor.row_trace>`
 */
 
 static PyObject *
-APSWCursor_setrowtrace(APSWCursor *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+APSWCursor_set_row_trace(APSWCursor *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
 {
   PyObject *callable = NULL;
   CHECK_USE(NULL);
   CHECK_CURSOR_CLOSED(NULL);
 
   {
-    Cursor_setrowtrace_CHECK;
-    ARG_PROLOG(1, Cursor_setrowtrace_KWNAMES);
+    Cursor_set_row_trace_CHECK;
+    ARG_PROLOG(1, Cursor_set_row_trace_KWNAMES);
     ARG_MANDATORY ARG_optional_Callable(callable);
-    ARG_EPILOG(NULL, Cursor_setrowtrace_USAGE, );
+    ARG_EPILOG(NULL, Cursor_set_row_trace_USAGE, );
   }
 
   Py_XINCREF(callable);
@@ -1433,17 +1433,17 @@ APSWCursor_setrowtrace(APSWCursor *self, PyObject *const *fast_args, Py_ssize_t 
   Py_RETURN_NONE;
 }
 
-/** .. method:: getexectrace() -> Optional[ExecTracer]
+/** .. method:: get_exec_trace() -> Optional[ExecTracer]
 
   Returns the currently installed :attr:`execution tracer
-  <Cursor.exectrace>`
+  <Cursor.exec_trace>`
 
   .. seealso::
 
     * :ref:`tracing`
 */
 static PyObject *
-APSWCursor_getexectrace(APSWCursor *self)
+APSWCursor_get_exec_trace(APSWCursor *self)
 {
   PyObject *ret;
 
@@ -1454,9 +1454,9 @@ APSWCursor_getexectrace(APSWCursor *self)
   return Py_NewRef(ret);
 }
 
-/** .. method:: getrowtrace() -> Optional[RowTracer]
+/** .. method:: get_row_trace() -> Optional[RowTracer]
 
-  Returns the currently installed (via :meth:`~Cursor.setrowtrace`)
+  Returns the currently installed (via :meth:`~Cursor.set_row_trace`)
   row tracer.
 
   .. seealso::
@@ -1464,7 +1464,7 @@ APSWCursor_getexectrace(APSWCursor *self)
     * :ref:`tracing`
 */
 static PyObject *
-APSWCursor_getrowtrace(APSWCursor *self)
+APSWCursor_get_row_trace(APSWCursor *self)
 {
   PyObject *ret;
   CHECK_USE(NULL);
@@ -1473,13 +1473,13 @@ APSWCursor_getrowtrace(APSWCursor *self)
   return Py_NewRef(ret);
 }
 
-/** .. method:: getconnection() -> Connection
+/** .. method:: get_connection() -> Connection
 
   Returns the :attr:`connection` this cursor is using
 */
 
 static PyObject *
-APSWCursor_getconnection(APSWCursor *self)
+APSWCursor_get_connection(APSWCursor *self)
 {
   CHECK_USE(NULL);
   CHECK_CURSOR_CLOSED(NULL);
@@ -1522,7 +1522,7 @@ APSWCursor_fetchone(APSWCursor *self)
   return res;
 }
 
-/** .. attribute:: exectrace
+/** .. attribute:: exec_trace
   :type: Optional[ExecTracer]
 
   Called with the cursor, statement and bindings for
@@ -1536,11 +1536,11 @@ APSWCursor_fetchone(APSWCursor *self)
 
     * :ref:`tracing`
     * :ref:`executiontracer`
-    * :attr:`Connection.exectrace`
+    * :attr:`Connection.exec_trace`
 
 */
 static PyObject *
-APSWCursor_get_exectrace_attr(APSWCursor *self)
+APSWCursor_get_exec_trace_attr(APSWCursor *self)
 {
   CHECK_USE(NULL);
   CHECK_CURSOR_CLOSED(NULL);
@@ -1551,14 +1551,14 @@ APSWCursor_get_exectrace_attr(APSWCursor *self)
 }
 
 static int
-APSWCursor_set_exectrace_attr(APSWCursor *self, PyObject *value)
+APSWCursor_set_exec_trace_attr(APSWCursor *self, PyObject *value)
 {
   CHECK_USE(-1);
   CHECK_CURSOR_CLOSED(-1);
 
   if (!Py_IsNone(value) && !PyCallable_Check(value))
   {
-    PyErr_Format(PyExc_TypeError, "exectrace expected a Callable");
+    PyErr_Format(PyExc_TypeError, "exec_trace expected a Callable");
     return -1;
   }
   Py_CLEAR(self->exectrace);
@@ -1567,7 +1567,7 @@ APSWCursor_set_exectrace_attr(APSWCursor *self, PyObject *value)
   return 0;
 }
 
-/** .. attribute:: rowtrace
+/** .. attribute:: row_trace
   :type: Optional[RowTracer]
 
   Called with cursor and row being returned.  You can
@@ -1581,11 +1581,11 @@ APSWCursor_set_exectrace_attr(APSWCursor *self, PyObject *value)
 
     * :ref:`tracing`
     * :ref:`rowtracer`
-    * :attr:`Connection.rowtrace`
+    * :attr:`Connection.row_trace`
 
 */
 static PyObject *
-APSWCursor_get_rowtrace_attr(APSWCursor *self)
+APSWCursor_get_row_trace_attr(APSWCursor *self)
 {
   CHECK_USE(NULL);
   CHECK_CURSOR_CLOSED(NULL);
@@ -1596,7 +1596,7 @@ APSWCursor_get_rowtrace_attr(APSWCursor *self)
 }
 
 static int
-APSWCursor_set_rowtrace_attr(APSWCursor *self, PyObject *value)
+APSWCursor_set_row_trace_attr(APSWCursor *self, PyObject *value)
 {
   CHECK_USE(-1);
   CHECK_CURSOR_CLOSED(-1);
@@ -1618,7 +1618,7 @@ APSWCursor_set_rowtrace_attr(APSWCursor *self, PyObject *value)
   :class:`Connection` this cursor is using
 */
 static PyObject *
-APSWCursor_getconnection_attr(APSWCursor *self)
+APSWCursor_get_connection_attr(APSWCursor *self)
 {
   CHECK_USE(NULL);
   CHECK_CURSOR_CLOSED(NULL);
@@ -1819,39 +1819,55 @@ static PyMethodDef APSWCursor_methods[] = {
      Cursor_execute_DOC},
     {"executemany", (PyCFunction)APSWCursor_executemany, METH_FASTCALL | METH_KEYWORDS,
      Cursor_executemany_DOC},
-    {"setexectrace", (PyCFunction)APSWCursor_setexectrace, METH_FASTCALL | METH_KEYWORDS,
-     Cursor_setexectrace_DOC},
-    {"setrowtrace", (PyCFunction)APSWCursor_setrowtrace, METH_FASTCALL | METH_KEYWORDS,
-     Cursor_setrowtrace_DOC},
-    {"getexectrace", (PyCFunction)APSWCursor_getexectrace, METH_NOARGS,
-     Cursor_getexectrace_DOC},
-    {"getrowtrace", (PyCFunction)APSWCursor_getrowtrace, METH_NOARGS,
-     Cursor_getrowtrace_DOC},
-    {"getconnection", (PyCFunction)APSWCursor_getconnection, METH_NOARGS,
-     Cursor_getconnection_DOC},
-    {"getdescription", (PyCFunction)APSWCursor_getdescription, METH_NOARGS,
-     Cursor_getdescription_DOC},
+    {"set_exec_trace", (PyCFunction)APSWCursor_set_exec_trace, METH_FASTCALL | METH_KEYWORDS,
+     Cursor_set_exec_trace_DOC},
+    {"set_row_trace", (PyCFunction)APSWCursor_set_row_trace, METH_FASTCALL | METH_KEYWORDS,
+     Cursor_set_row_trace_DOC},
+    {"get_exec_trace", (PyCFunction)APSWCursor_get_exec_trace, METH_NOARGS,
+     Cursor_get_exec_trace_DOC},
+    {"get_row_trace", (PyCFunction)APSWCursor_get_row_trace, METH_NOARGS,
+     Cursor_get_row_trace_DOC},
+    {"get_connection", (PyCFunction)APSWCursor_get_connection, METH_NOARGS,
+     Cursor_get_connection_DOC},
+    {"get_description", (PyCFunction)APSWCursor_get_description, METH_NOARGS,
+     Cursor_get_description_DOC},
     {"close", (PyCFunction)APSWCursor_close, METH_FASTCALL | METH_KEYWORDS,
      Cursor_close_DOC},
     {"fetchall", (PyCFunction)APSWCursor_fetchall, METH_NOARGS,
      Cursor_fetchall_DOC},
     {"fetchone", (PyCFunction)APSWCursor_fetchone, METH_NOARGS,
      Cursor_fetchone_DOC},
+#ifndef APSW_OMIT_OLD_NAMES
+    {Cursor_set_exec_trace_OLDNAME, (PyCFunction)APSWCursor_set_exec_trace, METH_FASTCALL | METH_KEYWORDS,
+     Cursor_set_exec_trace_OLDDOC},
+    {Cursor_set_row_trace_OLDNAME, (PyCFunction)APSWCursor_set_row_trace, METH_FASTCALL | METH_KEYWORDS,
+     Cursor_set_row_trace_OLDDOC},
+    {Cursor_get_exec_trace_OLDNAME, (PyCFunction)APSWCursor_get_exec_trace, METH_NOARGS,
+     Cursor_get_exec_trace_OLDDOC},
+    {Cursor_get_row_trace_OLDNAME, (PyCFunction)APSWCursor_get_row_trace, METH_NOARGS,
+     Cursor_get_row_trace_OLDDOC},
+    {Cursor_get_connection_OLDNAME, (PyCFunction)APSWCursor_get_connection, METH_NOARGS,
+     Cursor_get_connection_OLDDOC},
+    {Cursor_get_description_OLDNAME, (PyCFunction)APSWCursor_get_description, METH_NOARGS,
+     Cursor_get_description_OLDDOC},
+#endif
     {0, 0, 0, 0} /* Sentinel */
 };
 
 static PyGetSetDef APSWCursor_getset[] = {
     {"description", (getter)APSWCursor_getdescription_dbapi, NULL, Cursor_description_DOC, NULL},
 #ifdef SQLITE_ENABLE_COLUMN_METADATA
-    {"description_full", (getter)APSWCursor_getdescription_full, NULL, Cursor_description_full_DOC, NULL},
+    {"description_full", (getter)APSWCursor_get_description_full, NULL, Cursor_description_full_DOC, NULL},
 #endif
     {"is_explain", (getter)APSWCursor_is_explain, NULL, Cursor_is_explain_DOC, NULL},
     {"is_readonly", (getter)APSWCursor_is_readonly, NULL, Cursor_is_readonly_DOC, NULL},
     {"has_vdbe", (getter)APSWCursor_has_vdbe, NULL, Cursor_has_vdbe_DOC, NULL},
     {"expanded_sql", (getter)APSWCursor_expanded_sql, NULL, Cursor_expanded_sql_DOC, NULL},
-    {"exectrace", (getter)APSWCursor_get_exectrace_attr, (setter)APSWCursor_set_exectrace_attr, Cursor_exectrace_DOC},
-    {"rowtrace", (getter)APSWCursor_get_rowtrace_attr, (setter)APSWCursor_set_rowtrace_attr, Cursor_rowtrace_DOC},
-    {"connection", (getter)APSWCursor_getconnection_attr, NULL, Cursor_connection_DOC},
+    {"exec_trace", (getter)APSWCursor_get_exec_trace_attr, (setter)APSWCursor_set_exec_trace_attr, Cursor_exec_trace_DOC},
+    {Cursor_exec_trace_OLDNAME, (getter)APSWCursor_get_exec_trace_attr, (setter)APSWCursor_set_exec_trace_attr, Cursor_exec_trace_OLDDOC},
+    {"row_trace", (getter)APSWCursor_get_row_trace_attr, (setter)APSWCursor_set_row_trace_attr, Cursor_row_trace_DOC},
+    {Cursor_row_trace_OLDNAME, (getter)APSWCursor_get_row_trace_attr, (setter)APSWCursor_set_row_trace_attr, Cursor_row_trace_OLDDOC},
+    {"connection", (getter)APSWCursor_get_connection_attr, NULL, Cursor_connection_DOC},
     {"get", (getter)APSWCursor_get, NULL, Cursor_get_DOC},
     {NULL, NULL, NULL, NULL, NULL}};
 

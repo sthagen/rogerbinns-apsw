@@ -226,7 +226,7 @@ static int allow_missing_dict_bindings = 0;
 
 /* MODULE METHODS */
 
-/** .. method:: sqlitelibversion() -> str
+/** .. method:: sqlite_lib_version() -> str
 
   Returns the version of the SQLite library.  This value is queried at
   run time from the library so if you use shared libraries it will be
@@ -236,7 +236,7 @@ static int allow_missing_dict_bindings = 0;
 */
 
 static PyObject *
-getsqliteversion(void)
+get_sqlite_version(void)
 {
   return PyUnicode_FromString(sqlite3_libversion());
 }
@@ -255,17 +255,17 @@ get_sqlite3_sourceid(void)
   return PyUnicode_FromString(sqlite3_sourceid());
 }
 
-/** .. method:: apswversion() -> str
+/** .. method:: apsw_version() -> str
 
   Returns the APSW version.
 */
 static PyObject *
-getapswversion(void)
+get_apsw_version(void)
 {
   return PyUnicode_FromString(APSW_VERSION);
 }
 
-/** .. method:: enablesharedcache(enable: bool) -> None
+/** .. method:: enable_shared_cache(enable: bool) -> None
 
   If you use the same :class:`Connection` across threads or use
   multiple :class:`connections <Connection>` accessing the same file,
@@ -276,14 +276,14 @@ getapswversion(void)
   -* sqlite3_enable_shared_cache
 */
 static PyObject *
-enablesharedcache(PyObject *Py_UNUSED(self), PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+enable_shared_cache(PyObject *Py_UNUSED(self), PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
 {
   int enable = 0, res;
   {
-    Apsw_enablesharedcache_CHECK;
-    ARG_PROLOG(1, Apsw_enablesharedcache_KWNAMES);
+    Apsw_enable_shared_cache_CHECK;
+    ARG_PROLOG(1, Apsw_enable_shared_cache_KWNAMES);
     ARG_MANDATORY ARG_bool(enable);
-    ARG_EPILOG(NULL, Apsw_enablesharedcache_USAGE, );
+    ARG_EPILOG(NULL, Apsw_enable_shared_cache_USAGE, );
   }
   res = sqlite3_enable_shared_cache(enable);
   SET_EXC(res, NULL);
@@ -457,7 +457,7 @@ apsw_logger(void *arg, int errcode, const char *message)
   else
     Py_DECREF(res);
 
-  if(PY_ERR_NOT_NULL(exc))
+  if (PY_ERR_NOT_NULL(exc))
     PY_ERR_RESTORE(exc);
   PyGILState_Release(gilstate);
 }
@@ -577,7 +577,7 @@ config(PyObject *Py_UNUSED(self), PyObject *args)
   Py_RETURN_NONE;
 }
 
-/** .. method:: memoryused() -> int
+/** .. method:: memory_used() -> int
 
   Returns the amount of memory SQLite is currently using.
 
@@ -588,12 +588,12 @@ config(PyObject *Py_UNUSED(self), PyObject *args)
   -* sqlite3_memory_used
 */
 static PyObject *
-memoryused(void)
+memory_used(void)
 {
   return PyLong_FromLongLong(sqlite3_memory_used());
 }
 
-/** .. method:: memoryhighwater(reset: bool = False) -> int
+/** .. method:: memory_high_water(reset: bool = False) -> int
 
   Returns the maximum amount of memory SQLite has used.  If *reset* is
   True then the high water mark is reset to the current value.
@@ -605,20 +605,20 @@ memoryused(void)
   -* sqlite3_memory_highwater
 */
 static PyObject *
-memoryhighwater(PyObject *Py_UNUSED(self), PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+memory_high_water(PyObject *Py_UNUSED(self), PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
 {
   int reset = 0;
 
   {
-    Apsw_memoryhighwater_CHECK;
-    ARG_PROLOG(1, Apsw_memoryhighwater_KWNAMES);
+    Apsw_memory_high_water_CHECK;
+    ARG_PROLOG(1, Apsw_memory_high_water_KWNAMES);
     ARG_OPTIONAL ARG_bool(reset);
-    ARG_EPILOG(NULL, Apsw_memoryhighwater_USAGE, );
+    ARG_EPILOG(NULL, Apsw_memory_high_water_USAGE, );
   }
   return PyLong_FromLongLong(sqlite3_memory_highwater(reset));
 }
 
-/** .. method:: softheaplimit(limit: int) -> int
+/** .. method:: soft_heap_limit(limit: int) -> int
 
   Requests SQLite try to keep memory usage below *limit* bytes and
   returns the previous limit.
@@ -630,14 +630,14 @@ memoryhighwater(PyObject *Py_UNUSED(self), PyObject *const *fast_args, Py_ssize_
   -* sqlite3_soft_heap_limit64
 */
 static PyObject *
-softheaplimit(PyObject *Py_UNUSED(self), PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+soft_heap_limit(PyObject *Py_UNUSED(self), PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
 {
   sqlite3_int64 limit, oldlimit;
   {
-    Apsw_softheaplimit_CHECK;
-    ARG_PROLOG(1, Apsw_softheaplimit_KWNAMES);
+    Apsw_soft_heap_limit_CHECK;
+    ARG_PROLOG(1, Apsw_soft_heap_limit_KWNAMES);
     ARG_MANDATORY ARG_int64(limit);
-    ARG_EPILOG(NULL, Apsw_softheaplimit_USAGE, );
+    ARG_EPILOG(NULL, Apsw_soft_heap_limit_USAGE, );
   }
   oldlimit = sqlite3_soft_heap_limit64(limit);
 
@@ -651,7 +651,7 @@ softheaplimit(PyObject *Py_UNUSED(self), PyObject *const *fast_args, Py_ssize_t 
 
   .. seealso::
 
-      :meth:`softheaplimit`
+      :meth:`soft_heap_limit`
 
   -* sqlite3_hard_heap_limit64
 */
@@ -700,7 +700,7 @@ randomness(PyObject *Py_UNUSED(self), PyObject *const *fast_args, Py_ssize_t fas
   return bytes;
 }
 
-/** .. method:: releasememory(amount: int) -> int
+/** .. method:: release_memory(amount: int) -> int
 
   Requests SQLite try to free *amount* bytes of memory.  Returns how
   many bytes were freed.
@@ -709,15 +709,15 @@ randomness(PyObject *Py_UNUSED(self), PyObject *const *fast_args, Py_ssize_t fas
 */
 
 static PyObject *
-releasememory(PyObject *Py_UNUSED(self), PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+release_memory(PyObject *Py_UNUSED(self), PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
 {
   int amount;
 
   {
-    Apsw_releasememory_CHECK;
-    ARG_PROLOG(1, Apsw_releasememory_KWNAMES);
+    Apsw_release_memory_CHECK;
+    ARG_PROLOG(1, Apsw_release_memory_KWNAMES);
     ARG_MANDATORY ARG_int(amount);
-    ARG_EPILOG(NULL, Apsw_releasememory_USAGE, );
+    ARG_EPILOG(NULL, Apsw_release_memory_USAGE, );
   }
   return PyLong_FromLong(sqlite3_release_memory(amount));
 }
@@ -760,7 +760,7 @@ status(PyObject *Py_UNUSED(self), PyObject *const *fast_args, Py_ssize_t fast_na
   return Py_BuildValue("(LL)", current, highwater);
 }
 
-/** .. method:: vfsnames() -> list[str]
+/** .. method:: vfs_names() -> list[str]
 
   Returns a list of the currently installed :ref:`vfs <vfs>`.  The first
   item in the list is the default vfs.
@@ -768,7 +768,7 @@ status(PyObject *Py_UNUSED(self), PyObject *const *fast_args, Py_ssize_t fast_na
   -* sqlite3_vfs_find
 */
 static PyObject *
-vfsnames(PyObject *Py_UNUSED(self))
+vfs_names(PyObject *Py_UNUSED(self))
 {
   PyObject *result = NULL, *str = NULL;
   int res;
@@ -872,7 +872,7 @@ vfs_details(PyObject *Py_UNUSED(self))
 #undef S
 #undef P
 
-/** .. method:: exceptionfor(code: int) -> Exception
+/** .. method:: exception_for(code: int) -> Exception
 
   If you would like to raise an exception that corresponds to a
   particular SQLite `error code
@@ -882,20 +882,20 @@ vfs_details(PyObject *Py_UNUSED(self))
 
   For example to raise `SQLITE_IOERR_ACCESS <https://sqlite.org/c3ref/c_ioerr_access.html>`_::
 
-    raise apsw.exceptionfor(apsw.SQLITE_IOERR_ACCESS)
+    raise apsw.exception_for(apsw.SQLITE_IOERR_ACCESS)
 
 */
 static PyObject *
-getapswexceptionfor(PyObject *Py_UNUSED(self), PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+get_apsw_exception_for(PyObject *Py_UNUSED(self), PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
 {
   int code = 0, i;
   PyObject *result = NULL, *tmp = NULL;
 
   {
-    Apsw_exceptionfor_CHECK;
-    ARG_PROLOG(1, Apsw_exceptionfor_KWNAMES);
+    Apsw_exception_for_CHECK;
+    ARG_PROLOG(1, Apsw_exception_for_KWNAMES);
     ARG_MANDATORY ARG_int(code);
-    ARG_EPILOG(NULL, Apsw_exceptionfor_USAGE, );
+    ARG_EPILOG(NULL, Apsw_exception_for_USAGE, );
   }
 
   for (i = 0; exc_descriptors[i].name; i++)
@@ -1641,7 +1641,7 @@ apsw_strnicmp(PyObject *Py_UNUSED(self), PyObject *const *fast_args, Py_ssize_t 
 /** .. method:: set_default_vfs(name: str) -> None
 
  Sets the default vfs to *name* which must be an existing vfs.
- See :meth:`vfsnames`.
+ See :meth:`vfs_names`.
 
  -* sqlite3_vfs_register sqlite3_vfs_find
 */
@@ -1671,7 +1671,7 @@ apsw_set_default_vfs(PyObject *Py_UNUSED(module), PyObject *const *fast_args, Py
 
 /** .. method:: unregister_vfs(name: str) -> None
 
- Unregisters the named vfs.  See :meth:`vfsnames`.
+ Unregisters the named vfs.  See :meth:`vfs_names`.
 
  -* sqlite3_vfs_unregister sqlite3_vfs_find
 */
@@ -1784,16 +1784,16 @@ apsw_getattr(PyObject *Py_UNUSED(module), PyObject *name)
 static PyMethodDef module_methods[] = {
     {"sqlite3_sourceid", (PyCFunction)get_sqlite3_sourceid, METH_NOARGS,
      Apsw_sqlite3_sourceid_DOC},
-    {"sqlitelibversion", (PyCFunction)getsqliteversion, METH_NOARGS,
-     Apsw_sqlitelibversion_DOC},
-    {"apswversion", (PyCFunction)getapswversion, METH_NOARGS,
-     Apsw_apswversion_DOC},
-    {"vfsnames", (PyCFunction)vfsnames, METH_NOARGS,
-     Apsw_vfsnames_DOC},
+    {"sqlite_lib_version", (PyCFunction)get_sqlite_version, METH_NOARGS,
+     Apsw_sqlite_lib_version_DOC},
+    {"apsw_version", (PyCFunction)get_apsw_version, METH_NOARGS,
+     Apsw_apsw_version_DOC},
+    {"vfs_names", (PyCFunction)vfs_names, METH_NOARGS,
+     Apsw_vfs_names_DOC},
     {"vfs_details", (PyCFunction)vfs_details, METH_NOARGS,
      Apsw_vfs_details_DOC},
-    {"enablesharedcache", (PyCFunction)enablesharedcache, METH_FASTCALL | METH_KEYWORDS,
-     Apsw_enablesharedcache_DOC},
+    {"enable_shared_cache", (PyCFunction)enable_shared_cache, METH_FASTCALL | METH_KEYWORDS,
+     Apsw_enable_shared_cache_DOC},
     {"initialize", (PyCFunction)initialize, METH_NOARGS,
      Apsw_initialize_DOC},
     {"shutdown", (PyCFunction)sqliteshutdown, METH_NOARGS,
@@ -1804,22 +1804,22 @@ static PyMethodDef module_methods[] = {
      Apsw_config_DOC},
     {"log", (PyCFunction)apsw_log, METH_FASTCALL | METH_KEYWORDS,
      Apsw_log_DOC},
-    {"memoryused", (PyCFunction)memoryused, METH_NOARGS,
-     Apsw_memoryused_DOC},
-    {"memoryhighwater", (PyCFunction)memoryhighwater, METH_FASTCALL | METH_KEYWORDS,
-     Apsw_memoryhighwater_DOC},
+    {"memory_used", (PyCFunction)memory_used, METH_NOARGS,
+     Apsw_memory_used_DOC},
+    {"memory_high_water", (PyCFunction)memory_high_water, METH_FASTCALL | METH_KEYWORDS,
+     Apsw_memory_high_water_DOC},
     {"status", (PyCFunction)status, METH_FASTCALL | METH_KEYWORDS,
      Apsw_status_DOC},
-    {"softheaplimit", (PyCFunction)softheaplimit, METH_FASTCALL | METH_KEYWORDS,
-     Apsw_softheaplimit_DOC},
+    {"soft_heap_limit", (PyCFunction)soft_heap_limit, METH_FASTCALL | METH_KEYWORDS,
+     Apsw_soft_heap_limit_DOC},
     {"hard_heap_limit", (PyCFunction)apsw_hard_heap_limit, METH_FASTCALL | METH_KEYWORDS,
      Apsw_hard_heap_limit_DOC},
-    {"releasememory", (PyCFunction)releasememory, METH_FASTCALL | METH_KEYWORDS,
-     Apsw_releasememory_DOC},
+    {"release_memory", (PyCFunction)release_memory, METH_FASTCALL | METH_KEYWORDS,
+     Apsw_release_memory_DOC},
     {"randomness", (PyCFunction)randomness, METH_FASTCALL | METH_KEYWORDS,
      Apsw_randomness_DOC},
-    {"exceptionfor", (PyCFunction)getapswexceptionfor, METH_FASTCALL | METH_KEYWORDS,
-     Apsw_exceptionfor_DOC},
+    {"exception_for", (PyCFunction)get_apsw_exception_for, METH_FASTCALL | METH_KEYWORDS,
+     Apsw_exception_for_DOC},
     {"complete", (PyCFunction)apswcomplete, METH_FASTCALL | METH_KEYWORDS,
      Apsw_complete_DOC},
     {"strlike", (PyCFunction)apsw_strlike, METH_FASTCALL | METH_KEYWORDS, Apsw_strlike_DOC},
@@ -1840,6 +1840,26 @@ static PyMethodDef module_methods[] = {
     {"__getattr__", (PyCFunction)apsw_getattr, METH_O, "module getattr"},
     {"connections", (PyCFunction)apsw_connections, METH_NOARGS, Apsw_connections_DOC},
     {"sleep", (PyCFunction)apsw_sleep, METH_FASTCALL | METH_KEYWORDS, Apsw_sleep_DOC},
+#ifndef APSW_OMIT_OLD_NAMES
+    {Apsw_sqlite_lib_version_OLDNAME, (PyCFunction)get_sqlite_version, METH_NOARGS,
+     Apsw_sqlite_lib_version_OLDDOC},
+    {Apsw_apsw_version_OLDNAME, (PyCFunction)get_apsw_version, METH_NOARGS,
+     Apsw_apsw_version_OLDDOC},
+    {Apsw_vfs_names_OLDNAME, (PyCFunction)vfs_names, METH_NOARGS,
+     Apsw_vfs_names_OLDDOC},
+    {Apsw_enable_shared_cache_OLDNAME, (PyCFunction)enable_shared_cache, METH_FASTCALL | METH_KEYWORDS,
+     Apsw_enable_shared_cache_OLDDOC},
+    {Apsw_memory_used_OLDNAME, (PyCFunction)memory_used, METH_NOARGS,
+     Apsw_memory_used_OLDDOC},
+    {Apsw_memory_high_water_OLDNAME, (PyCFunction)memory_high_water, METH_FASTCALL | METH_KEYWORDS,
+     Apsw_memory_high_water_OLDDOC},
+    {Apsw_soft_heap_limit_OLDNAME, (PyCFunction)soft_heap_limit, METH_FASTCALL | METH_KEYWORDS,
+     Apsw_soft_heap_limit_OLDDOC},
+    {Apsw_release_memory_OLDNAME, (PyCFunction)release_memory, METH_FASTCALL | METH_KEYWORDS,
+     Apsw_release_memory_OLDDOC},
+    {Apsw_exception_for_OLDNAME, (PyCFunction)get_apsw_exception_for, METH_FASTCALL | METH_KEYWORDS,
+     Apsw_exception_for_OLDDOC},
+#endif
     {0, 0, 0, 0} /* Sentinel */
 };
 
@@ -1928,7 +1948,7 @@ PyInit_apsw(void)
        :type: list[Callable[[Connection], None]]
 
        The purpose of the hooks is to allow the easy registration of
-       :meth:`functions <Connection.createscalarfunction>`,
+       :meth:`functions <Connection.create_scalar_function>`,
        :ref:`virtual tables <virtualtables>` or similar items with
        each :class:`Connection` as it is created. The default value is an empty
        list. Whenever a Connection is created, each item in
@@ -1954,7 +1974,7 @@ PyInit_apsw(void)
     against.  For example SQLite 3.6.4 will have the value *3006004*.
     This number may be different than the actual library in use if the
     library is shared and has been updated.  Call
-    :meth:`sqlitelibversion` to get the actual library version.
+    :meth:`sqlite_lib_version` to get the actual library version.
 
     */
   if (PyModule_AddIntConstant(m, "SQLITE_VERSION_NUMBER", SQLITE_VERSION_NUMBER))

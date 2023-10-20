@@ -526,7 +526,7 @@ finally:
   return res;
 }
 
-/** .. method:: blobopen(database: str, table: str, column: str, rowid: int, writeable: bool)  -> Blob
+/** .. method:: blob_open(database: str, table: str, column: str, rowid: int, writeable: bool)  -> Blob
 
    Opens a blob for :ref:`incremental I/O <blobio>`.
 
@@ -548,7 +548,7 @@ finally:
    -* sqlite3_blob_open
 */
 static PyObject *
-Connection_blobopen(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+Connection_blob_open(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
 {
   struct APSWBlob *apswblob = 0;
   sqlite3_blob *blob = 0;
@@ -562,14 +562,14 @@ Connection_blobopen(Connection *self, PyObject *const *fast_args, Py_ssize_t fas
   CHECK_CLOSED(self, NULL);
 
   {
-    Connection_blobopen_CHECK;
-    ARG_PROLOG(5, Connection_blobopen_KWNAMES);
+    Connection_blob_open_CHECK;
+    ARG_PROLOG(5, Connection_blob_open_KWNAMES);
     ARG_MANDATORY ARG_str(database);
     ARG_MANDATORY ARG_str(table);
     ARG_MANDATORY ARG_str(column);
     ARG_MANDATORY ARG_int64(rowid);
     ARG_MANDATORY ARG_bool(writeable);
-    ARG_EPILOG(NULL, Connection_blobopen_USAGE, );
+    ARG_EPILOG(NULL, Connection_blob_open_USAGE, );
   }
   PYSQLITE_CON_CALL(res = sqlite3_blob_open(self->db, database, table, column, rowid, writeable, &blob));
 
@@ -782,7 +782,7 @@ Connection_cursor(Connection *self)
   return (PyObject *)cursor;
 }
 
-/** .. method:: setbusytimeout(milliseconds: int) -> None
+/** .. method:: set_busy_timeout(milliseconds: int) -> None
 
   If the database is locked such as when another connection is making
   changes, SQLite will keep retrying.  This sets the maximum amount of
@@ -791,18 +791,18 @@ Connection_cursor(Connection *self)
 
   :param milliseconds: Maximum thousandths of a second to wait.
 
-  If you previously called :meth:`~Connection.setbusyhandler` then
+  If you previously called :meth:`~Connection.set_busy_handler` then
   calling this overrides that.
 
   .. seealso::
 
-     * :meth:`Connection.setbusyhandler`
+     * :meth:`Connection.set_busy_handler`
      * :ref:`Busy handling <busyhandling>`
 
   -* sqlite3_busy_timeout
 */
 static PyObject *
-Connection_setbusytimeout(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+Connection_set_busy_timeout(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
 {
   int milliseconds = 0;
   int res;
@@ -811,10 +811,10 @@ Connection_setbusytimeout(Connection *self, PyObject *const *fast_args, Py_ssize
   CHECK_CLOSED(self, NULL);
 
   {
-    Connection_setbusytimeout_CHECK;
-    ARG_PROLOG(1, Connection_setbusytimeout_KWNAMES);
+    Connection_set_busy_timeout_CHECK;
+    ARG_PROLOG(1, Connection_set_busy_timeout_KWNAMES);
     ARG_MANDATORY ARG_int(milliseconds);
-    ARG_EPILOG(NULL, Connection_setbusytimeout_USAGE, );
+    ARG_EPILOG(NULL, Connection_set_busy_timeout_USAGE, );
   }
   PYSQLITE_CON_CALL(res = sqlite3_busy_timeout(self->db, milliseconds));
   SET_EXC(res, self->db);
@@ -845,7 +845,7 @@ Connection_changes(Connection *self)
   return PyLong_FromLongLong(sqlite3_changes64(self->db));
 }
 
-/** .. method:: totalchanges() -> int
+/** .. method:: total_changes() -> int
 
   Returns the total number of database rows that have be modified,
   inserted, or deleted since the database connection was opened.
@@ -853,7 +853,7 @@ Connection_changes(Connection *self)
   -* sqlite3_total_changes64
 */
 static PyObject *
-Connection_totalchanges(Connection *self)
+Connection_total_changes(Connection *self)
 {
   CHECK_USE(NULL);
   CHECK_CLOSED(self, NULL);
@@ -861,14 +861,14 @@ Connection_totalchanges(Connection *self)
   return PyLong_FromLongLong(sqlite3_total_changes64(self->db));
 }
 
-/** .. method:: getautocommit() -> bool
+/** .. method:: get_autocommit() -> bool
 
   Returns if the Connection is in auto commit mode (ie not in a transaction).
 
   -* sqlite3_get_autocommit
 */
 static PyObject *
-Connection_getautocommit(Connection *self)
+Connection_get_autocommit(Connection *self)
 {
   CHECK_USE(NULL);
   CHECK_CLOSED(self, NULL);
@@ -1056,7 +1056,7 @@ finally:
   PyGILState_Release(gilstate);
 }
 
-/** .. method:: setupdatehook(callable: Optional[Callable[[int, str, str, int], None]]) -> None
+/** .. method:: set_update_hook(callable: Optional[Callable[[int, str, str, int], None]]) -> None
 
   Calls *callable* whenever a row is updated, deleted or inserted.  If
   *callable* is *None* then any existing update hook is
@@ -1083,7 +1083,7 @@ finally:
   -* sqlite3_update_hook
 */
 static PyObject *
-Connection_setupdatehook(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+Connection_set_update_hook(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
 {
   /* sqlite3_update_hook doesn't return an error code */
   PyObject *callable;
@@ -1091,10 +1091,10 @@ Connection_setupdatehook(Connection *self, PyObject *const *fast_args, Py_ssize_
   CHECK_CLOSED(self, NULL);
 
   {
-    Connection_setupdatehook_CHECK;
-    ARG_PROLOG(1, Connection_setupdatehook_KWNAMES);
+    Connection_set_update_hook_CHECK;
+    ARG_PROLOG(1, Connection_set_update_hook_KWNAMES);
     ARG_MANDATORY ARG_optional_Callable(callable);
-    ARG_EPILOG(NULL, Connection_setupdatehook_USAGE, );
+    ARG_EPILOG(NULL, Connection_set_update_hook_USAGE, );
   }
   if (!callable)
   {
@@ -1142,7 +1142,7 @@ rollbackhookcb(void *context)
   PyGILState_Release(gilstate);
 }
 
-/** .. method:: setrollbackhook(callable: Optional[Callable[[], None]]) -> None
+/** .. method:: set_rollback_hook(callable: Optional[Callable[[], None]]) -> None
 
   Sets a callable which is invoked during a rollback.  If *callable*
   is *None* then any existing rollback hook is unregistered.
@@ -1152,7 +1152,7 @@ rollbackhookcb(void *context)
   -* sqlite3_rollback_hook
 */
 static PyObject *
-Connection_setrollbackhook(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+Connection_set_rollback_hook(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
 {
   /* sqlite3_rollback_hook doesn't return an error code */
   PyObject *callable;
@@ -1160,10 +1160,10 @@ Connection_setrollbackhook(Connection *self, PyObject *const *fast_args, Py_ssiz
   CHECK_CLOSED(self, NULL);
 
   {
-    Connection_setrollbackhook_CHECK;
-    ARG_PROLOG(1, Connection_setrollbackhook_KWNAMES);
+    Connection_set_rollback_hook_CHECK;
+    ARG_PROLOG(1, Connection_set_rollback_hook_KWNAMES);
     ARG_MANDATORY ARG_optional_Callable(callable);
-    ARG_EPILOG(NULL, Connection_setrollbackhook_USAGE, );
+    ARG_EPILOG(NULL, Connection_set_rollback_hook_USAGE, );
   }
 
   if (!callable)
@@ -1214,7 +1214,7 @@ finally:
   return 0;
 }
 
-/** .. method:: setprofile(callable: Optional[Callable[[str, int], None]]) -> None
+/** .. method:: set_profile(callable: Optional[Callable[[str, int], None]]) -> None
 
   Sets a callable which is invoked at the end of execution of each
   statement and passed the statement string and how long it took to
@@ -1230,7 +1230,7 @@ finally:
 */
 
 static PyObject *
-Connection_setprofile(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+Connection_set_profile(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
 {
   int res;
   PyObject *callable;
@@ -1238,10 +1238,10 @@ Connection_setprofile(Connection *self, PyObject *const *fast_args, Py_ssize_t f
   CHECK_CLOSED(self, NULL);
 
   {
-    Connection_setprofile_CHECK;
-    ARG_PROLOG(1, Connection_setprofile_KWNAMES);
+    Connection_set_profile_CHECK;
+    ARG_PROLOG(1, Connection_set_profile_KWNAMES);
     ARG_MANDATORY ARG_optional_Callable(callable);
-    ARG_EPILOG(NULL, Connection_setprofile_USAGE, );
+    ARG_EPILOG(NULL, Connection_set_profile_USAGE, );
   }
 
   PYSQLITE_CON_CALL(res = sqlite3_trace_v2(self->db, SQLITE_TRACE_PROFILE, callable ? profilecb : NULL, callable ? self : NULL));
@@ -1478,7 +1478,7 @@ finally:
   return ok;
 }
 
-/** .. method:: setcommithook(callable: Optional[CommitHook]) -> None
+/** .. method:: set_commit_hook(callable: Optional[CommitHook]) -> None
 
   *callable* will be called just before a commit.  It should return
   False for the commit to go ahead and True for it to be turned
@@ -1494,7 +1494,7 @@ finally:
 
 */
 static PyObject *
-Connection_setcommithook(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+Connection_set_commit_hook(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
 {
   /* sqlite3_commit_hook doesn't return an error code */
   PyObject *callable;
@@ -1502,10 +1502,10 @@ Connection_setcommithook(Connection *self, PyObject *const *fast_args, Py_ssize_
   CHECK_CLOSED(self, NULL);
 
   {
-    Connection_setcommithook_CHECK;
-    ARG_PROLOG(1, Connection_setcommithook_KWNAMES);
+    Connection_set_commit_hook_CHECK;
+    ARG_PROLOG(1, Connection_set_commit_hook_KWNAMES);
     ARG_MANDATORY ARG_optional_Callable(callable);
-    ARG_EPILOG(NULL, Connection_setcommithook_USAGE, );
+    ARG_EPILOG(NULL, Connection_set_commit_hook_USAGE, );
   }
   if (!callable)
   {
@@ -1574,7 +1574,7 @@ finally:
   return code;
 }
 
-/** .. method:: setwalhook(callable: Optional[Callable[[Connection, str, int], int]]) -> None
+/** .. method:: set_wal_hook(callable: Optional[Callable[[Connection, str, int], int]]) -> None
 
  *callable* will be called just after data is committed in :ref:`wal`
  mode.  It should return *SQLITE_OK* or an error code.  The
@@ -1591,7 +1591,7 @@ finally:
 */
 
 static PyObject *
-Connection_setwalhook(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+Connection_set_wal_hook(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
 {
   PyObject *callable;
 
@@ -1599,10 +1599,10 @@ Connection_setwalhook(Connection *self, PyObject *const *fast_args, Py_ssize_t f
   CHECK_CLOSED(self, NULL);
 
   {
-    Connection_setwalhook_CHECK;
-    ARG_PROLOG(1, Connection_setwalhook_KWNAMES);
+    Connection_set_wal_hook_CHECK;
+    ARG_PROLOG(1, Connection_set_wal_hook_KWNAMES);
     ARG_MANDATORY ARG_optional_Callable(callable);
-    ARG_EPILOG(NULL, Connection_setwalhook_USAGE, );
+    ARG_EPILOG(NULL, Connection_set_wal_hook_USAGE, );
   }
 
   if (!callable)
@@ -1664,7 +1664,7 @@ finally:
   return ok;
 }
 
-/** .. method:: setprogresshandler(callable: Optional[Callable[[], bool]], nsteps: int = 20) -> None
+/** .. method:: set_progress_handler(callable: Optional[Callable[[], bool]], nsteps: int = 20) -> None
 
   Sets a callable which is invoked every *nsteps* SQLite
   inststructions. The callable should return True to abort
@@ -1679,7 +1679,7 @@ finally:
 */
 
 static PyObject *
-Connection_setprogresshandler(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+Connection_set_progress_handler(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
 {
   /* sqlite3_progress_handler doesn't return an error code */
   int nsteps = 20;
@@ -1688,11 +1688,11 @@ Connection_setprogresshandler(Connection *self, PyObject *const *fast_args, Py_s
   CHECK_USE(NULL);
   CHECK_CLOSED(self, NULL);
   {
-    Connection_setprogresshandler_CHECK;
-    ARG_PROLOG(2, Connection_setprogresshandler_KWNAMES);
+    Connection_set_progress_handler_CHECK;
+    ARG_PROLOG(2, Connection_set_progress_handler_KWNAMES);
     ARG_MANDATORY ARG_optional_Callable(callable);
     ARG_OPTIONAL ARG_int(nsteps);
-    ARG_EPILOG(NULL, Connection_setprogresshandler_USAGE, );
+    ARG_EPILOG(NULL, Connection_set_progress_handler_USAGE, );
   }
   if (!callable)
   {
@@ -1791,13 +1791,13 @@ Connection_internal_set_authorizer(Connection *self, PyObject *callable)
   return 0;
 }
 
-/** .. method:: setauthorizer(callable: Optional[Authorizer]) -> None
+/** .. method:: set_authorizer(callable: Optional[Authorizer]) -> None
 
   Sets the :attr:`authorizer`
 */
 
 static PyObject *
-Connection_setauthorizer(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+Connection_set_authorizer(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
 {
   PyObject *callable;
 
@@ -1805,10 +1805,10 @@ Connection_setauthorizer(Connection *self, PyObject *const *fast_args, Py_ssize_
   CHECK_CLOSED(self, NULL);
 
   {
-    Connection_setauthorizer_CHECK;
-    ARG_PROLOG(1, Connection_setauthorizer_KWNAMES);
+    Connection_set_authorizer_CHECK;
+    ARG_PROLOG(1, Connection_set_authorizer_KWNAMES);
     ARG_MANDATORY ARG_optional_Callable(callable);
-    ARG_EPILOG(NULL, Connection_setauthorizer_USAGE, );
+    ARG_EPILOG(NULL, Connection_set_authorizer_USAGE, );
   }
 
   if (Connection_internal_set_authorizer(self, callable))
@@ -1947,31 +1947,31 @@ collationneeded_cb(void *pAux, sqlite3 *Py_UNUSED(db), int eTextRep, const char 
   PyGILState_Release(gilstate);
 }
 
-/** .. method:: collationneeded(callable: Optional[Callable[[Connection, str], None]]) -> None
+/** .. method:: collation_needed(callable: Optional[Callable[[Connection, str], None]]) -> None
 
   *callable* will be called if a statement requires a `collation
   <https://en.wikipedia.org/wiki/Collation>`_ that hasn't been
   registered. Your callable will be passed two parameters. The first
   is the connection object. The second is the name of the
   collation. If you have the collation code available then call
-  :meth:`Connection.createcollation`.
+  :meth:`Connection.create_collation`.
 
   This is useful for creating collations on demand.  For example you
   may include the `locale <https://en.wikipedia.org/wiki/Locale>`_ in
   the collation name, but since there are thousands of locales in
   popular use it would not be useful to :meth:`prereigster
-  <Connection.createcollation>` them all.  Using
-  :meth:`~Connection.collationneeded` tells you when you need to
+  <Connection.create_collation>` them all.  Using
+  :meth:`~Connection.collation_needed` tells you when you need to
   register them.
 
   .. seealso::
 
-    * :meth:`~Connection.createcollation`
+    * :meth:`~Connection.create_collation`
 
   -* sqlite3_collation_needed
 */
 static PyObject *
-Connection_collationneeded(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+Connection_collation_needed(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
 {
   int res;
   PyObject *callable;
@@ -1980,10 +1980,10 @@ Connection_collationneeded(Connection *self, PyObject *const *fast_args, Py_ssiz
   CHECK_CLOSED(self, NULL);
 
   {
-    Connection_collationneeded_CHECK;
-    ARG_PROLOG(1, Connection_collationneeded_KWNAMES);
+    Connection_collation_needed_CHECK;
+    ARG_PROLOG(1, Connection_collation_needed_KWNAMES);
     ARG_MANDATORY ARG_optional_Callable(callable);
-    ARG_EPILOG(NULL, Connection_collationneeded_USAGE, );
+    ARG_EPILOG(NULL, Connection_collation_needed_USAGE, );
   }
 
   if (!callable)
@@ -2053,7 +2053,7 @@ finally:
   return result;
 }
 
-/** .. method:: setbusyhandler(callable: Optional[Callable[[int], bool]]) -> None
+/** .. method:: set_busy_handler(callable: Optional[Callable[[int], bool]]) -> None
 
    Sets the busy handler to callable. callable will be called with one
    integer argument which is the number of prior calls to the busy
@@ -2062,21 +2062,21 @@ finally:
    the callback returns True, then SQLite tries to open the table
    again and the cycle repeats.
 
-   If you previously called :meth:`~Connection.setbusytimeout` then
+   If you previously called :meth:`~Connection.set_busy_timeout` then
    calling this overrides that.
 
    Passing None unregisters the existing handler.
 
    .. seealso::
 
-     * :meth:`Connection.setbusytimeout`
+     * :meth:`Connection.set_busy_timeout`
      * :ref:`Busy handling <busyhandling>`
 
    -* sqlite3_busy_handler
 
 */
 static PyObject *
-Connection_setbusyhandler(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+Connection_set_busy_handler(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
 {
   int res = SQLITE_OK;
   PyObject *callable;
@@ -2085,10 +2085,10 @@ Connection_setbusyhandler(Connection *self, PyObject *const *fast_args, Py_ssize
   CHECK_CLOSED(self, NULL);
 
   {
-    Connection_setbusyhandler_CHECK;
-    ARG_PROLOG(1, Connection_setbusyhandler_KWNAMES);
+    Connection_set_busy_handler_CHECK;
+    ARG_PROLOG(1, Connection_set_busy_handler_KWNAMES);
     ARG_MANDATORY ARG_optional_Callable(callable);
-    ARG_EPILOG(NULL, Connection_setbusyhandler_USAGE, );
+    ARG_EPILOG(NULL, Connection_set_busy_handler_USAGE, );
   }
 
   if (!callable)
@@ -2242,7 +2242,7 @@ Connection_deserialize(Connection *self, PyObject *const *fast_args, Py_ssize_t 
 #endif /* SQLITE_OMIT_DESERIALZE */
 
 #ifndef SQLITE_OMIT_LOAD_EXTENSION
-/** .. method:: enableloadextension(enable: bool) -> None
+/** .. method:: enable_load_extension(enable: bool) -> None
 
   Enables/disables `extension loading
   <https://www.sqlite.org/loadext.html>`_
@@ -2254,11 +2254,11 @@ Connection_deserialize(Connection *self, PyObject *const *fast_args, Py_ssize_t 
 
   .. seealso::
 
-    * :meth:`~Connection.loadextension`
+    * :meth:`~Connection.load_extension`
 */
 
 static PyObject *
-Connection_enableloadextension(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+Connection_enable_load_extension(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
 {
   int enable, res;
 
@@ -2266,10 +2266,10 @@ Connection_enableloadextension(Connection *self, PyObject *const *fast_args, Py_
   CHECK_CLOSED(self, NULL);
 
   {
-    Connection_enableloadextension_CHECK;
-    ARG_PROLOG(1, Connection_enableloadextension_KWNAMES);
+    Connection_enable_load_extension_CHECK;
+    ARG_PROLOG(1, Connection_enable_load_extension_KWNAMES);
     ARG_MANDATORY ARG_bool(enable);
-    ARG_EPILOG(NULL, Connection_enableloadextension_USAGE, );
+    ARG_EPILOG(NULL, Connection_enable_load_extension_USAGE, );
   }
   /* call function */
   PYSQLITE_CON_CALL(res = sqlite3_enable_load_extension(self->db, enable));
@@ -2281,7 +2281,7 @@ Connection_enableloadextension(Connection *self, PyObject *const *fast_args, Py_
   return NULL;
 }
 
-/** .. method:: loadextension(filename: str, entrypoint: Optional[str] = None) -> None
+/** .. method:: load_extension(filename: str, entrypoint: Optional[str] = None) -> None
 
   Loads *filename* as an `extension <https://www.sqlite.org/loadext.html>`_
 
@@ -2298,10 +2298,10 @@ Connection_enableloadextension(Connection *self, PyObject *const *fast_args, Py_
 
   .. seealso::
 
-    * :meth:`~Connection.enableloadextension`
+    * :meth:`~Connection.enable_load_extension`
 */
 static PyObject *
-Connection_loadextension(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+Connection_load_extension(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
 {
   int res;
   const char *filename = NULL, *entrypoint = NULL;
@@ -2310,11 +2310,11 @@ Connection_loadextension(Connection *self, PyObject *const *fast_args, Py_ssize_
   CHECK_USE(NULL);
   CHECK_CLOSED(self, NULL);
   {
-    Connection_loadextension_CHECK;
-    ARG_PROLOG(2, Connection_loadextension_KWNAMES);
+    Connection_load_extension_CHECK;
+    ARG_PROLOG(2, Connection_load_extension_KWNAMES);
     ARG_MANDATORY ARG_str(filename);
     ARG_OPTIONAL ARG_optional_str(entrypoint);
-    ARG_EPILOG(NULL, Connection_loadextension_USAGE, );
+    ARG_EPILOG(NULL, Connection_load_extension_USAGE, );
   }
   PYSQLITE_CON_CALL(res = sqlite3_load_extension(self->db, filename, entrypoint, &errmsg));
 
@@ -3073,7 +3073,7 @@ finally:
     .. seealso::
 
      * :ref:`Example <example_window>`
-     * :meth:`~Connection.createaggregatefunction`
+     * :meth:`~Connection.create_aggregate_function`
 
     -* sqlite3_create_window_function
 */
@@ -3126,7 +3126,7 @@ finally:
   Py_RETURN_NONE;
 }
 
-/** .. method:: createscalarfunction(name: str, callable: Optional[ScalarProtocol], numargs: int = -1, *, deterministic: bool = False, flags: int = 0) -> None
+/** .. method:: create_scalar_function(name: str, callable: Optional[ScalarProtocol], numargs: int = -1, *, deterministic: bool = False, flags: int = 0) -> None
 
   Registers a scalar function.  Scalar functions operate on one set of parameters once.
 
@@ -3146,9 +3146,9 @@ finally:
     You can register the same named function but with different
     *callable* and *numargs*.  For example::
 
-      connection.createscalarfunction("toip", ipv4convert, 4)
-      connection.createscalarfunction("toip", ipv6convert, 16)
-      connection.createscalarfunction("toip", strconvert, -1)
+      connection.create_scalar_function("toip", ipv4convert, 4)
+      connection.create_scalar_function("toip", ipv6convert, 16)
+      connection.create_scalar_function("toip", strconvert, -1)
 
     The one with the correct *numargs* will be called and only if that
     doesn't exist then the one with negative *numargs* will be called.
@@ -3156,13 +3156,13 @@ finally:
   .. seealso::
 
      * :ref:`Example <example_scalar>`
-     * :meth:`~Connection.createaggregatefunction`
+     * :meth:`~Connection.create_aggregate_function`
 
   -* sqlite3_create_function_v2
 */
 
 static PyObject *
-Connection_createscalarfunction(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+Connection_create_scalar_function(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
 {
   int numargs = -1;
   PyObject *callable = NULL;
@@ -3175,14 +3175,14 @@ Connection_createscalarfunction(Connection *self, PyObject *const *fast_args, Py
   CHECK_CLOSED(self, NULL);
 
   {
-    Connection_createscalarfunction_CHECK;
-    ARG_PROLOG(3, Connection_createscalarfunction_KWNAMES);
+    Connection_create_scalar_function_CHECK;
+    ARG_PROLOG(3, Connection_create_scalar_function_KWNAMES);
     ARG_MANDATORY ARG_str(name);
     ARG_MANDATORY ARG_optional_Callable(callable);
     ARG_OPTIONAL ARG_int(numargs);
     ARG_OPTIONAL ARG_bool(deterministic);
     ARG_OPTIONAL ARG_int(flags);
-    ARG_EPILOG(NULL, Connection_createscalarfunction_USAGE, );
+    ARG_EPILOG(NULL, Connection_create_scalar_function_USAGE, );
   }
   if (!callable)
   {
@@ -3221,7 +3221,7 @@ finally:
   Py_RETURN_NONE;
 }
 
-/** .. method:: createaggregatefunction(name: str, factory: Optional[AggregateFactory], numargs: int = -1, *, flags: int = 0) -> None
+/** .. method:: create_aggregate_function(name: str, factory: Optional[AggregateFactory], numargs: int = -1, *, flags: int = 0) -> None
 
   Registers an aggregate function.  Aggregate functions operate on all
   the relevant rows such as counting how many there are.
@@ -3256,18 +3256,18 @@ finally:
 
     You can register the same named function but with different
     callables and *numargs*.  See
-    :meth:`~Connection.createscalarfunction` for an example.
+    :meth:`~Connection.create_scalar_function` for an example.
 
   .. seealso::
 
      * :ref:`Example <example_aggregate>`
-     * :meth:`~Connection.createscalarfunction`
+     * :meth:`~Connection.create_scalar_function`
 
   -* sqlite3_create_function_v2
 */
 
 static PyObject *
-Connection_createaggregatefunction(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+Connection_create_aggregate_function(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
 {
   int numargs = -1;
   PyObject *factory;
@@ -3280,13 +3280,13 @@ Connection_createaggregatefunction(Connection *self, PyObject *const *fast_args,
   CHECK_CLOSED(self, NULL);
 
   {
-    Connection_createaggregatefunction_CHECK;
-    ARG_PROLOG(3, Connection_createaggregatefunction_KWNAMES);
+    Connection_create_aggregate_function_CHECK;
+    ARG_PROLOG(3, Connection_create_aggregate_function_KWNAMES);
     ARG_MANDATORY ARG_str(name);
     ARG_MANDATORY ARG_optional_Callable(factory);
     ARG_OPTIONAL ARG_int(numargs);
     ARG_OPTIONAL ARG_int(flags);
-    ARG_EPILOG(NULL, Connection_createaggregatefunction_USAGE, );
+    ARG_EPILOG(NULL, Connection_create_aggregate_function_USAGE, );
   }
 
   if (!factory)
@@ -3391,7 +3391,7 @@ collation_destroy(void *context)
   PyGILState_Release(gilstate);
 }
 
-/** .. method:: createcollation(name: str, callback: Optional[Callable[[str, str], int]]) -> None
+/** .. method:: create_collation(name: str, callback: Optional[Callable[[str, str], int]]) -> None
 
   You can control how SQLite sorts (termed `collation
   <https://en.wikipedia.org/wiki/Collation>`_) when giving the
@@ -3421,7 +3421,7 @@ collation_destroy(void *context)
 */
 
 static PyObject *
-Connection_createcollation(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+Connection_create_collation(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
 {
   PyObject *callback = NULL;
   const char *name = 0;
@@ -3431,11 +3431,11 @@ Connection_createcollation(Connection *self, PyObject *const *fast_args, Py_ssiz
   CHECK_CLOSED(self, NULL);
 
   {
-    Connection_createcollation_CHECK;
-    ARG_PROLOG(2, Connection_createcollation_KWNAMES);
+    Connection_create_collation_CHECK;
+    ARG_PROLOG(2, Connection_create_collation_KWNAMES);
     ARG_MANDATORY ARG_str(name);
     ARG_MANDATORY ARG_optional_Callable(callback);
-    ARG_EPILOG(NULL, Connection_createcollation_USAGE, );
+    ARG_EPILOG(NULL, Connection_create_collation_USAGE, );
   }
 
   PYSQLITE_CON_CALL(
@@ -3458,7 +3458,7 @@ Connection_createcollation(Connection *self, PyObject *const *fast_args, Py_ssiz
   Py_RETURN_NONE;
 }
 
-/** .. method:: filecontrol(dbname: str, op: int, pointer: int) -> bool
+/** .. method:: file_control(dbname: str, op: int, pointer: int) -> bool
 
   Calls the :meth:`~VFSFile.xFileControl` method on the :ref:`VFS`
   implementing :class:`file access <VFSFile>` for the database.
@@ -3484,7 +3484,7 @@ Connection_createcollation(Connection *self, PyObject *const *fast_args, Py_ssiz
     obj={"foo": 1, 2: 3}                 # object we want to pass
     objwrap=ctypes.py_object(obj)        # objwrap must live before and after the call else
                                          # it gets garbage collected
-    connection.filecontrol(
+    connection.file_control(
              "main",                     # which db
              123,                        # our op code
              ctypes.addressof(objwrap))  # get pointer
@@ -3504,16 +3504,16 @@ Connection_createcollation(Connection *self, PyObject *const *fast_args, Py_ssiz
 
   This is how you set the chunk size by which the database grows.  Do
   not combine it into one line as the c_int would be garbage collected
-  before the filecontrol call is made::
+  before the file control call is made::
 
      chunksize=ctypes.c_int(32768)
-     connection.filecontrol("main", apsw.SQLITE_FCNTL_CHUNK_SIZE, ctypes.addressof(chunksize))
+     connection.file_control("main", apsw.SQLITE_FCNTL_CHUNK_SIZE, ctypes.addressof(chunksize))
 
   -* sqlite3_file_control
 */
 
 static PyObject *
-Connection_filecontrol(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+Connection_file_control(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
 {
   void *pointer;
   int res = SQLITE_ERROR, op;
@@ -3523,12 +3523,12 @@ Connection_filecontrol(Connection *self, PyObject *const *fast_args, Py_ssize_t 
   CHECK_CLOSED(self, NULL);
 
   {
-    Connection_filecontrol_CHECK;
-    ARG_PROLOG(3, Connection_filecontrol_KWNAMES);
+    Connection_file_control_CHECK;
+    ARG_PROLOG(3, Connection_file_control_KWNAMES);
     ARG_MANDATORY ARG_str(dbname);
     ARG_MANDATORY ARG_int(op);
     ARG_MANDATORY ARG_pointer(pointer);
-    ARG_EPILOG(NULL, Connection_filecontrol_USAGE, );
+    ARG_EPILOG(NULL, Connection_file_control_USAGE, );
   }
 
   PYSQLITE_VOID_CALL(res = sqlite3_file_control(self->db, dbname, op, pointer));
@@ -3544,7 +3544,7 @@ Connection_filecontrol(Connection *self, PyObject *const *fast_args, Py_ssize_t 
   Py_RETURN_TRUE;
 }
 
-/** .. method:: sqlite3pointer() -> int
+/** .. method:: sqlite3_pointer() -> int
 
 Returns the underlying `sqlite3 *
 <https://sqlite.org/c3ref/sqlite3.html>`_ for the connection. This
@@ -3555,12 +3555,12 @@ is returned as a number using `PyLong_FromVoidPtr
 under the hood. You should also ensure that you increment the
 reference count on the :class:`Connection` for as long as the other
 libraries are using the pointer.  It is also a very good idea to call
-:meth:`sqlitelibversion` and ensure it is the same as the other
+:meth:`sqlite_lib_version` and ensure it is the same as the other
 libraries.
 
 */
 static PyObject *
-Connection_sqlite3pointer(Connection *self)
+Connection_sqlite3_pointer(Connection *self)
 {
   CHECK_USE(NULL);
   CHECK_CLOSED(self, NULL);
@@ -3647,7 +3647,7 @@ Connection_wal_checkpoint(Connection *self, PyObject *const *fast_args, Py_ssize
 static void apswvtabFree(void *context);
 static struct sqlite3_module *apswvtabSetupModuleDef(PyObject *datasource, int iVersion, int eponymous, int eponymous_only, int read_only);
 
-/** .. method:: createmodule(name: str, datasource: Optional[VTModule], *, use_bestindex_object: bool = False, use_no_change: bool = False, iVersion: int = 1, eponymous: bool=False, eponymous_only: bool = False, read_only: bool = False) -> None
+/** .. method:: create_module(name: str, datasource: Optional[VTModule], *, use_bestindex_object: bool = False, use_no_change: bool = False, iVersion: int = 1, eponymous: bool=False, eponymous_only: bool = False, read_only: bool = False) -> None
 
     Registers a virtual table, or drops it if *datasource* is *None*.
     See :ref:`virtualtables` for details.
@@ -3668,7 +3668,7 @@ static struct sqlite3_module *apswvtabSetupModuleDef(PyObject *datasource, int i
     -* sqlite3_create_module_v2
 */
 static PyObject *
-Connection_createmodule(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+Connection_create_module(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
 {
   const char *name = NULL;
   PyObject *datasource = NULL;
@@ -3682,8 +3682,8 @@ Connection_createmodule(Connection *self, PyObject *const *fast_args, Py_ssize_t
   CHECK_CLOSED(self, NULL);
 
   {
-    Connection_createmodule_CHECK;
-    ARG_PROLOG(2, Connection_createmodule_KWNAMES);
+    Connection_create_module_CHECK;
+    ARG_PROLOG(2, Connection_create_module_KWNAMES);
     ARG_MANDATORY ARG_str(name);
     ARG_MANDATORY ARG_pyobject(datasource);
     ARG_OPTIONAL ARG_bool(use_bestindex_object);
@@ -3692,7 +3692,7 @@ Connection_createmodule(Connection *self, PyObject *const *fast_args, Py_ssize_t
     ARG_OPTIONAL ARG_bool(eponymous);
     ARG_OPTIONAL ARG_bool(eponymous_only);
     ARG_OPTIONAL ARG_bool(read_only);
-    ARG_EPILOG(NULL, Connection_createmodule_USAGE, );
+    ARG_EPILOG(NULL, Connection_create_module_USAGE, );
   }
 
   if (!Py_IsNone(datasource))
@@ -3788,7 +3788,7 @@ Connection_vtab_on_conflict(Connection *self)
   return PyLong_FromLong(sqlite3_vtab_on_conflict(self->db));
 }
 
-/** .. method:: overloadfunction(name: str, nargs: int) -> None
+/** .. method:: overload_function(name: str, nargs: int) -> None
 
   Registers a placeholder function so that a virtual table can provide an implementation via
   :meth:`VTTable.FindFunction`.
@@ -3799,7 +3799,7 @@ Connection_vtab_on_conflict(Connection *self)
     -* sqlite3_overload_function
 */
 static PyObject *
-Connection_overloadfunction(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+Connection_overload_function(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
 {
   const char *name;
   int nargs, res;
@@ -3807,11 +3807,11 @@ Connection_overloadfunction(Connection *self, PyObject *const *fast_args, Py_ssi
   CHECK_USE(NULL);
   CHECK_CLOSED(self, NULL);
   {
-    Connection_overloadfunction_CHECK;
-    ARG_PROLOG(2, Connection_overloadfunction_KWNAMES);
+    Connection_overload_function_CHECK;
+    ARG_PROLOG(2, Connection_overload_function_KWNAMES);
     ARG_MANDATORY ARG_str(name);
     ARG_MANDATORY ARG_int(nargs);
-    ARG_EPILOG(NULL, Connection_overloadfunction_USAGE, );
+    ARG_EPILOG(NULL, Connection_overload_function_USAGE, );
   }
 
   PYSQLITE_CON_CALL(res = sqlite3_overload_function(self->db, name, nargs));
@@ -3823,22 +3823,22 @@ Connection_overloadfunction(Connection *self, PyObject *const *fast_args, Py_ssi
   Py_RETURN_NONE;
 }
 
-/** .. method:: setexectrace(callable: Optional[ExecTracer]) -> None
+/** .. method:: set_exec_trace(callable: Optional[ExecTracer]) -> None
 
-   Method to set :attr:`Connection.exectrace`
+   Method to set :attr:`Connection.exec_trace`
 */
 static PyObject *
-Connection_setexectrace(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+Connection_set_exec_trace(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
 {
   PyObject *callable;
   CHECK_USE(NULL);
   CHECK_CLOSED(self, NULL);
 
   {
-    Connection_setexectrace_CHECK;
-    ARG_PROLOG(1, Connection_setexectrace_KWNAMES);
+    Connection_set_exec_trace_CHECK;
+    ARG_PROLOG(1, Connection_set_exec_trace_KWNAMES);
     ARG_MANDATORY ARG_optional_Callable(callable);
-    ARG_EPILOG(NULL, Connection_setexectrace_USAGE, );
+    ARG_EPILOG(NULL, Connection_set_exec_trace_USAGE, );
   }
 
   Py_XINCREF(callable);
@@ -3848,13 +3848,13 @@ Connection_setexectrace(Connection *self, PyObject *const *fast_args, Py_ssize_t
   Py_RETURN_NONE;
 }
 
-/** .. method:: setrowtrace(callable: Optional[RowTracer]) -> None
+/** .. method:: set_row_trace(callable: Optional[RowTracer]) -> None
 
-  Method to set :attr:`Connection.rowtrace`
+  Method to set :attr:`Connection.row_trace`
 */
 
 static PyObject *
-Connection_setrowtrace(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+Connection_set_row_trace(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
 {
   PyObject *callable;
 
@@ -3862,10 +3862,10 @@ Connection_setrowtrace(Connection *self, PyObject *const *fast_args, Py_ssize_t 
   CHECK_CLOSED(self, NULL);
 
   {
-    Connection_setrowtrace_CHECK;
-    ARG_PROLOG(1, Connection_setrowtrace_KWNAMES);
+    Connection_set_row_trace_CHECK;
+    ARG_PROLOG(1, Connection_set_row_trace_KWNAMES);
     ARG_MANDATORY ARG_optional_Callable(callable);
-    ARG_EPILOG(NULL, Connection_setrowtrace_USAGE, );
+    ARG_EPILOG(NULL, Connection_set_row_trace_USAGE, );
   }
 
   Py_XINCREF(callable);
@@ -3875,14 +3875,14 @@ Connection_setrowtrace(Connection *self, PyObject *const *fast_args, Py_ssize_t 
   Py_RETURN_NONE;
 }
 
-/** .. method:: getexectrace() -> Optional[ExecTracer]
+/** .. method:: get_exec_trace() -> Optional[ExecTracer]
 
   Returns the currently installed :attr:`execution tracer
-  <Connection.exectrace>`
+  <Connection.exec_trace>`
 
 */
 static PyObject *
-Connection_getexectrace(Connection *self)
+Connection_get_exec_trace(Connection *self)
 {
   PyObject *ret;
 
@@ -3893,14 +3893,14 @@ Connection_getexectrace(Connection *self)
   return Py_NewRef(ret);
 }
 
-/** .. method:: getrowtrace() -> Optional[RowTracer]
+/** .. method:: get_row_trace() -> Optional[RowTracer]
 
   Returns the currently installed :attr:`row tracer
-  <Connection.rowtrace>`
+  <Connection.row_trace>`
 
 */
 static PyObject *
-Connection_getrowtrace(Connection *self)
+Connection_get_row_trace(Connection *self)
 {
   PyObject *ret;
 
@@ -4604,14 +4604,14 @@ Connection_column_metadata(Connection *self, PyObject *const *fast_args, Py_ssiz
   return Py_BuildValue("(ssOOO)", datatype, collseq, notnull ? Py_True : Py_False, primarykey ? Py_True : Py_False, autoinc ? Py_True : Py_False);
 }
 
-/** .. method:: cacheflush() -> None
+/** .. method:: cache_flush() -> None
 
   Flushes caches to disk mid-transaction.
 
   -* sqlite3_db_cacheflush
 */
 static PyObject *
-Connection_cacheflush(Connection *self)
+Connection_cache_flush(Connection *self)
 {
   int res;
 
@@ -4642,7 +4642,7 @@ Connection_release_memory(Connection *self)
   CHECK_USE(NULL);
   CHECK_CLOSED(self, NULL);
 
-  PYSQLITE_CON_CALL(res = sqlite3_db_cacheflush(self->db));
+  PYSQLITE_CON_CALL(res = sqlite3_db_release_memory(self->db));
   if (res != SQLITE_OK)
   {
     SET_EXC(res, self->db);
@@ -4927,7 +4927,7 @@ Connection_get_in_transaction(Connection *self)
   Py_RETURN_FALSE;
 }
 
-/** .. attribute:: exectrace
+/** .. attribute:: exec_trace
   :type: Optional[ExecTracer]
 
   Called with the cursor, statement and bindings for
@@ -4943,11 +4943,11 @@ Connection_get_in_transaction(Connection *self)
 
     * :ref:`tracing`
     * :ref:`rowtracer`
-    * :attr:`Cursor.exectrace`
+    * :attr:`Cursor.exec_trace`
 
 */
 static PyObject *
-Connection_get_exectrace_attr(Connection *self)
+Connection_get_exec_trace_attr(Connection *self)
 {
   CHECK_USE(NULL);
   CHECK_CLOSED(self, NULL);
@@ -4956,14 +4956,14 @@ Connection_get_exectrace_attr(Connection *self)
 }
 
 static int
-Connection_set_exectrace_attr(Connection *self, PyObject *value)
+Connection_set_exec_trace_attr(Connection *self, PyObject *value)
 {
   CHECK_USE(-1);
   CHECK_CLOSED(self, -1);
 
   if (!Py_IsNone(value) && !PyCallable_Check(value))
   {
-    PyErr_Format(PyExc_TypeError, "exectrace expected a Callable");
+    PyErr_Format(PyExc_TypeError, "exec_trace expected a Callable");
     return -1;
   }
   Py_CLEAR(self->exectrace);
@@ -4972,7 +4972,7 @@ Connection_set_exectrace_attr(Connection *self, PyObject *value)
   return 0;
 }
 
-/** .. attribute:: rowtrace
+/** .. attribute:: row_trace
   :type: Optional[RowTracer]
 
   Called with the cursor and row being returned for
@@ -4987,11 +4987,11 @@ Connection_set_exectrace_attr(Connection *self, PyObject *value)
 
     * :ref:`tracing`
     * :ref:`rowtracer`
-    * :attr:`Cursor.exectrace`
+    * :attr:`Cursor.exec_trace`
 
 */
 static PyObject *
-Connection_get_rowtrace_attr(Connection *self)
+Connection_get_row_trace_attr(Connection *self)
 {
   CHECK_USE(NULL);
   CHECK_CLOSED(self, NULL);
@@ -5002,14 +5002,14 @@ Connection_get_rowtrace_attr(Connection *self)
 }
 
 static int
-Connection_set_rowtrace_attr(Connection *self, PyObject *value)
+Connection_set_row_trace_attr(Connection *self, PyObject *value)
 {
   CHECK_USE(-1);
   CHECK_CLOSED(self, -1);
 
   if (!Py_IsNone(value) && !PyCallable_Check(value))
   {
-    PyErr_Format(PyExc_TypeError, "rowtrace expected a Callable");
+    PyErr_Format(PyExc_TypeError, "row trace expected a Callable");
     return -1;
   }
   Py_CLEAR(self->rowtrace);
@@ -5117,11 +5117,15 @@ static PyGetSetDef Connection_getseters[] = {
      (setter)Connection_set_cursor_factory, Connection_cursor_factory_DOC, NULL},
     {"in_transaction", (getter)Connection_get_in_transaction,
      NULL, Connection_in_transaction_DOC},
-    {"exectrace", (getter)Connection_get_exectrace_attr, (setter)Connection_set_exectrace_attr, Connection_exectrace_DOC},
-    {"rowtrace", (getter)Connection_get_rowtrace_attr, (setter)Connection_set_rowtrace_attr, Connection_rowtrace_DOC},
+    {"exec_trace", (getter)Connection_get_exec_trace_attr, (setter)Connection_set_exec_trace_attr, Connection_exec_trace_DOC},
+    {"row_trace", (getter)Connection_get_row_trace_attr, (setter)Connection_set_row_trace_attr, Connection_row_trace_DOC},
     {"authorizer", (getter)Connection_get_authorizer_attr, (setter)Connection_set_authorizer_attr, Connection_authorizer_DOC},
     {"system_errno", (getter)Connection_get_system_errno, NULL, Connection_system_errno_DOC},
     {"is_interrupted", (getter)Connection_is_interrupted, NULL, Connection_is_interrupted_DOC},
+#ifndef APSW_OMIT_OLD_NAMES
+    {Connection_exec_trace_OLDNAME, (getter)Connection_get_exec_trace_attr, (setter)Connection_set_exec_trace_attr, Connection_exec_trace_OLDDOC},
+    {Connection_row_trace_OLDNAME, (getter)Connection_get_row_trace_attr, (setter)Connection_set_row_trace_attr, Connection_row_trace_OLDDOC},
+#endif
     /* Sentinel */
     {
         NULL, NULL, NULL, NULL, NULL}};
@@ -5170,72 +5174,72 @@ static PyMethodDef Connection_methods[] = {
      Connection_cursor_DOC},
     {"close", (PyCFunction)Connection_close, METH_FASTCALL | METH_KEYWORDS,
      Connection_close_DOC},
-    {"setbusytimeout", (PyCFunction)Connection_setbusytimeout, METH_FASTCALL | METH_KEYWORDS,
-     Connection_setbusytimeout_DOC},
+    {"set_busy_timeout", (PyCFunction)Connection_set_busy_timeout, METH_FASTCALL | METH_KEYWORDS,
+     Connection_set_busy_timeout_DOC},
     {"interrupt", (PyCFunction)Connection_interrupt, METH_NOARGS,
      Connection_interrupt_DOC},
-    {"createscalarfunction", (PyCFunction)Connection_createscalarfunction, METH_FASTCALL | METH_KEYWORDS,
-     Connection_createscalarfunction_DOC},
-    {"createaggregatefunction", (PyCFunction)Connection_createaggregatefunction, METH_FASTCALL | METH_KEYWORDS,
-     Connection_createaggregatefunction_DOC},
-    {"setbusyhandler", (PyCFunction)Connection_setbusyhandler, METH_FASTCALL | METH_KEYWORDS,
-     Connection_setbusyhandler_DOC},
+    {"create_scalar_function", (PyCFunction)Connection_create_scalar_function, METH_FASTCALL | METH_KEYWORDS,
+     Connection_create_scalar_function_DOC},
+    {"create_aggregate_function", (PyCFunction)Connection_create_aggregate_function, METH_FASTCALL | METH_KEYWORDS,
+     Connection_create_aggregate_function_DOC},
+    {"set_busy_handler", (PyCFunction)Connection_set_busy_handler, METH_FASTCALL | METH_KEYWORDS,
+     Connection_set_busy_handler_DOC},
     {"changes", (PyCFunction)Connection_changes, METH_NOARGS,
      Connection_changes_DOC},
-    {"totalchanges", (PyCFunction)Connection_totalchanges, METH_NOARGS,
-     Connection_totalchanges_DOC},
-    {"getautocommit", (PyCFunction)Connection_getautocommit, METH_NOARGS,
-     Connection_getautocommit_DOC},
-    {"createcollation", (PyCFunction)Connection_createcollation, METH_FASTCALL | METH_KEYWORDS,
-     Connection_createcollation_DOC},
+    {"total_changes", (PyCFunction)Connection_total_changes, METH_NOARGS,
+     Connection_total_changes_DOC},
+    {"get_autocommit", (PyCFunction)Connection_get_autocommit, METH_NOARGS,
+     Connection_get_autocommit_DOC},
+    {"create_collation", (PyCFunction)Connection_create_collation, METH_FASTCALL | METH_KEYWORDS,
+     Connection_create_collation_DOC},
     {"last_insert_rowid", (PyCFunction)Connection_last_insert_rowid, METH_NOARGS,
      Connection_last_insert_rowid_DOC},
     {"set_last_insert_rowid", (PyCFunction)Connection_set_last_insert_rowid, METH_FASTCALL | METH_KEYWORDS,
      Connection_set_last_insert_rowid_DOC},
-    {"collationneeded", (PyCFunction)Connection_collationneeded, METH_FASTCALL | METH_KEYWORDS,
-     Connection_collationneeded_DOC},
-    {"setauthorizer", (PyCFunction)Connection_setauthorizer, METH_FASTCALL | METH_KEYWORDS,
-     Connection_setauthorizer_DOC},
-    {"setupdatehook", (PyCFunction)Connection_setupdatehook, METH_FASTCALL | METH_KEYWORDS,
-     Connection_setupdatehook_DOC},
-    {"setrollbackhook", (PyCFunction)Connection_setrollbackhook, METH_FASTCALL | METH_KEYWORDS,
-     Connection_setrollbackhook_DOC},
-    {"blobopen", (PyCFunction)Connection_blobopen, METH_FASTCALL | METH_KEYWORDS,
-     Connection_blobopen_DOC},
-    {"setprogresshandler", (PyCFunction)Connection_setprogresshandler, METH_FASTCALL | METH_KEYWORDS,
-     Connection_setprogresshandler_DOC},
-    {"setcommithook", (PyCFunction)Connection_setcommithook, METH_FASTCALL | METH_KEYWORDS,
-     Connection_setcommithook_DOC},
-    {"setwalhook", (PyCFunction)Connection_setwalhook, METH_FASTCALL | METH_KEYWORDS,
-     Connection_setwalhook_DOC},
+    {"collation_needed", (PyCFunction)Connection_collation_needed, METH_FASTCALL | METH_KEYWORDS,
+     Connection_collation_needed_DOC},
+    {"set_authorizer", (PyCFunction)Connection_set_authorizer, METH_FASTCALL | METH_KEYWORDS,
+     Connection_set_authorizer_DOC},
+    {"set_update_hook", (PyCFunction)Connection_set_update_hook, METH_FASTCALL | METH_KEYWORDS,
+     Connection_set_update_hook_DOC},
+    {"set_rollback_hook", (PyCFunction)Connection_set_rollback_hook, METH_FASTCALL | METH_KEYWORDS,
+     Connection_set_rollback_hook_DOC},
+    {"blob_open", (PyCFunction)Connection_blob_open, METH_FASTCALL | METH_KEYWORDS,
+     Connection_blob_open_DOC},
+    {"set_progress_handler", (PyCFunction)Connection_set_progress_handler, METH_FASTCALL | METH_KEYWORDS,
+     Connection_set_progress_handler_DOC},
+    {"set_commit_hook", (PyCFunction)Connection_set_commit_hook, METH_FASTCALL | METH_KEYWORDS,
+     Connection_set_commit_hook_DOC},
+    {"set_wal_hook", (PyCFunction)Connection_set_wal_hook, METH_FASTCALL | METH_KEYWORDS,
+     Connection_set_wal_hook_DOC},
     {"limit", (PyCFunction)Connection_limit, METH_FASTCALL | METH_KEYWORDS,
      Connection_limit_DOC},
-    {"setprofile", (PyCFunction)Connection_setprofile, METH_FASTCALL | METH_KEYWORDS,
-     Connection_setprofile_DOC},
+    {"set_profile", (PyCFunction)Connection_set_profile, METH_FASTCALL | METH_KEYWORDS,
+     Connection_set_profile_DOC},
 #ifndef SQLITE_OMIT_LOAD_EXTENSION
-    {"enableloadextension", (PyCFunction)Connection_enableloadextension, METH_FASTCALL | METH_KEYWORDS,
-     Connection_enableloadextension_DOC},
-    {"loadextension", (PyCFunction)Connection_loadextension, METH_FASTCALL | METH_KEYWORDS,
-     Connection_loadextension_DOC},
+    {"enable_load_extension", (PyCFunction)Connection_enable_load_extension, METH_FASTCALL | METH_KEYWORDS,
+     Connection_enable_load_extension_DOC},
+    {"load_extension", (PyCFunction)Connection_load_extension, METH_FASTCALL | METH_KEYWORDS,
+     Connection_load_extension_DOC},
 #endif
-    {"createmodule", (PyCFunction)Connection_createmodule, METH_FASTCALL | METH_KEYWORDS,
-     Connection_createmodule_DOC},
-    {"overloadfunction", (PyCFunction)Connection_overloadfunction, METH_FASTCALL | METH_KEYWORDS,
-     Connection_overloadfunction_DOC},
+    {"create_module", (PyCFunction)Connection_create_module, METH_FASTCALL | METH_KEYWORDS,
+     Connection_create_module_DOC},
+    {"overload_function", (PyCFunction)Connection_overload_function, METH_FASTCALL | METH_KEYWORDS,
+     Connection_overload_function_DOC},
     {"backup", (PyCFunction)Connection_backup, METH_FASTCALL | METH_KEYWORDS,
      Connection_backup_DOC},
-    {"filecontrol", (PyCFunction)Connection_filecontrol, METH_FASTCALL | METH_KEYWORDS,
-     Connection_filecontrol_DOC},
-    {"sqlite3pointer", (PyCFunction)Connection_sqlite3pointer, METH_NOARGS,
-     Connection_sqlite3pointer_DOC},
-    {"setexectrace", (PyCFunction)Connection_setexectrace, METH_FASTCALL | METH_KEYWORDS,
-     Connection_setexectrace_DOC},
-    {"setrowtrace", (PyCFunction)Connection_setrowtrace, METH_FASTCALL | METH_KEYWORDS,
-     Connection_setrowtrace_DOC},
-    {"getexectrace", (PyCFunction)Connection_getexectrace, METH_NOARGS,
-     Connection_getexectrace_DOC},
-    {"getrowtrace", (PyCFunction)Connection_getrowtrace, METH_NOARGS,
-     Connection_getrowtrace_DOC},
+    {"file_control", (PyCFunction)Connection_file_control, METH_FASTCALL | METH_KEYWORDS,
+     Connection_file_control_DOC},
+    {"sqlite3_pointer", (PyCFunction)Connection_sqlite3_pointer, METH_NOARGS,
+     Connection_sqlite3_pointer_DOC},
+    {"set_exec_trace", (PyCFunction)Connection_set_exec_trace, METH_FASTCALL | METH_KEYWORDS,
+     Connection_set_exec_trace_DOC},
+    {"set_row_trace", (PyCFunction)Connection_set_row_trace, METH_FASTCALL | METH_KEYWORDS,
+     Connection_set_row_trace_DOC},
+    {"get_exec_trace", (PyCFunction)Connection_get_exec_trace, METH_NOARGS,
+     Connection_get_exec_trace_DOC},
+    {"get_row_trace", (PyCFunction)Connection_get_row_trace, METH_NOARGS,
+     Connection_get_row_trace_DOC},
     {"__enter__", (PyCFunction)Connection_enter, METH_NOARGS,
      Connection_enter_DOC},
     {"__exit__", (PyCFunction)Connection_exit, METH_FASTCALL | METH_KEYWORDS,
@@ -5270,8 +5274,8 @@ static PyMethodDef Connection_methods[] = {
     {"table_exists", (PyCFunction)Connection_table_exists, METH_FASTCALL | METH_KEYWORDS, Connection_table_exists_DOC},
     {"column_metadata", (PyCFunction)Connection_column_metadata, METH_FASTCALL | METH_KEYWORDS, Connection_column_metadata_DOC},
     {"trace_v2", (PyCFunction)Connection_trace_v2, METH_FASTCALL | METH_KEYWORDS, Connection_trace_v2_DOC},
-    {"cacheflush", (PyCFunction)Connection_cacheflush, METH_NOARGS, Connection_cacheflush_DOC},
-    {"release_memory", (PyCFunction)Connection_release_memory, METH_NOARGS, Connection_release_memory_DOC},
+    {"cache_flush", (PyCFunction)Connection_cache_flush, METH_NOARGS, Connection_cache_flush_DOC},
+    {"release_memory", (PyCFunction)Connection_release_memory, METH_FASTCALL | METH_KEYWORDS, Connection_release_memory_DOC},
     {"drop_modules", (PyCFunction)Connection_drop_modules, METH_FASTCALL | METH_KEYWORDS, Connection_drop_modules_DOC},
     {"create_window_function", (PyCFunction)Connection_create_window_function, METH_FASTCALL | METH_KEYWORDS,
      Connection_create_window_function_DOC},
@@ -5279,6 +5283,63 @@ static PyMethodDef Connection_methods[] = {
     {"vtab_on_conflict", (PyCFunction)Connection_vtab_on_conflict, METH_NOARGS, Connection_vtab_on_conflict_DOC},
     {"pragma", (PyCFunction)Connection_pragma, METH_FASTCALL | METH_KEYWORDS, Connection_pragma_DOC},
     {"read", (PyCFunction)Connection_read, METH_FASTCALL | METH_KEYWORDS, Connection_read_DOC},
+#ifndef APSW_OMIT_OLD_NAMES
+    {Connection_set_busy_timeout_OLDNAME, (PyCFunction)Connection_set_busy_timeout, METH_FASTCALL | METH_KEYWORDS,
+     Connection_set_busy_timeout_OLDDOC},
+    {Connection_create_scalar_function_OLDNAME, (PyCFunction)Connection_create_scalar_function, METH_FASTCALL | METH_KEYWORDS,
+     Connection_create_scalar_function_OLDDOC},
+    {Connection_create_aggregate_function_OLDNAME, (PyCFunction)Connection_create_aggregate_function, METH_FASTCALL | METH_KEYWORDS,
+     Connection_create_aggregate_function_OLDDOC},
+    {Connection_set_busy_handler_OLDNAME, (PyCFunction)Connection_set_busy_handler, METH_FASTCALL | METH_KEYWORDS,
+     Connection_set_busy_handler_OLDDOC},
+    {Connection_total_changes_OLDNAME, (PyCFunction)Connection_total_changes, METH_NOARGS,
+     Connection_total_changes_OLDDOC},
+    {Connection_get_autocommit_OLDNAME, (PyCFunction)Connection_get_autocommit, METH_NOARGS,
+     Connection_get_autocommit_OLDDOC},
+    {Connection_create_collation_OLDNAME, (PyCFunction)Connection_create_collation, METH_FASTCALL | METH_KEYWORDS,
+     Connection_create_collation_OLDDOC},
+    {Connection_collation_needed_OLDNAME, (PyCFunction)Connection_collation_needed, METH_FASTCALL | METH_KEYWORDS,
+     Connection_collation_needed_OLDDOC},
+    {Connection_set_authorizer_OLDNAME, (PyCFunction)Connection_set_authorizer, METH_FASTCALL | METH_KEYWORDS,
+     Connection_set_authorizer_OLDDOC},
+    {Connection_set_update_hook_OLDNAME, (PyCFunction)Connection_set_update_hook, METH_FASTCALL | METH_KEYWORDS,
+     Connection_set_update_hook_OLDDOC},
+    {Connection_set_rollback_hook_OLDNAME, (PyCFunction)Connection_set_rollback_hook, METH_FASTCALL | METH_KEYWORDS,
+     Connection_set_rollback_hook_OLDDOC},
+    {Connection_blob_open_OLDNAME, (PyCFunction)Connection_blob_open, METH_FASTCALL | METH_KEYWORDS,
+     Connection_blob_open_OLDDOC},
+    {Connection_set_progress_handler_OLDNAME, (PyCFunction)Connection_set_progress_handler, METH_FASTCALL | METH_KEYWORDS,
+     Connection_set_progress_handler_OLDDOC},
+    {Connection_set_commit_hook_OLDNAME, (PyCFunction)Connection_set_commit_hook, METH_FASTCALL | METH_KEYWORDS,
+     Connection_set_commit_hook_OLDDOC},
+    {Connection_set_wal_hook_OLDNAME, (PyCFunction)Connection_set_wal_hook, METH_FASTCALL | METH_KEYWORDS,
+     Connection_set_wal_hook_OLDDOC},
+    {Connection_set_profile_OLDNAME, (PyCFunction)Connection_set_profile, METH_FASTCALL | METH_KEYWORDS,
+     Connection_set_profile_OLDDOC},
+    {Connection_create_module_OLDNAME, (PyCFunction)Connection_create_module, METH_FASTCALL | METH_KEYWORDS,
+     Connection_create_module_OLDDOC},
+    {Connection_overload_function_OLDNAME, (PyCFunction)Connection_overload_function, METH_FASTCALL | METH_KEYWORDS,
+     Connection_overload_function_OLDDOC},
+    {Connection_file_control_OLDNAME, (PyCFunction)Connection_file_control, METH_FASTCALL | METH_KEYWORDS,
+     Connection_file_control_OLDDOC},
+    {Connection_sqlite3_pointer_OLDNAME, (PyCFunction)Connection_sqlite3_pointer, METH_NOARGS,
+     Connection_sqlite3_pointer_OLDDOC},
+    {Connection_set_exec_trace_OLDNAME, (PyCFunction)Connection_set_exec_trace, METH_FASTCALL | METH_KEYWORDS,
+     Connection_set_exec_trace_OLDDOC},
+    {Connection_set_row_trace_OLDNAME, (PyCFunction)Connection_set_row_trace, METH_FASTCALL | METH_KEYWORDS,
+     Connection_set_row_trace_OLDDOC},
+    {Connection_get_exec_trace_OLDNAME, (PyCFunction)Connection_get_exec_trace, METH_NOARGS,
+     Connection_get_exec_trace_OLDDOC},
+    {Connection_get_row_trace_OLDNAME, (PyCFunction)Connection_get_row_trace, METH_NOARGS,
+     Connection_get_row_trace_OLDDOC},
+    {Connection_cache_flush_OLDNAME, (PyCFunction)Connection_cache_flush, METH_NOARGS, Connection_cache_flush_OLDDOC},
+#ifndef SQLITE_OMIT_LOAD_EXTENSION
+    {Connection_enable_load_extension_OLDNAME, (PyCFunction)Connection_enable_load_extension, METH_FASTCALL | METH_KEYWORDS,
+     Connection_enable_load_extension_OLDDOC},
+    {Connection_load_extension_OLDNAME, (PyCFunction)Connection_load_extension, METH_FASTCALL | METH_KEYWORDS,
+     Connection_load_extension_OLDDOC},
+#endif
+#endif
     {0, 0, 0, 0} /* Sentinel */
 };
 

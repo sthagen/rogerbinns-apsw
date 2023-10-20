@@ -35,13 +35,13 @@ def doit():
         import apsw
 
         print("   Testing with APSW file ", apsw.__file__)
-        print("             APSW version ", apsw.apswversion())
-        print("       SQLite lib version ", apsw.sqlitelibversion())
+        print("             APSW version ", apsw.apsw_version())
+        print("       SQLite lib version ", apsw.sqlite_lib_version())
         print("   SQLite headers version ", apsw.SQLITE_VERSION_NUMBER, end="\n\n")
 
         def apsw_setup(dbfile):
             con = apsw.Connection(dbfile, statementcachesize=options.scsize, vfs=options.vfs)
-            con.createscalarfunction("number_name", number_name, 1)
+            con.create_scalar_function("number_name", number_name, 1)
             return con
 
     if options.sqlite3:

@@ -20,13 +20,13 @@ from typing import Optional, Iterator, Any
 print("      Using APSW file", apsw.__file__)
 
 # From the extension
-print("         APSW version", apsw.apswversion())
+print("         APSW version", apsw.apsw_version())
 
 # From the sqlite header file at APSW compile time
 print("SQLite header version", apsw.SQLITE_VERSION_NUMBER)
 
 # The SQLite code running
-print("   SQLite lib version", apsw.sqlitelibversion())
+print("   SQLite lib version", apsw.sqlite_lib_version())
 
 # If True then SQLite is incorporated into the extension.
 # If False then a shared library is being used, or static linking
@@ -227,7 +227,7 @@ def my_tracer(cursor: apsw.Cursor, statement: str, bindings: Optional[apsw.Bindi
 
 # you can trace a single cursor
 cursor = connection.cursor()
-cursor.exectrace = my_tracer
+cursor.exec_trace = my_tracer
 cursor.execute(
     """
         drop table if exists bar;
@@ -236,9 +236,9 @@ cursor.execute(
         """, (3, ))
 
 # if set on a connection then all cursors are traced
-connection.exectrace = my_tracer
+connection.exec_trace = my_tracer
 # and clearing it
-connection.exectrace = None
+connection.exec_trace = None
 
 ### rowtrace: Tracing returned rows
 # You can trace returned rows, including modifying what is returned or
@@ -254,18 +254,18 @@ def row_tracer(cursor: apsw.Cursor, row: apsw.SQLiteValues) -> apsw.SQLiteValues
 
 # you can trace a single cursor
 cursor = connection.cursor()
-cursor.rowtrace = row_tracer
+cursor.row_trace = row_tracer
 for row in cursor.execute("select x,y from point where x>4"):
     pass
 
 # if set on a connection then all cursors are traced
-connection.rowtrace = row_tracer
+connection.row_trace = row_tracer
 # and clearing it
-connection.rowtrace = None
+connection.row_trace = None
 
 ### scalar: Defining your own functions
 # Scalar functions take one or more values and return one value.  They
-# are registered by calling :meth:`Connection.createscalarfunction`.
+# are registered by calling :meth:`Connection.create_scalar_function`.
 
 
 def ilove7(*args: apsw.SQLiteValue) -> int:
@@ -274,7 +274,7 @@ def ilove7(*args: apsw.SQLiteValue) -> int:
     return 7
 
 
-connection.createscalarfunction("seven", ilove7)
+connection.create_scalar_function("seven", ilove7)
 
 for row in connection.execute("select seven(x,y) from point where x>4"):
     print("row", row)
@@ -283,7 +283,7 @@ for row in connection.execute("select seven(x,y) from point where x>4"):
 # Aggregate functions are called multiple times with matching rows,
 # and then provide a final value.  An example is calculating an
 # average.  They are registered by calling
-# :meth:`Connection.createaggregatefunction`.
+# :meth:`Connection.create_aggregate_function`.
 
 
 class longest:
@@ -303,7 +303,7 @@ class longest:
         # Called at the very end
         return self.longest
 
-connection.createaggregatefunction("longest", longest)
+connection.create_aggregate_function("longest", longest)
 print(connection.execute("select longest(event) from log").get)
 
 ### window: Defining window functions
@@ -361,7 +361,7 @@ for row in connection.execute("""
 
 ### collation: Defining collations (sorting)
 # How you sort can depend on the languages or values involved.  You
-# register a collation by calling :meth:`Connection.createcollation`.
+# register a collation by calling :meth:`Connection.create_collation`.
 
 # This example sorting mechanisms understands some text followed by a
 # number and ensures the number portion gets sorted correctly
@@ -401,7 +401,7 @@ def str_num_collate(s1: apsw.SQLiteValue, s2: apsw.SQLiteValue) -> int:
     return 0
 
 
-connection.createcollation("strnum", str_num_collate)
+connection.create_collation("strnum", str_num_collate)
 
 print()
 print("Using strnum")
@@ -429,7 +429,7 @@ for row in connection.execute("select title, id, year from books where author=?"
     print("year", row[2])
 
 # Turn on dataclasses - frozen makes them read-only
-connection.rowtrace = apsw.ext.DataClassRowFactory(dataclass_kwargs={"frozen": True})
+connection.row_trace = apsw.ext.DataClassRowFactory(dataclass_kwargs={"frozen": True})
 
 print("\nNow with dataclasses\n")
 
@@ -444,7 +444,7 @@ for row in connection.execute(
     print("year", row.book_year)
 
 # clear
-connection.rowtrace = None
+connection.row_trace = None
 
 ### type_conversion: Type conversion into/out of database
 # You can use :class:`apsw.ext.TypesConverterCursorFactory` to do
@@ -576,7 +576,7 @@ print("\nFirst 5 explain\n", pprint.pformat(qd.explain[:5]))
 # cannot change the size of one, but you can allocate one filled with
 # zeroes, and then later open it and read / write the contents similar
 # to a file, without having the entire blob in memory.  Use
-# :meth:`Connection.blobopen` to open a blob.
+# :meth:`Connection.blob_open` to open a blob.
 
 connection.execute("create table blobby(x,y)")
 # Add a blob we will fill in later
@@ -585,7 +585,7 @@ connection.execute("insert into blobby values(1, zeroblob(10000))")
 connection.execute("insert into blobby values(2, ?)", (apsw.zeroblob(20000), ))
 # Open a blob for writing.  We need to know the rowid
 rowid = connection.execute("select ROWID from blobby where x=1").get
-blob = connection.blobopen("main", "blobby", "y", rowid, True)
+blob = connection.blob_open("main", "blobby", "y", rowid, True)
 blob.write(b"hello world")
 blob.seek(2000)
 blob.write(b"hello world, again")
@@ -623,7 +623,7 @@ connection.authorizer = None
 ### progress_handler: Progress handler
 # Some operations (eg joins, sorting) can take many operations to
 # complete.  Register a progress handler callback with
-# :meth:`Connection.setprogresshandler` which lets you provide
+# :meth:`Connection.set_progress_handler` which lets you provide
 # feedback and allows cancelling.
 
 
@@ -644,18 +644,18 @@ def progress_handler() -> bool:
 
 
 # register handler every 50 vdbe instructions
-connection.setprogresshandler(progress_handler, 50)
+connection.set_progress_handler(progress_handler, 50)
 
 # Sorting the numbers to find the biggest
 for max_num in connection.execute("select max(x) from numbers"):
     print(max_num)
 
 # Clear handler
-connection.setprogresshandler(None)
+connection.set_progress_handler(None)
 
 ### filecontrol: File Control
 # We can get/set low level information using the
-# :meth:`Connection.filecontrol` interface.  In this example we get
+# :meth:`Connection.file_control` interface.  In this example we get
 # the `data version
 # <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html#sqlitefcntldataversion>`__.
 # There is a `pragma
@@ -669,7 +669,7 @@ import ctypes
 def get_data_version(db):
     # unsigned 32 bit integer
     data_version = ctypes.c_uint32(0)
-    ok = db.filecontrol(
+    ok = db.file_control(
         "main",  # or an attached database name
         apsw.SQLITE_FCNTL_DATA_VERSION,  # code
         ctypes.addressof(data_version))  # pass C level pointer
@@ -695,7 +695,7 @@ for sql in (
 
 ### commit_hook: Commit hook
 # A commit hook can allow or veto commits.  Register a commit hook
-# with  :meth:`Connection.setcommithook`.
+# with  :meth:`Connection.set_commit_hook`.
 
 
 def my_commit_hook() -> bool:
@@ -708,20 +708,20 @@ def my_commit_hook() -> bool:
     return False  # let commit go ahead
 
 
-connection.setcommithook(my_commit_hook)
+connection.set_commit_hook(my_commit_hook)
 try:
     with connection:
         connection.execute("create table example(x,y,z); insert into example values (3,4,5)")
 except apsw.ConstraintError:
     print("commit was not allowed")
 
-connection.setcommithook(None)
+connection.set_commit_hook(None)
 
 ### update_hook: Update hook
 # Update hooks let you know that data has been added, changed, or
 # removed.  For example you could use this to discard cached
 # information.  Register a hook using
-# :meth:`Connection.setupdatehook`.
+# :meth:`Connection.set_update_hook`.
 
 
 def my_update_hook(type: int, db_name: str, table_name: str, rowid: int) -> None:
@@ -729,13 +729,13 @@ def my_update_hook(type: int, db_name: str, table_name: str, rowid: int) -> None
     print(f"Updated: { op } db { db_name }, table { table_name }, rowid { rowid }")
 
 
-connection.setupdatehook(my_update_hook)
+connection.set_update_hook(my_update_hook)
 connection.execute("insert into names values(?)", ("file93", ))
 connection.execute("update names set name=? where name=?", ("file94", "file93"))
 connection.execute("delete from names where name=?", ("file94", ))
 
 # Clear the hook
-connection.setupdatehook(None)
+connection.set_update_hook(None)
 
 ### virtual_tables: Virtual tables
 # Virtual tables let you provide data on demand as a SQLite table so
@@ -878,7 +878,7 @@ query = """SELECT extension, SUM(st_size) as total_size
 print(apsw.ext.format_query_table(connection, query, bindings))
 
 # unregister a virtual table by passing None
-connection.createmodule("files_info", None)
+connection.create_module("files_info", None)
 
 ### vfs: VFS - Virtual File System
 # VFS lets you control access to the filesystem from SQLite.  APSW
@@ -946,7 +946,7 @@ class ObfuscatedVFSFile(apsw.VFSFile):
 obfuvfs = ObfuscatedVFS()
 
 # Lets see what vfs are now available?
-print("VFS available", apsw.vfsnames())
+print("VFS available", apsw.vfs_names())
 
 # Make an obfuscated db, passing in some URI parameters
 # default open flags

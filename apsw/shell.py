@@ -210,8 +210,8 @@ class Shell:
         argument is encountered then
         :meth:`process_unknown_args` is called.
         """
-        # we don't use optparse as we need to use single dashes for
-        # options - all hand parsed
+        # we don't use argparse as we need to be compatible with what
+        # SQLite's C code does
         if not args:
             return None, [], []
 
@@ -271,7 +271,7 @@ class Shell:
                 continue
 
             if args[0] == "version":
-                self.write(self.stdout, apsw.sqlitelibversion() + "\n")
+                self.write(self.stdout, apsw.sqlite_lib_version() + "\n")
                 # A pretty gnarly thing to do
                 sys.exit(0)
 
@@ -723,7 +723,7 @@ OPTIONS include:
         """
         if intro is None:
             intro = f"""
-SQLite version { apsw.sqlitelibversion() } (APSW { apsw.apswversion() })
+SQLite version { apsw.sqlite_lib_version() } (APSW { apsw.apsw_version() })
 Enter ".help" for instructions
 """
             intro = intro.lstrip()
@@ -759,7 +759,7 @@ Enter ".help" for instructions
                     self._completion_cache = None
                     self._using_readline = True
                 try:
-                    command = self.getcompleteline()
+                    command = self.get_complete_line()
                     if command is None:  # EOF
                         if self.interactive:
                             self.write(self.stdout, "\n")
@@ -855,7 +855,7 @@ Enter ".help" for instructions
             explain = cursor.is_explain
             return False
 
-        cur.exectrace = et
+        cur.exec_trace = et
 
         try:
             cur.execute(sql, bindings)
@@ -888,7 +888,7 @@ Enter ".help" for instructions
           command which shows table names.
         """
 
-        changes_start = self.db.totalchanges()
+        changes_start = self.db.total_changes()
 
         def fixws(s: str):
             return re.sub(r"\s", " ", s, flags=re.UNICODE)
@@ -945,10 +945,10 @@ Enter ".help" for instructions
             rows = [] if getattr(self.output, "all_at_once", False) else None
 
             cur = self.db.cursor()
-            if self.db.exectrace:
-                cur.exectrace = lambda *args: True
-            if self.db.rowtrace:
-                cur.rowtrace = lambda x, y: y
+            if self.db.exec_trace:
+                cur.exec_trace = lambda *args: True
+            if self.db.row_trace:
+                cur.row_trace = lambda x, y: y
 
             for prow in Shell.PositionRow(cur.execute(qd.query, bindings)):
                 row = prow.row
@@ -982,10 +982,10 @@ Enter ".help" for instructions
             if qd.explain:
                 self.pop_output()
 
-        changes = self.db.totalchanges() - changes_start
+        changes = self.db.total_changes() - changes_start
         if not internal and changes and self.changes:
             text = ("changes: " + self.colour.colour_value(changes, str(changes)) + "\t" + "total changes: " +
-                    self.colour.colour_value(self.db.totalchanges(), str(self.db.totalchanges())) + "\n")
+                    self.colour.colour_value(self.db.total_changes(), str(self.db.total_changes())) + "\n")
             self.write(self.stdout, text)
 
     def process_command(self, command):
@@ -1341,8 +1341,8 @@ Enter ".help" for instructions
                 self.write(self.stdout, textwrap.fill(s, 78, initial_indent="-- ", subsequent_indent="-- ") + "\n")
 
             pats = ", ".join([(x, "(All)")[x == "%"] for x in cmd])
-            comment("SQLite dump (by APSW %s)" % (apsw.apswversion(), ))
-            comment("SQLite version " + apsw.sqlitelibversion())
+            comment("SQLite dump (by APSW %s)" % (apsw.apsw_version(), ))
+            comment("SQLite version " + apsw.sqlite_lib_version())
             comment("Date: " + unicodify(time.strftime("%c")))
             comment("Tables like: " + pats)
             comment("Database: " + self.db.filename)
@@ -2113,11 +2113,11 @@ Enter ".help" for instructions
         if len(cmd) < 1 or len(cmd) > 2:
             raise self.Error("load takes one or two parameters")
         try:
-            self.db.enableloadextension(True)
+            self.db.enable_load_extension(True)
         except Exception:
             raise self.Error("Extension loading is not supported")
 
-        self.db.loadextension(*cmd)
+        self.db.load_extension(*cmd)
 
     def log_handler(self, code, message):
         code = f"( { code } - { apsw.mapping_result_codes.get(code, 'unknown') } ) "
@@ -2500,7 +2500,7 @@ Enter ".help" for instructions
                     self.interactive = False
                     self.input_line_number = 0
                     while True:
-                        line = self.getcompleteline()
+                        line = self.get_complete_line()
                         if line is None:
                             break
                         self.process_complete_line(line)
@@ -2691,7 +2691,7 @@ Enter ".help" for instructions
             t = int(cmd[0])
         except ValueError:
             raise self.Error("%s is not a number" % (cmd[0], ))
-        self.db.setbusytimeout(t)
+        self.db.set_busy_timeout(t)
 
     def command_timer(self, cmd):
         """timer ON|OFF: Control printing of time and resource usage after each query
@@ -2715,9 +2715,9 @@ Enter ".help" for instructions
         if cmd:
             raise self.Error("No parameters taken")
         versions = {
-            "SQLite": f"{ apsw.sqlitelibversion() } { apsw.sqlite3_sourceid() }",
+            "SQLite": f"{ apsw.sqlite_lib_version() } { apsw.sqlite3_sourceid() }",
             "Python": f"{ sys.version } - { sys.executable }",
-            "APSW": apsw.apswversion(),
+            "APSW": apsw.apsw_version(),
             "APSW file": apsw.__file__,
             "Amalgamation": apsw.using_amalgamation,
         }
@@ -2872,7 +2872,7 @@ Enter ".help" for instructions
 
     _raw_input = input
 
-    def getline(self, prompt=""):
+    def get_line(self, prompt=""):
         """Returns a single line of input (may be incomplete SQL) from self.stdin.
 
         If EOF is reached then return None.  Do not include trailing
@@ -2902,7 +2902,7 @@ Enter ".help" for instructions
             line = line[:-1]
         return line
 
-    def getcompleteline(self):
+    def get_complete_line(self):
         """Returns a complete input.
 
         For dot commands it will be one line.  For SQL statements it
@@ -2911,7 +2911,7 @@ Enter ".help" for instructions
         Returns None on end of file."""
         try:
             self._completion_first = True
-            command = self.getline(self.prompt)
+            command = self.get_line(self.prompt)
             if command is None:
                 return None
             if len(command.strip()) == 0:
@@ -2920,7 +2920,7 @@ Enter ".help" for instructions
             # incomplete SQL?
             while command[0] != "." and not apsw.complete(command):
                 self._completion_first = False
-                line = self.getline(self.moreprompt)
+                line = self.get_line(self.moreprompt)
                 if line is None:  # unexpected eof
                     raise self.Error("Incomplete SQL (line %d of %s): %s\n" %
                                      (self.input_line_number, getattr(self.stdin, "name", "<stdin>"), command))
@@ -3356,7 +3356,7 @@ Enter ".help" for instructions
             self.end = False
             self.index = -1
             try:
-                self.columns = tuple(h for h, _ in source.getdescription())
+                self.columns = tuple(h for h, _ in source.get_description())
             except apsw.ExecutionCompleteError:
                 self.columns = None
 
@@ -3409,7 +3409,7 @@ Enter ".help" for instructions
             return True
 
         def __str__(self):
-            return "_colourscheme(" + str(self.__dict__) + ")"
+            return "_colourscheme(" + str(vars(self)) + ")"
 
         def __getattr__(self, k):
             return ""

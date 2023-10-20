@@ -48,7 +48,7 @@ At the C level, they are just one set of methods. At the Python/APSW level,
 they are split over the 3 types of object. The leading **x** is
 omitted in Python. You can return SQLite error codes (eg
 *SQLITE_READONLY*) by raising the appropriate exceptions (eg
-:exc:`ReadOnlyError`).  :meth:`exceptionfor` is a useful helper
+:exc:`ReadOnlyError`).  :meth:`exception_for` is a useful helper
 function to do the mapping.
 
 */
@@ -788,13 +788,13 @@ static PyTypeObject SqliteIndexInfoType = {
 
 A module instance is used to create the virtual tables.  Once you have
 a module object, you register it with a connection by calling
-:meth:`Connection.createmodule`::
+:meth:`Connection.create_module`::
 
   # make an instance
   mymod=MyModuleClass()
 
   # register the vtable on connection con
-  con.createmodule("modulename", mymod)
+  con.create_module("modulename", mymod)
 
   # tell SQLite about the table
   con.execute("create VIRTUAL table tablename USING modulename('arg1', 2)")
@@ -974,7 +974,7 @@ apswvtabCreate(sqlite3 *db,
    <Connection>`.
 
    :param connection: An instance of :class:`Connection`
-   :param modulename: The string name under which the module was :meth:`registered <Connection.createmodule>`
+   :param modulename: The string name under which the module was :meth:`registered <Connection.create_module>`
    :param databasename: The name of the database.  This will be ``main`` for directly opened files and the name specified in
            `ATTACH <https://sqlite.org/lang_attach.html>`_ statements.
    :param tablename: Name of the table the user wants to create.
@@ -1143,7 +1143,7 @@ apswvtabDisconnect(sqlite3_vtab *pVTab)
 
   This method is called instead of :meth:`BestIndex` if
   *use_bestindex_object* was *True* in the call to
-  :meth:`Connection.createmodule`.
+  :meth:`Connection.create_module`.
 
   Use the :class:`IndexInfo` to tell SQLite about your indexes, and
   extract other information.
@@ -1959,7 +1959,7 @@ finally:
 
   .. seealso::
 
-    * :meth:`Connection.overloadfunction`
+    * :meth:`Connection.overload_function`
     * `FindFunction documentation <https://www.sqlite.org/vtab.html#xfindfunction>`__
 
 */
@@ -2381,7 +2381,7 @@ finally:
   had been called.
 
   This method will only be called if *use_no_change* was *True* in the
-  call to :meth:`Connection.createmodule`.
+  call to :meth:`Connection.create_module`.
 
   -* sqlite3_vtab_nochange
 */

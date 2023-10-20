@@ -139,7 +139,7 @@ static PyTypeObject APSWBlobType;
 
 /** .. class:: Blob
 
-  This object is created by :meth:`Connection.blobopen` and provides
+  This object is created by :meth:`Connection.blob_open` and provides
   access to a blob in the database.  It behaves like a Python file.
   At the C level it wraps a `sqlite3_blob
   <https://sqlite.org/c3ref/blob.html>`_.
@@ -314,7 +314,7 @@ APSWBlob_read(APSWBlob *self, PyObject *const *fast_args, Py_ssize_t fast_nargs,
   return buffy;
 }
 
-/** .. method:: readinto(buffer: bytearray |  array.array[Any] | memoryview, offset: int = 0, length: int = -1) -> None
+/** .. method:: read_into(buffer: bytearray |  array.array[Any] | memoryview, offset: int = 0, length: int = -1) -> None
 
   Reads from the blob into a buffer you have supplied.  This method is
   useful if you already have a buffer like object that data is being
@@ -337,7 +337,7 @@ APSWBlob_read(APSWBlob *self, PyObject *const *fast_args, Py_ssize_t fast_nargs,
 */
 
 static PyObject *
-APSWBlob_readinto(APSWBlob *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+APSWBlob_read_into(APSWBlob *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
 {
   int res = SQLITE_OK;
   long long offset = 0, length = -1;
@@ -351,12 +351,12 @@ APSWBlob_readinto(APSWBlob *self, PyObject *const *fast_args, Py_ssize_t fast_na
   CHECK_USE(NULL);
   CHECK_BLOB_CLOSED;
   {
-    Blob_readinto_CHECK;
-    ARG_PROLOG(3, Blob_readinto_KWNAMES);
+    Blob_read_into_CHECK;
+    ARG_PROLOG(3, Blob_read_into_KWNAMES);
     ARG_MANDATORY ARG_pyobject(buffer);
     ARG_OPTIONAL ARG_int64(offset);
     ARG_OPTIONAL ARG_int64(length);
-    ARG_EPILOG(NULL, Blob_readinto_USAGE, );
+    ARG_EPILOG(NULL, Blob_read_into_USAGE, );
   }
 
 #define ERREXIT(x)  \
@@ -599,7 +599,7 @@ APSWBlob_close(APSWBlob *self, PyObject *const *fast_args, Py_ssize_t fast_nargs
 
   For example::
 
-    with connection.blobopen() as blob:
+    with connection.blob_open() as blob:
         blob.write("...")
         res=blob.read(1024)
 
@@ -681,8 +681,8 @@ static PyMethodDef APSWBlob_methods[] = {
      Blob_length_DOC},
     {"read", (PyCFunction)APSWBlob_read, METH_FASTCALL | METH_KEYWORDS,
      Blob_read_DOC},
-    {"readinto", (PyCFunction)APSWBlob_readinto, METH_FASTCALL | METH_KEYWORDS,
-     Blob_readinto_DOC},
+    {"read_into", (PyCFunction)APSWBlob_read_into, METH_FASTCALL | METH_KEYWORDS,
+     Blob_read_into_DOC},
     {"seek", (PyCFunction)APSWBlob_seek, METH_FASTCALL | METH_KEYWORDS,
      Blob_seek_DOC},
     {"tell", (PyCFunction)APSWBlob_tell, METH_NOARGS,
@@ -697,6 +697,10 @@ static PyMethodDef APSWBlob_methods[] = {
      Blob_enter_DOC},
     {"__exit__", (PyCFunction)APSWBlob_exit, METH_VARARGS,
      Blob_exit_DOC},
+#ifndef APSW_OMIT_OLD_NAMES
+    {Blob_read_into_OLDNAME, (PyCFunction)APSWBlob_read_into, METH_FASTCALL | METH_KEYWORDS,
+     Blob_read_into_OLDDOC},
+#endif
     {0, 0, 0, 0} /* Sentinel */
 };
 

@@ -65,22 +65,22 @@ def exercise(example_code, expect_exception):
         return
 
     for n in """
-            SQLITE_VERSION_NUMBER apswversion compile_options keywords memoryused
-            sqlite3_sourceid sqlitelibversion using_amalgamation vfsnames
-            memoryhighwater
+            SQLITE_VERSION_NUMBER apsw_version compile_options keywords memory_used
+            sqlite3_sourceid sqlite_lib_version using_amalgamation vfs_names
+            memory_high_water
         """.split():
         obj = getattr(apsw, n)
         if callable(obj):
             obj()
 
-    apsw.softheaplimit(1_000_000_000)
+    apsw.soft_heap_limit(1_000_000_000)
     apsw.hard_heap_limit(1_000_000_000)
     apsw.randomness(32)
-    apsw.enablesharedcache(False)
-    apsw.releasememory(1024)
-    apsw.exceptionfor(3)
+    apsw.enable_shared_cache(False)
+    apsw.release_memory(1024)
+    apsw.exception_for(3)
     try:
-        apsw.exceptionfor(0xfe)
+        apsw.exception_for(0xfe)
     except ValueError:
         pass
 
@@ -93,8 +93,8 @@ def exercise(example_code, expect_exception):
 
     extfname = "./testextension.sqlext"
     if os.path.exists(extfname):
-        con.enableloadextension(True)
-        con.loadextension(extfname)
+        con.enable_load_extension(True)
+        con.load_extension(extfname)
         con.execute("select half(7)")
 
     con.execute(
@@ -103,10 +103,10 @@ def exercise(example_code, expect_exception):
     def trace(*args):
         return True
 
-    con.exectrace = trace
+    con.exec_trace = trace
     with con:
         con.executemany("insert into foo values(zeroblob(1023))", [tuple() for _ in range(500)])
-    con.exectrace = None
+    con.exec_trace = None
 
     apsw.zeroblob(77).length()
 
@@ -117,21 +117,21 @@ def exercise(example_code, expect_exception):
         con.execute("delete from foo where rowid=?", (victim, ))
 
     con.config(apsw.SQLITE_DBCONFIG_ENABLE_TRIGGER, 1)
-    con.setauthorizer(None)
+    con.set_authorizer(None)
     con.authorizer = None
-    con.collationneeded(None)
-    con.collationneeded(lambda *args: 0)
-    con.enableloadextension(True)
-    con.setbusyhandler(None)
-    con.setbusyhandler(lambda *args: True)
-    con.setbusytimeout(99)
-    con.createscalarfunction("failme", lambda x: x + 1)
+    con.collation_needed(None)
+    con.collation_needed(lambda *args: 0)
+    con.enable_load_extension(True)
+    con.set_busy_handler(None)
+    con.set_busy_handler(lambda *args: True)
+    con.set_busy_timeout(99)
+    con.create_scalar_function("failme", lambda x: x + 1)
     cur = con.cursor()
     for _ in cur.execute("select failme(3)"):
         cur.description
         if hasattr(cur, "description_full"):
             cur.description_full
-        cur.getdescription()
+        cur.get_description()
 
     if expect_exception:
         return
@@ -217,10 +217,10 @@ def exercise(example_code, expect_exception):
             def Close(self):
                 pass
 
-    con.createmodule("vtable", Source(), use_bestindex_object=True, iVersion=3, eponymous=True)
-    con.createmodule("vtable2", Source(), use_bestindex_object=False, iVersion=3, eponymous=True)
-    con.overloadfunction("vtf", 2)
-    con.overloadfunction("vtf", 1)
+    con.create_module("vtable", Source(), use_bestindex_object=True, iVersion=3, eponymous=True)
+    con.create_module("vtable2", Source(), use_bestindex_object=False, iVersion=3, eponymous=True)
+    con.overload_function("vtf", 2)
+    con.overload_function("vtf", 1)
     con.execute("select * from vtable where c2>2 and c1 in (1,2,3)")
     con.execute("create virtual table fred using vtable()")
     con.execute("select vtf(c3) from fred where c3>5; select vtf(c2,c1) from fred where c3>5 order by c2").fetchall()
@@ -234,8 +234,8 @@ def exercise(example_code, expect_exception):
 
     con.drop_modules(["something", "vtable", "something else"])
 
-    con.setprofile(lambda: 1)
-    con.setprofile(None)
+    con.set_profile(lambda: 1)
+    con.set_profile(None)
 
     # has to be done on a real file not memory db
     con2 = apsw.Connection("/tmp/fitesting")
@@ -257,7 +257,7 @@ def exercise(example_code, expect_exception):
     def func(*args):
         return 3.14
 
-    con.createscalarfunction("func", func)
+    con.create_scalar_function("func", func)
     con.execute("select func(1,null,'abc',x'aabb')")
 
     if expect_exception:
@@ -266,11 +266,11 @@ def exercise(example_code, expect_exception):
     def do_nothing():
         pass
 
-    con.setrollbackhook(do_nothing)
+    con.set_rollback_hook(do_nothing)
     con.execute("begin; create table goingaway(x,y,z); rollback")
-    con.setrollbackhook(None)
+    con.set_rollback_hook(None)
 
-    con.collationneeded(lambda *args: con.createcollation("foo", lambda *args: 0))
+    con.collation_needed(lambda *args: con.create_collation("foo", lambda *args: 0))
     con.execute(
         "create table col(x); insert into col values ('aa'), ('bb'), ('cc'); select * from col order by x collate foo")
 
@@ -317,22 +317,22 @@ def exercise(example_code, expect_exception):
         """):
         pass
 
-    for n in """db_names cacheflush changes filename filename_journal
-                filename_wal getautocommit in_transaction interrupt last_insert_rowid
-                open_flags open_vfs release_memory sqlite3pointer system_errno
-                totalchanges txn_state
+    for n in """db_names cache_flush changes filename filename_journal
+                filename_wal get_autocommit in_transaction interrupt last_insert_rowid
+                open_flags open_vfs release_memory sqlite3_pointer system_errno
+                total_changes txn_state
         """.split():
         obj = getattr(con, n)
         if callable(obj):
             obj()
 
     con.execute("create table blobby(x); insert into blobby values(?)", (apsw.zeroblob(990), ))
-    blob = con.blobopen("main", "blobby", "x", con.last_insert_rowid(), True)
+    blob = con.blob_open("main", "blobby", "x", con.last_insert_rowid(), True)
     blob.write(b"hello world")
     blob.seek(80)
     blob.read(10)
     m = bytearray(b"12345678")
-    blob.readinto(m)
+    blob.read_into(m)
     blob.tell()
     blob.read(0)
     blob.seek(blob.length())
@@ -360,7 +360,7 @@ def exercise(example_code, expect_exception):
     with con2.backup("main", con, "main") as backup:
         while backup.remaining:
             backup.step(1)
-            backup.pagecount
+            backup.page_count
     backup.finish()
     del con2
 
@@ -475,7 +475,7 @@ def exercise(example_code, expect_exception):
         apsw.tests.vfstestdb(f"{ tmpdir.name }/dbfile-delme-vfswal", "apswfivfs2", mode="wal")
         testing_recursion = False
 
-    apsw.set_default_vfs(apsw.vfsnames()[0])
+    apsw.set_default_vfs(apsw.vfs_names()[0])
     apsw.unregister_vfs("apswfivfs")
 
     del vfsinstance

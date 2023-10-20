@@ -39,14 +39,14 @@ clean: ## Cleans up everything
 	mkdir dist
 	for i in 'vgcore.*' '.coverage' '*.pyc' '*.pyo' '*~' '*.o' '*.so' '*.dll' '*.pyd' '*.gcov' '*.gcda' '*.gcno' '*.orig' '*.tmp' 'testdb*' 'testextension.sqlext' ; do \
 		find . -type f -name "$$i" -print0 | xargs -0 --no-run-if-empty rm -f ; done
-	rm -f doc/typing.rstgen doc/example.rst $(GENDOCS)
+	rm -f doc/typing.rstgen doc/example.rst doc/renames.rstgen $(GENDOCS)
 	-rm -rf sqlite3/
 
 doc: docs ## Builds all the doc
 
 docs: build_ext docs-no-fetch
 
-docs-no-fetch: $(GENDOCS) doc/example.rst doc/.static doc/typing.rstgen
+docs-no-fetch: $(GENDOCS) doc/example.rst doc/.static doc/typing.rstgen doc/renames.rstgen
 	rm -f testdb
 	env PYTHONPATH=. $(PYTHON) tools/docmissing.py
 	env PYTHONPATH=. $(PYTHON) tools/docupdate.py $(VERSION)
@@ -62,6 +62,11 @@ doc/example.rst: example-code.py tools/example2rst.py src/apswversion.h
 doc/typing.rstgen: src/apswtypes.py tools/types2rst.py
 	-rm -f doc/typing.rstgen
 	$(PYTHON) tools/types2rst.py
+
+doc/renames.rstgen: tools/names.py tools/renames.json
+	-rm -f doc/renames.rstgen
+	env PYTHONPATH=. $(PYTHON) tools/names.py rst-gen > doc/renames.rstgen
+
 
 doc/.static:
 	mkdir -p doc/.static
@@ -88,7 +93,7 @@ src/stringconstants.c: Makefile tools/genstrings.py src/apswversion.h
 	-rm -f src/stringconstants.c
 	$(PYTHON) tools/genstrings.py > src/stringconstants.c
 
-build_ext: src/apswversion.h  ## Fetches SQLite and builds the extension
+build_ext: src/apswversion.h  apsw/__init__.pyi src/apsw.docstrings ## Fetches SQLite and builds the extension
 	env $(PYTHON) setup.py fetch --version=$(SQLITEVERSION) --all build_ext -DSQLITE_ENABLE_COLUMN_METADATA --inplace --force --enable-all-extensions
 
 src/faultinject.h: tools/genfaultinject.py
@@ -115,6 +120,11 @@ pycoverage:  ## Coverage of the Python code
 
 test: build_ext ## Standard testing
 	env $(PYTHON) -m apsw.tests
+	env PYTHONPATH=. $(PYTHON) tools/names.py run-tests
+	env $(PYTHON) setup.py build_ext -DSQLITE_ENABLE_COLUMN_METADATA --inplace --force --enable-all-extensions --apsw-no-old-names
+	env $(PYTHON) -m apsw.tests
+	rm apsw/__init__.pyi
+	$(MAKE) apsw/__init__.pyi
 
 test_debug: $(PYDEBUG_DIR)/bin/python3  src/faultinject.h ## Testing in debug mode and sanitizer
 	$(MAKE) build_ext_debug PYTHON=$(PYDEBUG_DIR)/bin/python3

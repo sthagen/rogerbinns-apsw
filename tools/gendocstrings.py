@@ -31,6 +31,8 @@ import collections
 import copy
 import pathlib
 
+import names
+
 # symbols to skip because we can't apply docstrings (PyModule_AddObject doesn't take docstring)
 docstrings_skip = {
     "apsw.compile_options",
@@ -89,6 +91,18 @@ def get_mapping_info(name: str) -> dict:
         raise ValueError(f"Couldn't figure out { name }")
     f = found_in[-1]
     return {"title": f[1], "url": f[2]["page"], "members": f[2]["vars"]}
+
+
+def get_old_name(item) -> str | None:
+    klass, member = item["name"].split(".")
+    try:
+        return names.renames[klass][member]
+    except KeyError:
+        return None
+
+
+def get_usage(item) -> str:
+    return f"{ item['name'] }{ item['signature_original'] }".replace('"', '\\"')
 
 
 all_exc_doc = {}
@@ -356,13 +370,13 @@ def replace_if_different(filename: str, contents: str) -> None:
 # Python 'int' can be different C sizes (int32, int64 etc) so we override with more
 # specific types here
 type_overrides = {
-    "apsw.softheaplimit": {
+    "apsw.soft_heap_limit": {
         "limit": "int64"
     },
     "apsw.hard_heap_limit": {
         "limit": "int64"
     },
-    "Blob.readinto": {
+    "Blob.read_into": {
         "buffer": "PyObject",
         "offset": "int64",
         "length": "int64"
@@ -370,13 +384,13 @@ type_overrides = {
     "Blob.reopen": {
         "rowid": "int64"
     },
-    "Connection.blobopen": {
+    "Connection.blob_open": {
         "rowid": "int64"
     },
     "Connection.drop_modules": {
         "keep": "PyObject"
     },
-    "Connection.filecontrol": {
+    "Connection.file_control": {
         "pointer": "pointer"
     },
     "Connection.read": {
@@ -411,8 +425,7 @@ type_overrides = {
     "VFSFile.xWrite": {
         "offset": "int64"
     },
-    "VFSFcntlPragma.__init__":
-    {
+    "VFSFcntlPragma.__init__": {
         "pointer": "pointer",
     },
     "VFS.xDlClose": {
@@ -479,7 +492,7 @@ def do_argparse(item):
     code = ""
 
     seen_star = False
-    max_pos= None
+    max_pos = None
     for param in item["signature"]:
         if param["name"] == "return":
             continue
@@ -639,7 +652,7 @@ def do_argparse(item):
             res.append(f"  assert({ default_check }); \\")
 
         mandatory = "ARG_MANDATORY " if not seen_star else "ARG_OPTIONAL "
-        code+=(f"    { mandatory }ARG_{ kind }({ pname });\n")
+        code += (f"    { mandatory }ARG_{ kind }({ pname });\n")
 
     res.append("} while(0)\n")
     if max_pos is None:
@@ -657,11 +670,9 @@ def do_argparse(item):
 
     code = "\n".join(line for line in code.split("\n") if line.strip())
 
-    usage = f"{ item['name'] }{ item['signature_original'] }".replace('"', '\\"')
-    res.insert(0, f"""#define { item['symbol'] }_USAGE "{ usage }"\n""")
+    res.insert(0, f"""#define { item['symbol'] }_USAGE "{ get_usage(item) }"\n""")
     n = ", ".join(f'"{ a }"' for a in kwlist)
     res.insert(0, f"""#define { item['symbol'] }_KWNAMES { n }""")
-
 
     check_and_update(f"{ item['symbol'] }_CHECK", code)
 
@@ -734,16 +745,14 @@ def generate_typestubs(items: list[dict]) -> None:
                 assert signature.startswith("(")
                 print(f"{ baseindent }def { name }{ signature }:", file=out)
                 print(fmt_docstring(item["doc"], indent=f"{ baseindent }    "), file=out)
-                print(f"{ baseindent }    ...\n", file=out)
+                print(f"{ baseindent }    ...", file=out)
             else:
                 assert item["kind"] == "attribute"
                 print(f"{ baseindent }{ name }: { attribute_type(item) }", file=out)
                 print(fmt_docstring(attr_docstring(item["doc"]), indent=baseindent), file=out)
-                print("", file=out)
         else:
             if klass != lastclass:
                 lastclass = klass
-                #print("\n", file=out)
                 doc = get_class_doc(klass, items)
 
                 baseindent = ""
@@ -754,7 +763,6 @@ def generate_typestubs(items: list[dict]) -> None:
                     print("@final", file=out)
                 print(f"{ baseindent }class { klass }{ extra }:", file=out)
                 print(fmt_docstring(doc, indent=f"{ baseindent }    "), file=out)
-                print("", file=out)
 
             if item["kind"] == "method":
                 for find, replace in (
@@ -766,13 +774,20 @@ def generate_typestubs(items: list[dict]) -> None:
                     signature = "(self" + (", " if signature[1] != ")" else "") + signature[1:]
                 print(f"{ baseindent }    def { name }{ signature }:", file=out)
                 print(fmt_docstring(item["doc"], indent=f"{ baseindent }        "), file=out)
-                print(f"{ baseindent }        ...\n", file=out)
+                print(f"{ baseindent }        ...", file=out)
 
             else:
                 assert item["kind"] == "attribute"
                 print(f"{ baseindent }    { name }: { attribute_type(item) }", file=out)
                 print(fmt_docstring(attr_docstring(item["doc"]), indent=f"{ baseindent }    "), file=out)
-                print("", file=out)
+
+        print("", file=out)
+
+        try:
+            old_name = names.renames[klass][name]
+        except KeyError:
+            continue
+        print(f"{ baseindent }{ '    ' if klass != 'apsw' else '' }{ old_name } = { name } ## OLD-NAME\n", file=out)
 
     # constants
     print("\n", file=out)
@@ -849,6 +864,7 @@ if __name__ == '__main__':
         if item["skip_docstring"]:
             continue
         print(f"""{ method } { item["symbol"] }_DOC{ mid }{ fixup( item, eol) } { end }\n""", file=out)
+
         if f"{ item['symbol'] }_CHECK" in allcode:
             print(do_argparse(item), file=out)
         else:
@@ -866,6 +882,17 @@ if __name__ == '__main__':
                         "Blob.__exit__",
                 }:
                     missing.append(item["name"])
+
+        if item["kind"] != "class":
+            old_name = get_old_name(item)
+            if old_name:
+                print(f'''#define { item['symbol'] }_OLDNAME "{ old_name }"''', file=out)
+                if f"{ item['symbol'] }_CHECK" not in allcode:
+                    print(f'''#define { item['symbol'] }_USAGE "{ get_usage(item) }"''', file=out)
+                print(
+                    f'''#define { item['symbol'] }_OLDDOC { item['symbol'] }_USAGE "\\n(Old less clear name { old_name })"\n''',
+                    file=out)
+
     for name, doc in sorted(all_exc_doc.items()):
         print(f"""{ method } { name }_exc_DOC{ mid }{ cppsafe(doc, eol) } { end }\n""", file=out)
 

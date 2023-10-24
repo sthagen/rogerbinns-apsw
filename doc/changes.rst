@@ -3,9 +3,6 @@ Change History
 
 .. currentmodule:: apsw
 
-Better :pep:`8` complaint names for some methods and attributes were
-added - :ref:`see details <renaming>`.
-
 You may also be interested in the `SQLite release history
 <https://www.sqlite.org/chronology.html>`__ and `Python release
 history <https://devguide.python.org/versions/>`__.
@@ -13,8 +10,8 @@ history <https://devguide.python.org/versions/>`__.
 APSW changes by version
 -----------------------
 
-next
-====
+3.43.2.0
+========
 
 :meth:`Connection.create_aggregate_function` can take a class with step
 and final methods. (:issue:`421`)

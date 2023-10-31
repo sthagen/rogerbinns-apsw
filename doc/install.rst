@@ -162,7 +162,9 @@ downloaded for Windows.)
 Verify
 
   To verify a file use --verify specifying the corresponding
-  ``.asc`` filename.  This example verifies the source::
+  ``.asc`` filename.  This example verifies the source:
+
+  .. code-block:: console
 
       $ gpg --verify apsw-3.43.2.0.zip.asc
       gpg: Signature made ... date ... using DSA key ID 0DFBD904
@@ -174,11 +176,15 @@ Verify
 Getting the signing key
 
   You may not have the signing key available in which case the last
-  line will be something like this::
+  line will be something like this:
 
-   gpg: Can't check signature: public key not found
+  .. code-block:: output
 
-  You can get a copy of the key using this command::
+     gpg: Can't check signature: public key not found
+
+  You can get a copy of the key using this command:
+
+  .. code-block:: console
 
     $ gpg --keyserver hkp://keyserver.ubuntu.com --recv-keys 0DFBD904
     gpg: requesting key 0DFBD904 from hkp server keyserver.ubuntu.com
@@ -206,17 +212,17 @@ Does the complete build.  This will invoke `build_ext` - use only one of
 .. list-table::
     :widths: auto
 
-    * - --fetch
+    * - ``--fetch``
       - Fetches the corresponding SQLite version
-    * - --enable-all-extensions
+    * - ``--enable-all-extensions``
       - Enables all the :doc:`standard extensions <extensions>`
-    * - --enable
+    * - ``--enable``
       - A comma separated list of `options to enable that are normally
         off
         <https://www.sqlite.org/compile.html#_options_to_enable_features_normally_turned_off>`__
         omitting the :code:`SQLITE_ENABLE` prefix.  They will be
         uppercased.  eg :code:`--enable column_metadata,fts5`
-    * - --omit
+    * - ``--omit``
       - A comma separated list of `options to omit that are normally
         enabled <https://www.sqlite.org/compile.html#_options_to_omit_features>`__
         omitting the :code:`SQLITE_OMIT` prefix.  They will be
@@ -233,15 +239,15 @@ This provides more fine grained control over what is fetched.
 ..  list-table::
     :widths: auto
 
-    * - --version
+    * - ``--version``
       - Specify an explicit version of SQLite to fetch
-    * - --fetch-sqlite
+    * - ``--fetch-sqlite``
       - Downloads the SQLite amalgamation
-    * - --all
+    * - ``--all``
       - Downloads all SQLite components other than the amalgamation.
         Over time this has included additional extensions and SQLite
         functions, but currently is nothing.
-    * - --missing-checksum-ok
+    * - ``--missing-checksum-ok``
       - APSW includes checksums of SQLite releases and will fail a
         fetch if you specify a version for which no checksum is known.
         This allows proceeding.
@@ -257,26 +263,26 @@ This performs the compilation of the C code.
 ..  list-table::
     :widths: auto
 
-    * - --use-system-sqlite-config
+    * - ``--use-system-sqlite-config``
       - Uses :mod:`ctypes` to determine the system wide SQLite library
         compilation options
-    * - --definevalues
+    * - ``--definevalues``
       - Additional #defines separated by commas.  eg :code:`--definevalues
         SQLITE_MAX_ATTACHED=37,SQLITE_EXTRA_INIT=mycore_init`
-    * - --enable-all-extensions
+    * - ``--enable-all-extensions``
       - Enables all the :doc:`standard extensions <extensions>`
-    * - --enable
+    * - ``--enable``
       - A comma separated list of `options to enable that are normally
         off
         <https://www.sqlite.org/compile.html#_options_to_enable_features_normally_turned_off>`__
         omitting the :code:`SQLITE_ENABLE` prefix.  They will be
         uppercased.  eg :code:`--enable column_metadata,fts5`
-    * - --omit
+    * - ``--omit``
       - A comma separated list of `options to omit that are normally
         enabled <https://www.sqlite.org/compile.html#_options_to_omit_features>`__
         omitting the :code:`SQLITE_OMIT` prefix.  They will be
         uppercased.  eg :code:`--omit automatic_index`
-    * - --apsw-no-old-names
+    * - ``--apsw-no-old-names``
       - Excludes old non :pep:`8` :ref:`complaint name aliases
         <renaming>` from the extension and type stubs.
 
@@ -292,7 +298,9 @@ dedicated to testing than makes up the actual database functionality.
 APSW includes tests which use the standard Python testing modules to
 verify correct operation. New code is developed alongside the tests.
 Reported issues also have test cases to ensure the issue doesn't
-happen or doesn't happen again.::
+happen or doesn't happen again.:
+
+.. code-block:: output
 
   $ python3 -m apsw.tests
                   Python  /usr/bin/python3 sys.version_info(major=3, minor=10, micro=4, releaselevel='final', serial=0)

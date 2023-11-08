@@ -41,6 +41,14 @@ except ImportError:
         return s in _keywords
 
 
+def result_string(code: int) -> str:
+    """Turns a result or extended result code into a string.
+    The appropriate mapping based on the value is used."""
+    if code < 256:
+        return apsw.mapping_result_codes.get(code, str(code))
+    return apsw.mapping_extended_result_codes.get(code, str(code))
+
+
 class DataClassRowFactory:
     """Returns each row as a :mod:`dataclass <dataclasses>`, accessible by column name.
 
@@ -289,16 +297,15 @@ def log_sqlite(*, level: int = logging.ERROR) -> None:
 
     def handler(errcode: int, message: str) -> None:
         nonlocal level
-        err_str = apsw.mapping_result_codes.get(errcode & 255, str(errcode))
+        err_str = result_string(errcode)
         extra = {"sqlite_code": errcode, "sqlite_code_name": err_str, "sqlite_message": message}
         if errcode & 0xff == apsw.SQLITE_WARNING:
             level = min(level, logging.WARNING)
         logging.log(level,
-                    "SQLITE_LOG: %s (%d) %s %s",
+                    "SQLITE_LOG: %s (%d) %s",
                     message,
                     errcode,
                     err_str,
-                    apsw.mapping_extended_result_codes.get(errcode, ""),
                     extra=extra)
 
     apsw.config(apsw.SQLITE_CONFIG_LOG, handler)
@@ -1198,7 +1205,7 @@ def make_virtual_module(db: apsw.Connection,
                 return v  # type: ignore[no-any-return]
 
             def _Column_repr_invalid(self, which: int) -> apsw.SQLiteValue:
-                v = self._Column_get(which) # type: ignore[attr-defined]
+                v = self._Column_get(which)  # type: ignore[attr-defined]
                 return v if v is None or isinstance(v, (int, float, str, bytes)) else repr(v)
 
             def _Column_By_Attr(self, which: int) -> apsw.SQLiteValue:

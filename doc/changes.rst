@@ -13,6 +13,9 @@ APSW changes by version
 3.44.1.0
 ========
 
+Added `logger` parameter to :func:`apsw.ext.log_sqlite` to use a
+specific :class:`logging.Logger` (:issue:`493`)
+
 Added :func:`apsw.ext.result_string` to turn an result code into
 a string, taking into account if it is extended or not.
 
@@ -20,6 +23,7 @@ Provide detail when C implemented objects are printed. For example
 :class:`connections <Connection>` include the filename.
 (:issue:`494`)
 
+Added :meth:`URIFilename.parameters` (:issue:`496`)
 
 3.44.0.0
 ========

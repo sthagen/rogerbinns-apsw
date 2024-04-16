@@ -1,8 +1,8 @@
 
-SQLITEVERSION=3.45.2
+SQLITEVERSION=3.45.3
 APSWSUFFIX=.0
 
-RELEASEDATE="13 March 2024"
+RELEASEDATE="17 April 2024"
 
 VERSION=$(SQLITEVERSION)$(APSWSUFFIX)
 VERDIR=apsw-$(VERSION)
@@ -200,7 +200,12 @@ compile-win-one:  ## Does one Windows build - set PYTHON variable
 	$(PYTHON) -m apsw.tests
 	-del /q setup.apsw *.whl
 
+# We ensure that only master can be made source, and that the
+# myriad caches everywhere are removed (they end up in the examples
+# doc)
 source_nocheck: src/apswversion.h
+	test "`git branch --show-current`" = master
+	find . -depth -name '.*cache' -type d -exec rm -r "{}" \;
 	env APSW_NO_GA=t $(MAKE) doc
 	$(PYTHON) setup.py sdist --formats zip --add-doc
 

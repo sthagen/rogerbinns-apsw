@@ -1188,6 +1188,14 @@ class APSW(unittest.TestCase):
     def testIssue425(self):
         "Infinite recursion"
 
+        # When Python tries to output an error message after reaching
+        # the recursion limit it can segv which is nothing to do with
+        # the apsw code, and the Python code looks good to me.  Debug
+        # Python builds don't have this problem.  See the commit
+        # message for this change for backtrace etc.
+        if "d" not in getattr(sys, "abiflags", ""):
+            return
+
         class VFSA(apsw.VFS):
 
             def __init__(self):
@@ -3247,6 +3255,8 @@ class APSW(unittest.TestCase):
         wasrun = [False]
 
         def profile(*args):
+            # should still be run despite there being a pending exception
+            # from the update hook
             wasrun[0] = True
 
         def uh(*args):
@@ -3255,7 +3265,7 @@ class APSW(unittest.TestCase):
         self.db.set_profile(profile)
         self.db.set_update_hook(uh)
         self.assertRaises(ZeroDivisionError, c.execute, "insert into foo values(3)")
-        self.assertEqual(wasrun[0], False)
+        self.assertEqual(wasrun[0], True)
         self.db.set_profile(None)
         self.db.set_update_hook(None)
 
@@ -6277,8 +6287,58 @@ class APSW(unittest.TestCase):
             1 / 0
 
         self.db.trace_v2(apsw.SQLITE_TRACE_STMT, tracehook)
-        self.assertRaisesUnraisable(ZeroDivisionError, self.db.execute, query)
+        self.assertRaises(ZeroDivisionError, self.db.execute, query)
         self.assertEqual(0, len(results))
+
+        # added with id parameter
+        counter = [0]
+
+        def meth():
+            while True:
+                self.db.trace_v2(apsw.SQLITE_TRACE_STMT, meth, id=f"hello{counter[0]}")
+                counter[0] += 1
+
+        with contextlib.suppress(MemoryError):
+            meth()
+
+        self.assertGreater(counter[0], 1000)
+
+        # ensure all unregistered
+        for i in range(0, counter[0]+1):
+            self.db.trace_v2(0, None, id = f"hello{i}")
+        self.db.trace_v2(0, None) # tracehook zero div above
+
+        # should be fine
+        self.db.execute("select 3").get
+
+        # have exceptions -  ensure all called
+        counter = [0]
+        for i in range(10):
+            def meth(*args):
+                counter[0] += 1
+                1/0
+            self.db.trace_v2(apsw.SQLITE_TRACE_ROW, meth, id = meth)
+
+        with contextlib.suppress(ZeroDivisionError):
+            self.db.execute("select 4").get
+
+        self.assertEqual(counter[0], 10)
+
+        # bad equals for id checking
+        class bad_equals:
+            def __eq__(self, other):
+                1 / 0
+
+        self.assertRaises(ZeroDivisionError, self.db.trace_v2, apsw.SQLITE_TRACE_ROW, bad_equals, id=bad_equals())
+
+        def harmless(*args):
+            counter[0] = 99
+            1/0
+
+        self.db.trace_v2(apsw.SQLITE_TRACE_CLOSE, harmless, id="jkhkjh")
+
+        with contextlib.suppress(ZeroDivisionError):
+            self.db.close()
 
     def testURIFilenames(self):
         assertRaises = self.assertRaises
@@ -8519,6 +8579,22 @@ class APSW(unittest.TestCase):
                 isempty(fh[2])
                 testnasty()
 
+            # check help for them
+            reset()
+            cmd(".bail off\n.mode box --help")
+            s.cmdloop()
+            isempty(fh[1])
+            self.assertIn("Use unicode line drawing", get(fh[2]))
+            reset()
+            cmd(".mode table --fred 3")
+            s.cmdloop()
+            isempty(fh[1])
+            self.assertIn("fred", get(fh[2]))
+            self.assertIn("--help", get(fh[2]))
+            reset()
+            cmd(".bail on")
+            s.cmdloop()
+
         # What happens if db cannot be opened?
         s.process_args(args=["/"])
         reset()
@@ -10055,6 +10131,9 @@ shell.write(shell.stdout, "hello world\\n")
         if sys.version_info >= (3, 10):
             with self.assertNoLogs():
                 self.assertRaises(apsw.SQLError, con.execute, dqs)
+
+        # can't optimize or WAL readonly databases
+        apsw.Connection(self.db.filename, flags = apsw.SQLITE_OPEN_READONLY)
 
     def testExtDataClassRowFactory(self) -> None:
         "apsw.ext.DataClassRowFactory"

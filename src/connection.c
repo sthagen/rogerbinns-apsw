@@ -76,6 +76,8 @@ struct Connection
 
   struct StatementCache *stmtcache; /* prepared statement cache */
 
+  fts5_api *fts5_api_cached;
+
   PyObject *dependents; /* tracking cursors & blobs etc as weakrefs belonging to this connection */
 
   PyObject *cursor_factory;
@@ -380,6 +382,7 @@ Connection_new(PyTypeObject *type, PyObject *Py_UNUSED(args), PyObject *Py_UNUSE
     self->inuse = 0;
     self->dependents = PyList_New(0);
     self->stmtcache = 0;
+    self->fts5_api_cached = 0;
     self->busyhandler = 0;
     self->rollbackhook = 0;
     self->updatehook = 0;
@@ -1222,37 +1225,40 @@ tracehook_cb(unsigned code, void *vconnection, void *one, void *two)
   {
 
   case SQLITE_TRACE_STMT:
-#define V(x) sqlite3_stmt_status(stmt, x, 1)
-
     stmt = (sqlite3_stmt *)one;
-    /* reset all the counters */
-    V(SQLITE_STMTSTATUS_FULLSCAN_STEP);
-    V(SQLITE_STMTSTATUS_SORT);
-    V(SQLITE_STMTSTATUS_AUTOINDEX);
-    V(SQLITE_STMTSTATUS_VM_STEP);
-    V(SQLITE_STMTSTATUS_REPREPARE);
-    V(SQLITE_STMTSTATUS_RUN);
-    V(SQLITE_STMTSTATUS_FILTER_MISS);
-    V(SQLITE_STMTSTATUS_FILTER_HIT);
-#undef V
+    const char *sql = (const char *)two;
+    int trigger = sql[0] == '-' && sql[1] == '-' && sql[2] == ' ';
 
+    if (!trigger)
+    {
+#define V(x) sqlite3_stmt_status(stmt, x, 1)
+      /* reset all the counters */
+      V(SQLITE_STMTSTATUS_FULLSCAN_STEP);
+      V(SQLITE_STMTSTATUS_SORT);
+      V(SQLITE_STMTSTATUS_AUTOINDEX);
+      V(SQLITE_STMTSTATUS_VM_STEP);
+      V(SQLITE_STMTSTATUS_REPREPARE);
+      V(SQLITE_STMTSTATUS_RUN);
+      V(SQLITE_STMTSTATUS_FILTER_MISS);
+      V(SQLITE_STMTSTATUS_FILTER_HIT);
+#undef V
+    }
     for (unsigned i = 1; i < connection->tracehooks_count; i++)
     {
       /* only calculate this if needed */
       if (connection->tracehooks[i].mask & SQLITE_TRACE_STMT)
       {
 
-        param = Py_BuildValue("{s: i, s: s, s: O}",
-                              "code", code, "sql", sqlite3_sql(stmt), "connection", connection);
+        param = Py_BuildValue("{s: i, s: N, s: s, s: O, s: O, s: L}", "code", code, "id", PyLong_FromVoidPtr(one),
+                              "sql", trigger ? sql + 3 : sql, "trigger", trigger ? Py_True : Py_False, "connection",
+                              connection, "total_changes", sqlite3_total_changes64(connection->db));
         break;
       }
     }
     break;
 
   case SQLITE_TRACE_ROW:
-    stmt = (sqlite3_stmt *)one;
-    param = Py_BuildValue("{s: i, s: s, s: O}",
-                          "code", code, "sql", sqlite3_sql(stmt), "connection", connection);
+    param = Py_BuildValue("{s: i, s: N, s: O}", "code", code, "id", PyLong_FromVoidPtr(one), "connection", connection);
     break;
 
   case SQLITE_TRACE_CLOSE:
@@ -1261,8 +1267,8 @@ tracehook_cb(unsigned code, void *vconnection, void *one, void *two)
        then the ref count is zero when the callback fires and adding a
        reference ressurects a mostly destroyed object which then hits zero
        again and gets destroyed a second time.  Too difficult to handle. */
-    param = Py_BuildValue("{s: i, s: O}",
-                          "code", code, "connection", Py_REFCNT(connection) ? (PyObject *)connection : Py_None);
+    param = Py_BuildValue("{s: i, s: O}", "code", code, "connection",
+                          Py_REFCNT(connection) ? (PyObject *)connection : Py_None);
     break;
 
   case SQLITE_TRACE_PROFILE:
@@ -1279,18 +1285,13 @@ tracehook_cb(unsigned code, void *vconnection, void *one, void *two)
       {
         /* only SQLITE_STMTSTATUS_MEMUSED actually needs mutex */
         sqlite3_mutex_enter(sqlite3_db_mutex(connection->db));
-        param = Py_BuildValue("{s: i, s: O, s: s, s: L, s: {" K K K K K K K K "s: i}}",
-                              "code", code, "connection", connection, "sql", sqlite3_sql(stmt),
-                              "nanoseconds", *nanoseconds, "stmt_status",
-                              V(SQLITE_STMTSTATUS_FULLSCAN_STEP),
-                              V(SQLITE_STMTSTATUS_SORT),
-                              V(SQLITE_STMTSTATUS_AUTOINDEX),
-                              V(SQLITE_STMTSTATUS_VM_STEP),
-                              V(SQLITE_STMTSTATUS_REPREPARE),
-                              V(SQLITE_STMTSTATUS_RUN),
-                              V(SQLITE_STMTSTATUS_FILTER_MISS),
-                              V(SQLITE_STMTSTATUS_FILTER_HIT),
-                              V(SQLITE_STMTSTATUS_MEMUSED));
+        param = Py_BuildValue(
+            "{s: i, s: O, s: N, s: s, s: L, s: L, s: {" K K K K K K K K "s: i}}", "code", code, "connection",
+            connection, "id", PyLong_FromVoidPtr(one), "sql", sqlite3_sql(stmt), "nanoseconds", *nanoseconds,
+            "total_changes", sqlite3_total_changes64(connection->db), "stmt_status", V(SQLITE_STMTSTATUS_FULLSCAN_STEP),
+            V(SQLITE_STMTSTATUS_SORT), V(SQLITE_STMTSTATUS_AUTOINDEX), V(SQLITE_STMTSTATUS_VM_STEP),
+            V(SQLITE_STMTSTATUS_REPREPARE), V(SQLITE_STMTSTATUS_RUN), V(SQLITE_STMTSTATUS_FILTER_MISS),
+            V(SQLITE_STMTSTATUS_FILTER_HIT), V(SQLITE_STMTSTATUS_MEMUSED));
         sqlite3_mutex_leave(sqlite3_db_mutex(connection->db));
         break;
       }
@@ -1430,7 +1431,19 @@ Connection_set_profile(Connection *self, PyObject *const *fast_args, Py_ssize_t 
       - Connection this trace event belongs to
     * - sql
       - :class:`str`
-      - SQL text (except SQLITE_TRACE_CLOSE)
+      - SQL text (except SQLITE_TRACE_ROW and SQLITE_TRACE_CLOSE).
+    * - id
+      - :class:`int`
+      - An opaque key to correlate events on the same statement.  The
+        id can be reused after SQLITE_TRACE_PROFILE.
+    * - trigger
+      - :class:`bool`
+      - If `trigger <https://www.sqlite.org/lang_createtrigger.html>`__
+        SQL is executing then this is ``True`` and the SQL is of the trigger.
+        Virtual table nested queries also come through as trigger activity.
+    * - total_changes
+      - :class:`int`
+      - Value of :meth:`total_changes`  (SQLITE_TRACE_STMT and SQLITE_TRACE_PROFILE only)
     * - nanoseconds
       - :class:`int`
       - nanoseconds SQL took to execute (SQLITE_TRACE_PROFILE only)
@@ -1440,11 +1453,26 @@ Connection_set_profile(Connection *self, PyObject *const *fast_args, Py_ssize_t 
         <https://www.sqlite.org/c3ref/c_stmtstatus_counter.html>`__ - eg
         *"SQLITE_STMTSTATUS_VM_STEP"* and corresponding integer values.
         The counters are reset each time a statement
-        starts execution.
+        starts execution.  This includes any changes made by triggers.
 
   Note that SQLite ignores any errors from the trace callbacks, so
   whatever was being traced will still proceed.  Exceptions will be
   delivered when your Python code resumes.
+
+  If you register for all trace types, the following sequence will happen.
+
+  * SQLITE_TRACE_STMT with `trigger` `False` and an `id` and `sql` of
+    the statement.
+  * Multiple times: SQLITE_TRACE_STMT with the same `id` and `trigger`
+    `True` if a trigger is executed.  The first time the `sql` will be
+    ``TRIGGER name`` and then subsequent calls will be lines of the
+    trigger.  This also happens for virtual tables that make queries.
+  * Multiple times: SQLITE_TRACE_ROW with the same `id` for each time
+    execution stopped at a row. (Rows visited by triggers do not cause
+    thie event)
+  * SQLITE_TRACE_PROFILE with the same `id` for any virtual table
+    queries - the ``sql`` will be of those queries
+  * SQLITE_TRACE_PROFILE with the same `id` for the initial SQL.
 
   .. seealso::
 
@@ -3162,10 +3190,10 @@ finally:
     Registers a `window function
     <https://sqlite.org/windowfunctions.html#user_defined_aggregate_window_functions>`__
 
-      :param name: The string name of the function.  It should be less than 255 characters
-      :param factory: Called to start a new window.  Use None to delete the function.
-      :param numargs: How many arguments the function takes, with -1 meaning any number
-      :param flags: `Function flags <https://www.sqlite.org/c3ref/c_deterministic.html>`__
+    :param name: The string name of the function.  It should be less than 255 characters
+    :param factory: Called to start a new window.  Use None to delete the function.
+    :param numargs: How many arguments the function takes, with -1 meaning any number
+    :param flags: `Function flags <https://www.sqlite.org/c3ref/c_deterministic.html>`__
 
     You need to provide callbacks for the ``step``, ``final``, ``value``
     and ``inverse`` methods.  This can be done by having `factory` as a
@@ -3907,7 +3935,7 @@ Connection_vtab_config(Connection *self, PyObject *const *fast_args, Py_ssize_t 
   }
 
   if (!CALL_CHECK(xConnect))
-    return PyErr_Format(PyExc_ValueError, "You can only call vtab_config while in a virtual table Create/Connect call");
+    return PyErr_Format(ExcInvalidContext, "You can only call vtab_config while in a virtual table Create/Connect call");
 
   switch (op)
   {
@@ -3941,7 +3969,7 @@ Connection_vtab_on_conflict(Connection *self)
   CHECK_CLOSED(self, NULL);
 
   if (!CALL_CHECK(xUpdate))
-    return PyErr_Format(PyExc_ValueError, "You can only call vtab_on_conflict while in a virtual table Update call");
+    return PyErr_Format(ExcInvalidContext, "You can only call vtab_on_conflict while in a virtual table Update call");
 
   return PyLong_FromLong(sqlite3_vtab_on_conflict(self->db));
 }
@@ -4133,7 +4161,8 @@ Connection_enter(Connection *self)
   PYSQLITE_CON_CALL(res = sqlite3_exec(self->db, sql, 0, 0, 0));
   sqlite3_free(sql);
   SET_EXC(res, self->db);
-  if (res)
+  /* sqlite3_trace_v2 callback could cause Python level error */
+  if (res || PyErr_Occurred())
     return NULL;
 
   self->savepointlevel++;
@@ -5304,6 +5333,302 @@ Connection_is_interrupted(Connection *self)
   return Py_NewRef(sqlite3_is_interrupted(self->db) ? Py_True : Py_False);
 }
 
+/** .. method:: data_version(schema: Optional[str] = None) -> int
+
+  Unlike `pragma data_version
+  <https://sqlite.org/pragma.html#pragma_data_version>`__ this value
+  updates when changes are made by other connections, **AND** this one.
+
+  :param schema: `schema` is `main`, `temp`, the name in `ATTACH <https://sqlite.org/lang_attach.html>`__,
+      defaulting to `main` if not supplied.
+
+  -* sqlite3_file_control
+*/
+static PyObject *
+Connection_data_version(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+{
+  CHECK_USE(NULL);
+  CHECK_CLOSED(self, NULL);
+
+  const char *schema = NULL;
+  {
+    Connection_data_version_CHECK;
+    ARG_PROLOG(1, Connection_data_version_KWNAMES);
+    ARG_OPTIONAL ARG_optional_str(schema);
+    ARG_EPILOG(NULL, Connection_data_version_USAGE, );
+  }
+  int res, data_version = -1;
+  PYSQLITE_VOID_CALL(res = sqlite3_file_control(self->db, schema ? schema : "main", SQLITE_FCNTL_DATA_VERSION, &data_version));
+
+  if(res != SQLITE_OK)
+  {
+    /* errmsg is not set on failure */
+    SET_EXC(res, NULL);
+    return NULL;
+  }
+
+  return PyLong_FromLong(data_version);
+}
+
+/* done this way here to keep doc generation simple */
+#include "fts.c"
+
+/** .. method:: fts5_tokenizer(name: str, args: list[str] | None = None) -> apsw.FTS5Tokenizer
+
+  Returns the named tokenizer initialized with ``args``.  Names are case insensitive.
+
+  .. seealso::
+
+      * :meth:`register_fts5_tokenizer`
+      * :doc:`textsearch`
+
+*/
+static PyObject *
+Connection_fts5_tokenizer(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+{
+  const char *name = NULL;
+  PyObject *args = NULL, *args_as_tuple = NULL, *tmptuple = NULL;
+
+  CHECK_USE(NULL);
+  CHECK_CLOSED(self, NULL);
+
+  {
+    Connection_fts5_tokenizer_CHECK;
+    ARG_PROLOG(2, Connection_fts5_tokenizer_KWNAMES);
+    ARG_MANDATORY ARG_str(name);
+    ARG_OPTIONAL ARG_optional_list_str(args);
+    ARG_EPILOG(NULL, Connection_fts5_tokenizer_USAGE, );
+  }
+
+  if (args)
+    tmptuple = NULL;
+  else
+  {
+    tmptuple = PyTuple_New(0);
+    if (!tmptuple)
+      return NULL;
+  }
+
+  fts5_api *api = Connection_fts5_api(self);
+  if(!api)
+    return NULL;
+
+  Py_ssize_t argc = args ? PyList_GET_SIZE(args) : 0;
+  /* arbitrary but reasonable maximum consuming 1kb of stack */
+  if (argc > 128)
+  {
+    PyErr_Format(PyExc_ValueError, "Too many args (%zd)", argc);
+    return NULL;
+  }
+
+  /* vla can't be size zero */
+  VLA(argv, argc + 1, const char *);
+  for (int i = 0; i < argc; i++)
+  {
+    argv[i] = PyUnicode_AsUTF8(PyList_GET_ITEM(args, i));
+    if (!argv[i])
+      goto error;
+  }
+
+  /* force args to always be a tuple because we save it
+     in returned object and don't want that to be modifyable */
+  args_as_tuple = PySequence_Tuple(args ? args : tmptuple);
+  if (!args_as_tuple)
+    goto error;
+
+  void *userdata = NULL;
+  fts5_tokenizer_v2 *tokenizer_class = NULL;
+
+  int rc = api->xFindTokenizer_v2(api, name, &userdata, &tokenizer_class);
+  if(rc != SQLITE_OK)
+  {
+    PyErr_Format(get_exception_for_code(rc), "No tokenizer named \"%s\"", name);
+    AddTraceBackHere(__FILE__, __LINE__, "Connection.fts5_api.xFindTokenizer_v2", "{s:s}", "name", name);
+    goto error;
+  }
+
+  /* no objects/memory has been allocated yet */
+  const char *name_dup = apsw_strdup(name);
+  if(!name_dup)
+    goto error;
+
+  APSWFTS5Tokenizer *pytok = (APSWFTS5Tokenizer *)_PyObject_New(&APSWFTS5TokenizerType);
+  if (!pytok)
+    goto error;
+
+  /* fill in fields */
+  pytok->db = self;
+  Py_INCREF(pytok->db);
+  pytok->name = name_dup;
+  pytok->args = Py_NewRef(args_as_tuple);
+  pytok->xDelete = tokenizer_class->xDelete;
+  pytok->xTokenize = tokenizer_class->xTokenize;
+  pytok->tokenizer_instance = NULL;
+  pytok->vectorcall = (vectorcallfunc)APSWFTS5Tokenizer_call;
+
+  rc = tokenizer_class->xCreate(userdata, argv, argc, &pytok->tokenizer_instance);
+  if (rc != SQLITE_OK)
+  {
+    SET_EXC(rc, self->db);
+    AddTraceBackHere(__FILE__, __LINE__, "Connection.fts5_tokenizer_v2.xCreate", "{s:s,s:i,s:O}", "name", name,
+                     "len(args)", argc, "args", args_as_tuple);
+    APSWFTS5TokenizerType.tp_dealloc((PyObject *)pytok);
+    goto error;
+  }
+  Py_XDECREF(tmptuple);
+  Py_DECREF(args_as_tuple);
+  return (PyObject *)pytok;
+error:
+  Py_XDECREF(tmptuple);
+  Py_XDECREF(args_as_tuple);
+  return NULL;
+}
+
+/** .. method:: register_fts5_tokenizer(name: str, tokenizer_factory: FTS5TokenizerFactory) -> None
+
+  Registers a tokenizer factory.  Names are case insensitive.  It is not possible to
+  unregister a tokenizer.
+
+  .. seealso::
+
+      * :meth:`fts5_tokenizer`
+      * :doc:`textsearch`
+      * `FTS5 documentation <https://www.sqlite.org/fts5.html#custom_tokenizers>`__
+*/
+static PyObject *
+Connection_register_fts5_tokenizer(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+{
+  CHECK_USE(NULL);
+  CHECK_CLOSED(self, NULL);
+  const char *name;
+  int rc = SQLITE_NOMEM;
+  PyObject *tokenizer_factory;
+
+  {
+    Connection_register_fts5_tokenizer_CHECK;
+    ARG_PROLOG(2, Connection_register_fts5_tokenizer_KWNAMES);
+    ARG_MANDATORY ARG_str(name);
+    ARG_MANDATORY ARG_Callable(tokenizer_factory);
+    ARG_EPILOG(NULL, Connection_register_fts5_tokenizer_USAGE, );
+  }
+
+  fts5_api *api = Connection_fts5_api(self);
+  if (!api)
+    return NULL;
+
+  TokenizerFactoryData *tfd = PyMem_Calloc(1, sizeof(TokenizerFactoryData));
+  if(!tfd)
+    goto finally;
+  tfd->factory_func = Py_NewRef(tokenizer_factory);
+  tfd->connection = Py_NewRef((PyObject *)self);
+
+  APSW_FAULT_INJECT(FTS5TokenizerRegister,
+                    rc
+                    = api->xCreateTokenizer_v2(api, name, tfd, &APSWPythonTokenizer, APSWPythonTokenizerFactoryDelete),
+                    rc = SQLITE_NOMEM);
+
+  finally:
+  if (rc != SQLITE_OK)
+  {
+    if(tfd)
+      APSWPythonTokenizerFactoryDelete(tfd);
+    SET_EXC(rc, NULL);
+    return NULL;
+  }
+  Py_RETURN_NONE;
+}
+
+/** .. method:: fts5_tokenizer_available(name: str) -> bool
+
+  Checks if the named tokenizer is registered.
+
+  .. seealso::
+
+      * :meth:`fts5_tokenizer`
+      * :doc:`textsearch`
+      * `FTS5 documentation <https://www.sqlite.org/fts5.html#custom_tokenizers>`__
+*/
+static PyObject *
+Connection_fts5_tokenizer_available(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs,
+                                    PyObject *fast_kwnames)
+{
+  CHECK_USE(NULL);
+  CHECK_CLOSED(self, NULL);
+  const char *name;
+
+  {
+    Connection_fts5_tokenizer_available_CHECK;
+    ARG_PROLOG(1, Connection_fts5_tokenizer_available_KWNAMES);
+    ARG_MANDATORY ARG_str(name);
+    ARG_EPILOG(NULL, Connection_fts5_tokenizer_available_USAGE, );
+  }
+
+  fts5_api *api = Connection_fts5_api(self);
+  if (!api)
+    return NULL;
+
+  void *user_data = NULL;
+  fts5_tokenizer_v2 *tokenizer_class = NULL;
+
+  int rc = api->xFindTokenizer_v2(api, name, &user_data, &tokenizer_class);
+  if (rc == SQLITE_OK)
+    Py_RETURN_TRUE;
+  Py_RETURN_FALSE;
+}
+
+/** .. method:: register_fts5_function(name: str, function: FTS5Function) -> None
+
+  Registers the (case insensitive) named function used as an `auxiliary
+  function  <https://www.sqlite.org/fts5.html#custom_auxiliary_functions>`__.
+
+  The first parameter to the function will be :class:`FTS5ExtensionApi`
+  and the rest will be the function arguments at the SQL level.
+*/
+static PyObject *
+Connection_register_fts5_function(Connection *self, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+{
+  CHECK_USE(NULL);
+  CHECK_CLOSED(self, NULL);
+
+  const char *name;
+  PyObject *function = NULL;
+  {
+    Connection_register_fts5_function_CHECK;
+    ARG_PROLOG(2, Connection_register_fts5_function_KWNAMES);
+    ARG_MANDATORY ARG_str(name);
+    ARG_MANDATORY ARG_Callable(function);
+    ARG_EPILOG(NULL, Connection_register_fts5_function_USAGE, );
+  }
+
+  fts5_api *api = Connection_fts5_api(self);
+  if(!api)
+    return NULL;
+
+  struct fts5aux_cbinfo *cbinfo = PyMem_Calloc(1, sizeof(struct fts5aux_cbinfo));
+  if(!cbinfo)
+    return NULL;
+  cbinfo->callback = Py_NewRef(function);
+  cbinfo->name = apsw_strdup(name);
+
+  int rc = SQLITE_NOMEM;
+  if(cbinfo->name)
+  {
+    APSW_FAULT_INJECT(FTS5FunctionRegister,
+    rc = api->xCreateFunction(api, name, cbinfo, apsw_fts5_extension_function, apsw_fts5_extension_function_destroy),
+    rc = SQLITE_BUSY);
+  }
+  if(rc != SQLITE_OK)
+  {
+    if(!PyErr_Occurred())
+      PyErr_Format(get_exception_for_code(rc), "Registering function named \"%s\"", name);
+    AddTraceBackHere(__FILE__, __LINE__, "Connection.fts5_api.xCreateFunction", "{s:s,s:O}", "name", name, "function", function);
+    apsw_fts5_extension_function_destroy(cbinfo);
+    return NULL;
+  }
+
+  Py_RETURN_NONE;
+}
+
 static PyGetSetDef Connection_getseters[] = {
     /* name getter setter doc closure */
     {"filename",
@@ -5496,6 +5821,11 @@ static PyMethodDef Connection_methods[] = {
     {"vtab_on_conflict", (PyCFunction)Connection_vtab_on_conflict, METH_NOARGS, Connection_vtab_on_conflict_DOC},
     {"pragma", (PyCFunction)Connection_pragma, METH_FASTCALL | METH_KEYWORDS, Connection_pragma_DOC},
     {"read", (PyCFunction)Connection_read, METH_FASTCALL | METH_KEYWORDS, Connection_read_DOC},
+    {"fts5_tokenizer", (PyCFunction)Connection_fts5_tokenizer, METH_FASTCALL | METH_KEYWORDS, Connection_fts5_tokenizer_DOC},
+    {"register_fts5_tokenizer", (PyCFunction)Connection_register_fts5_tokenizer, METH_FASTCALL | METH_KEYWORDS, Connection_register_fts5_tokenizer_DOC},
+    {"fts5_tokenizer_available", (PyCFunction)Connection_fts5_tokenizer_available, METH_FASTCALL | METH_KEYWORDS, Connection_fts5_tokenizer_available_DOC},
+    {"register_fts5_function", (PyCFunction)Connection_register_fts5_function, METH_FASTCALL | METH_KEYWORDS, Connection_register_fts5_function_DOC},
+    {"data_version", (PyCFunction)Connection_data_version, METH_FASTCALL | METH_KEYWORDS, Connection_data_version_DOC},
 #ifndef APSW_OMIT_OLD_NAMES
     {Connection_set_busy_timeout_OLDNAME, (PyCFunction)Connection_set_busy_timeout, METH_FASTCALL | METH_KEYWORDS,
      Connection_set_busy_timeout_OLDDOC},

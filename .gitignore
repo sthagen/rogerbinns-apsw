@@ -8,12 +8,14 @@ callgrind.out.*
 :memory:
 doc/vfs.rst
 doc/example.rst
+doc/example-fts.rst
 doc/cursor.rst
 doc/connection.rst
 doc/blob.rst
 doc/backup.rst
 doc/apsw.rst
 doc/vtable.rst
+doc/fts.rst
 doc/typing.rstgen
 doc/renames.rstgen
 doc/docdb.json

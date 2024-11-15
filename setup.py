@@ -141,13 +141,15 @@ class run_tests(Command):
     # and forces verbose to 0)
     user_options = [
         ("show-tests", "v", "Show each test being run"),
+        ("locals", None, "Show local variables in test failure"),
     ]
 
     # see if you can find boolean_options documented anywhere
-    boolean_options = ['show-tests']
+    boolean_options = ['show-tests', "locals"]
 
     def initialize_options(self):
         self.show_tests = 0
+        self.locals = False
 
     def finalize_options(self):
         pass
@@ -159,7 +161,7 @@ class run_tests(Command):
         suite = unittest.TestLoader().loadTestsFromModule(apsw.tests)
         # verbosity of zero doesn't print anything, one prints a dot
         # per test and two prints each test name
-        result = unittest.TextTestRunner(verbosity=self.show_tests + 1).run(suite)
+        result = unittest.TextTestRunner(verbosity=self.show_tests + 1, tb_locals=self.locals).run(suite)
         if not result.wasSuccessful():
             sys.exit(1)
 
@@ -283,12 +285,7 @@ class fetch(Command):
             if os.path.exists("sqlite3/sqlite3config.h"):
                 sqlite3config_h = read_whole_file("sqlite3/sqlite3config.h", "rt")
             if os.path.exists('sqlite3'):
-                for dirpath, dirnames, filenames in os.walk('sqlite3', topdown=False):
-                    for file in filenames:
-                        os.remove(os.path.join(dirpath, file))
-                    for dir in dirnames:
-                        os.rmdir(os.path.join(dirpath, dir))
-                os.rmdir('sqlite3')
+                shutil.rmtree("sqlite3")
             # if you get an exception here it is likely that you don't have the python zlib module
             import zlib
             tar = tarfile.open("nonexistentname to keep old python happy", 'r', data)
@@ -530,7 +527,7 @@ class apsw_build_ext(beparent):
         if self.enable_all_extensions:
             exts = [
                 "fts4", "fts3", "fts3_parenthesis", "rtree", "stat4", "fts5", "rbu", "geopoly",
-                "math_functions"
+                "math_functions", "dbstat_vtab",
             ]
             if not self.omit or "icu" not in self.omit.split(","):
                 if get_icu_config():
@@ -814,9 +811,9 @@ def get_icu_config() -> IcuConfig | None:
 
     if shutil.which("pkg-config"):
         with contextlib.suppress(subprocess.CalledProcessError):
-            cflags = subprocess.run(["pkg-config", "--cflags", "icu-uc", "icu-i18n"], **skw).stdout.strip()
+            cflags = subprocess.run(["pkg-config", "--cflags", "icu-io"], **skw).stdout.strip()
         with contextlib.suppress(subprocess.CalledProcessError):
-            ldflags = subprocess.run(["pkg-config", "--libs", "icu-uc", "icu-i18n"], **skw).stdout.strip()
+            ldflags = subprocess.run(["pkg-config", "--libs", "icu-io"], **skw).stdout.strip()
         if cflags or ldflags:
             return IcuConfig(tool="pkg-config", cflags=cflags, ldflags=ldflags)
     if shutil.which("icu-config"):
@@ -827,19 +824,19 @@ def get_icu_config() -> IcuConfig | None:
     return None
 
 
-# We depend on every .[ch] file in src
-depends = [f for f in glob.glob("src/*.[ch]") if f != "src/apsw.c"]
+# We depend on every .[ch] file in src except unicode
+depends = [f for f in glob.glob("src/*.[ch]") if f != "src/apsw.c" and "unicode" not in f]
 
 if __name__ == '__main__':
     setup(name="apsw",
           version=version,
-          python_requires=">=3.8",
+          python_requires=">=3.9",
           description="Another Python SQLite Wrapper",
           long_description=pathlib.Path("README.rst").read_text(encoding="utf8"),
           long_description_content_type="text/x-rst",
           author="Roger Binns",
           author_email="rogerb@rogerbinns.com",
-          url="https://github.com/rogerbinns/apsw/",
+          url="https://github.com/rogerbinns/apsw",
           project_urls=project_urls,
           classifiers=[
               "Development Status :: 5 - Production/Stable",
@@ -858,10 +855,13 @@ if __name__ == '__main__':
                         library_dirs=library_dirs,
                         libraries=libraries,
                         define_macros=define_macros,
-                        depends=depends)
-          ],
+                        depends=depends),
+              Extension("apsw._unicode", ["src/unicode.c"],
+                        depends=["src/_unicodedb.c"],
+                        undef_macros = [ "NDEBUG" ] if os.environ.get("UNICODE_DEBUG") else []),
+              ],
           packages=["apsw"],
-          package_data={"apsw": ["__init__.pyi", "py.typed"]},
+          package_data={"apsw": ["__init__.pyi", "py.typed", "fts_test_strings"]},
           cmdclass={
               'test': run_tests,
               'build_test_extension': build_test_extension,

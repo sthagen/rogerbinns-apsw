@@ -84,7 +84,7 @@ edit the :file:`setup.apsw` file inside.
   <https://github.com/rogerbinns/apsw/releases/download/3.47.0.0/apsw-3.47.0.0.zip>`__
   (Source, includes this HTML Help)
 
-* `apsw-3.47.0.0.cosign-bundle
+* `apsw-3.47.0.0.cosign-bundle 
   <https://github.com/rogerbinns/apsw/releases/download/3.47.0.0/apsw-3.47.0.0.cosign-bundle>`__
   cosign signature
 
@@ -101,13 +101,13 @@ digitally signed so you can verify they have not been tampered with,
 and were produced by the project maintainer.
 
 `Sigstore <https://www.sigstore.dev/>`__ is used via the `cosign tool
-<https://docs.sigstore.dev/signing/quickstart/>`__.  Download the
+<https://docs.sigstore.dev/cosign/signing/>`__.  Download the
 corresponding cosign bundle which contains the signature.
 
 Verify
 
   `Install cosign
-  <https://docs.sigstore.dev/system_config/installation/>`__ if you
+  <https://docs.sigstore.dev/cosign/system_config/installation/>`__ if you
   don't have it already.  It is `available for a wide variety of
   platforms <https://github.com/sigstore/cosign/releases/>`__
   including Linux, MacOS, and Windows.

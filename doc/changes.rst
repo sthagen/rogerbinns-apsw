@@ -36,8 +36,8 @@ Added :attr:`Connection.data_version` for getting a change counter.
 changes are made on the same connection, only others.
 
 Added :func:`apsw.ext.ShowResourceUsage` for getting resource and
-SQLite usage in a block, and also use it for the shell :ref:`timer
-<shell-cmd-timer>` command.
+SQLite usage in a context block, and also use it for the shell
+:ref:`timer <shell-cmd-timer>` command.
 
 Added :func:`apsw.ext.Trace` for tracing SQL execution, row and change
 counting, and timing per statement for use in a context block.
@@ -114,8 +114,7 @@ Adjusted `levels
 Previous source releases were signed with `PGP
 <https://en.wikipedia.org/wiki/Pretty_Good_Privacy>`__.  Starting with
 this release `Sigstore's <https://www.sigstore.dev/>`__ `cosign tool
-<https://docs.sigstore.dev/signing/quickstart/>`__ is used
-(:ref:`instructions <verifydownload>`). (:issue:`512`)
+<https://docs.sigstore.dev/cosign/>`__ is used. (:issue:`512`)
 
 3.45.3.0
 ========
@@ -1514,7 +1513,7 @@ previous error message or a crash.  Thanks to Jose Gomes for finding
 the problem.  :issue:`103`
 
 There is now a PPA for Ubuntu users that is kept up to date with APSW
-and SQLite at https://launchpad.net/~ubuntu-rogerbinns/+archive/apsw
+and SQLite at \https://launchpad.net/~ubuntu-rogerbinns/+archive/apsw
 which has the latest SQLite embedded statically inside (ie system
 SQLite is ignored) and has all the extensions enabled: FTS3, RTree,
 ICU, asyncvfs

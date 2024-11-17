@@ -798,6 +798,8 @@ class ShowResourceUsage:
            Statistics from each SQL statement executed are added together.
     :param scope: Get :data:`thread <resource.RUSAGE_THREAD>` or
            :data:`process <resource.RUSAGE_SELF>` stats, or `None`.
+           Note that MacOS only supports process, and Windows doesn't support
+           either.
     :param indent: Printed before each line of output
 
     Timing information comes from :func:`time.monotonic` and :func:`time.process_time`,
@@ -829,7 +831,10 @@ class ShowResourceUsage:
         import resource
 
         _get_resource = resource.getrusage
-        _get_resource_param = {"thread": resource.RUSAGE_THREAD, "process": resource.RUSAGE_SELF}
+        _get_resource_param = {
+            "thread": getattr("resource", "RUSAGE_THREAD", resource.RUSAGE_SELF),
+            "process": resource.RUSAGE_SELF,
+        }
 
         del resource
 
@@ -889,7 +894,7 @@ class ShowResourceUsage:
                     continue
                 delta = getattr(usage, k) - getattr(self._usage, k)
                 if delta >= 0.001:
-                    vals.append((self._descriptions[k], delta))
+                    vals.append((self._descriptions.get(k, k), delta))
 
         if self.db:
             self.db.trace_v2(0, None, id=self)

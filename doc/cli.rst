@@ -104,6 +104,7 @@ string then an in-memory database is created.
     variable
     
 
+
 .. options-end:
 
 SQL
@@ -212,6 +213,9 @@ from SQL.  You can use ``.help`` to see a list of all commands and
     
 ``.output`` ``FILENAME``
     Send output to ``FILENAME`` (or stdout)
+    
+``.pages`` ``SCOPE``
+    Shows page usage summary in human units
     
 ``.parameter`` ``CMD`` ``...``
     Maintain named bindings you can use in your queries.
@@ -642,6 +646,17 @@ when the shell was started.  The file is opened using the current encoding
 (change with ``encoding`` command).
 
 
+.pages SCOPE
+------------
+
+Shows page usage summary in human units
+
+``SCOPE`` is a number 0, 1, or 2.
+
+0 - shows the database as a whole. 1 - groups by each table, including its
+indices.  2 - shows each table and index separately.
+
+
 .parameter CMD ...
 ------------------
 
@@ -820,6 +835,7 @@ fit.  Specify new widths using this command.  Use a negative number to right
 justify and zero for default column width.
 
 
+
 .. commands-end:
 
 SEE ALSO
@@ -868,5 +884,7 @@ freely, subject to the following restrictions:
 Alternatively you may strike the license above and use it under any
 OSI approved open source license such as those listed at
 https://opensource.org/licenses/alphabetical
+
+SPDX-License-Identifier: any-OSI
 
 .. copyright-end:

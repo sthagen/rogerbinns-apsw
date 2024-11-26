@@ -80,12 +80,12 @@ edit the :file:`setup.apsw` file inside.
 
 .. downloads-begin
 
-* `apsw-3.47.0.0.zip
-  <https://github.com/rogerbinns/apsw/releases/download/3.47.0.0/apsw-3.47.0.0.zip>`__
+* `apsw-3.47.1.0.zip
+  <https://github.com/rogerbinns/apsw/releases/download/3.47.1.0/apsw-3.47.1.0.zip>`__
   (Source, includes this HTML Help)
 
-* `apsw-3.47.0.0.cosign-bundle
-  <https://github.com/rogerbinns/apsw/releases/download/3.47.0.0/apsw-3.47.0.0.cosign-bundle>`__
+* `apsw-3.47.1.0.cosign-bundle
+  <https://github.com/rogerbinns/apsw/releases/download/3.47.1.0/apsw-3.47.1.0.cosign-bundle>`__
   cosign signature
 
 .. downloads-end
@@ -120,8 +120,8 @@ Verify
 
   .. code-block:: console
 
-    $ cosign verify-blob apsw-3.47.0.0.zip                           \
-        --bundle apsw-3.47.0.0.cosign-bundle                         \
+    $ cosign verify-blob apsw-3.47.1.0.zip                           \
+        --bundle apsw-3.47.1.0.cosign-bundle                         \
         --certificate-identity=rogerb@rogerbinns.com                 \
         --certificate-oidc-issuer=https://github.com/login/oauth
     Verified OK
@@ -414,9 +414,9 @@ extra code that deliberately induces extra conditions such as memory
 allocation failures, SQLite returning error codes, Python APIs
 erroring etc.  That brings coverage up to 99.6% of the code.
 
-A memory checker `Valgrind <https://valgrind.org>`_  and  `compiler
-sanitizer options <https://en.wikipedia.org/wiki/AddressSanitizer>`__
-are also used for further validation.
+`Compiler sanitizers options
+<https://en.wikipedia.org/wiki/AddressSanitizer>`__ are also used for
+further validation.
 
 To ensure compatibility with the various Python versions, a script
 downloads and compiles all supported Python versions in both debug and

@@ -170,6 +170,9 @@ get_exception_for_code(int res)
 static void
 make_exception(int res, sqlite3 *db)
 {
+  /* don't overwrite any existing exception */
+  assert(!PyErr_Occurred());
+
   const char *errmsg = NULL;
   int error_offset = -1;
 
@@ -282,7 +285,9 @@ MakeSqliteMsgFromPyException(char **errmsg)
 }
 
 static void
-make_thread_exception(void)
+make_thread_exception(const char *message)
 {
-  PyErr_Format(ExcThreadingViolation, "Connection is busy in another thread");
+  /* avoid overwriting existing */
+  if (!PyErr_Occurred())
+    PyErr_Format(ExcThreadingViolation, message ? message : "Connection is busy in another thread");
 }

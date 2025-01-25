@@ -114,7 +114,8 @@ static PyObject *collections_abc_Mapping;
   {                                                                                                                    \
     if (self->in_query)                                                                                                \
     {                                                                                                                  \
-      PyErr_Format(ExcThreadingViolation, "Re-using a cursor inside a query by that query is not allowed");            \
+      if (!PyErr_Occurred())                                                                                           \
+        PyErr_Format(ExcThreadingViolation, "Re-using a cursor inside a query by that query is not allowed");          \
       sqlite3_mutex_leave(self->connection->dbmutex);                                                                  \
       return NULL;                                                                                                     \
     }                                                                                                                  \
@@ -475,6 +476,8 @@ cursor_mutex_get(APSWCursor *self)
   assert(!PyErr_Occurred());
 
   int res;
+  int attempt = 0;
+  int waited = 0;
 
   /* happy path - get it immediately */
   res = sqlite3_mutex_try(self->connection->dbmutex);
@@ -486,15 +489,12 @@ cursor_mutex_get(APSWCursor *self)
       so the arbitrary values chosen are those used by SQLite's
       default busy handler. */
 
-  static const unsigned char delays[] = { 1, 2, 5, 10, 15, 20, 25, 25,  25,  50,  50, 100 };
+  static const unsigned char delays[] = { 1, 2, 5, 10, 15, 20, 25, 25, 25, 50, 50, 100 };
 
 /* sum of delays above - a third of a second */
-#define MAX_WAIT_MS   328
+#define MAX_WAIT_MS 328
 /* and how many of them there are */
-#define NUM_TRIES ((int)(sizeof(delays)/sizeof(delays[0])))
-
-  int attempt = 0;
-  int waited = 0;
+#define NUM_TRIES ((int)(sizeof(delays) / sizeof(delays[0])))
 
   for (;;)
   {
@@ -508,19 +508,27 @@ cursor_mutex_get(APSWCursor *self)
   /* shenanigans could have happened while GIL was released */
   checks:
     if (!self->connection)
-      PyErr_Format(ExcCursorClosed, "The cursor has been closed");
+    {
+      if (!PyErr_Occurred())
+        PyErr_Format(ExcCursorClosed, "The cursor has been closed");
+    }
     else if (!self->connection->db)
-      PyErr_Format(ExcConnectionClosed, "The connection has been closed");
+    {
+      if (!PyErr_Occurred())
+        PyErr_Format(ExcConnectionClosed, "The connection has been closed");
+    }
     else if (self->in_query)
-      PyErr_Format(ExcThreadingViolation, "Re-using a cursor inside a query by that query is not allowed");
-
+    {
+      if (!PyErr_Occurred())
+        PyErr_Format(ExcThreadingViolation, "Re-using a cursor inside a query by that query is not allowed");
+    }
     if (res == SQLITE_OK || PyErr_Occurred())
       break;
 
     if (waited > MAX_WAIT_MS || ++attempt >= NUM_TRIES)
     {
       if (res != SQLITE_OK)
-        make_thread_exception();
+        make_thread_exception("Cursor couldn't run because the Connection is busy in another thread");
       break;
     }
   }
@@ -1010,7 +1018,7 @@ APSWCursor_step(APSWCursor *self)
     :raises BindingsError: You supplied too many or too few bindings for the statements
     :raises IncompleteExecutionError: There are remaining unexecuted queries from your last execute
 
-    -* sqlite3_prepare_v3 sqlite3_step sqlite3_bind_int64 sqlite3_bind_null sqlite3_bind_text64 sqlite3_bind_double sqlite3_bind_blob64 sqlite3_bind_zeroblob sqlite3_stmt_explain
+    -* sqlite3_prepare_v3 sqlite3_step sqlite3_bind_int64 sqlite3_bind_null sqlite3_bind_text64 sqlite3_bind_double sqlite3_bind_blob64 sqlite3_bind_zeroblob64 sqlite3_stmt_explain
 
     .. seealso::
 
@@ -1543,7 +1551,7 @@ APSWCursor_set_exec_trace_attr(APSWCursor *self, PyObject *value)
 
   if (!Py_IsNone(value) && !PyCallable_Check(value))
   {
-    PyErr_Format(PyExc_TypeError, "exec_trace expected a Callable");
+    PyErr_Format(PyExc_TypeError, "exec_trace expected a Callable not %s", Py_TypeName(value));
     return -1;
   }
   Py_CLEAR(self->exectrace);
@@ -1587,7 +1595,7 @@ APSWCursor_set_row_trace_attr(APSWCursor *self, PyObject *value)
 
   if (!Py_IsNone(value) && !PyCallable_Check(value))
   {
-    PyErr_Format(PyExc_TypeError, "rowtrace expected a Callable");
+    PyErr_Format(PyExc_TypeError, "rowtrace expected a Callable not %s", Py_TypeName(value));
     return -1;
   }
   Py_CLEAR(self->rowtrace);

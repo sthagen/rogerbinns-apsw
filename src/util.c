@@ -19,7 +19,7 @@
   {                                                                                                                    \
     if (sqlite3_mutex_try(mutex) != SQLITE_OK)                                                                         \
     {                                                                                                                  \
-      make_thread_exception();                                                                                         \
+      make_thread_exception(NULL);                                                                                     \
       return NULL;                                                                                                     \
     }                                                                                                                  \
   } while (0)
@@ -28,20 +28,28 @@
   do                                                                                                                   \
   {                                                                                                                    \
     if (sqlite3_mutex_try(mutex1) != SQLITE_OK)                                                                        \
-      return PyErr_Format(ExcThreadingViolation, msg1);                                                                \
+    {                                                                                                                  \
+      make_thread_exception(msg1);                                                                                     \
+      return NULL;                                                                                                     \
+    }                                                                                                                  \
     if (sqlite3_mutex_try(mutex2) != SQLITE_OK)                                                                        \
     {                                                                                                                  \
       sqlite3_mutex_leave(mutex1);                                                                                     \
-      return PyErr_Format(ExcThreadingViolation, msg2);                                                                \
+      make_thread_exception(msg2);                                                                                     \
+      return NULL;                                                                                                     \
     }                                                                                                                  \
   } while (0)
 
 /* use this when we have to get the dbmutex - eg in dealloc functions
-   - where we busy wait releasing gil until dbmutex is acquired */
+   - where we busy wait releasing gil until dbmutex is acquired.
+   if the fork checker is in use and this object was allocated in one
+   process and then freed in the next, it will busy loop forever
+   on SQLITE_MISUSE and spamming the unraisable exception hook with
+   forking violation */
 #define DBMUTEX_FORCE(mutex)                                                                                           \
   do                                                                                                                   \
   {                                                                                                                    \
-    while (sqlite3_mutex_try(mutex) == SQLITE_BUSY)                                                                    \
+    while (sqlite3_mutex_try(mutex) != SQLITE_OK)                                                                      \
     {                                                                                                                  \
       Py_BEGIN_ALLOW_THREADS Py_END_ALLOW_THREADS;                                                                     \
     }                                                                                                                  \

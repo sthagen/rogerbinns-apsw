@@ -155,7 +155,7 @@ linkcheck:  ## Checks links from doc
 	env PYTHONPATH="`pwd`" $(MAKE) RELEASEDATE=$(RELEASEDATE) VERSION=$(VERSION) -C doc linkcheck
 
 unwrapped:  ## Find SQLite APIs that are not wrapped by APSW
-	env PYTHONPATH=. $(PYTHON) tools/find_unwrapped_apis.py
+	env PYTHONPATH=. $(PYTHON) tools/gensqlitedebug.py
 
 publish: docs
 	rsync -a --delete --exclude=.git --exclude=.nojekyll doc/build/html/ ../apsw-publish/ ;  cd ../apsw-publish ; git status
@@ -294,7 +294,7 @@ megatest-build: ## Builds and updates podman container for running megatest
 
 MEGATEST_ARGS=
 megatest-run: ## Runs megatest in container
-	podman run --pids-limit=-1 -i --tty -v "`pwd`/../apsw-test:/megatest/apsw-test" -v "`pwd`:/megatest/apsw" -v "$$HOME/.ccache:/megatest/ccache" apsw-megatest $(MEGATEST_ARGS)
+	podman run --name apsw-megatest --pids-limit=-1 -i --tty -v "`pwd`/../apsw-test:/megatest/apsw-test" -v "`pwd`:/megatest/apsw" -v "$$HOME/.ccache:/megatest/ccache" apsw-megatest $(MEGATEST_ARGS)
 
 megatest-shell: ## Runs a shell in the megatest container
-	podman run -i --tty -v "`pwd`/../apsw-test:/megatest/apsw-test" -v "`pwd`:/megatest/apsw" -v "$$HOME/.ccache:/megatest/ccache" --entrypoint /bin/bash apsw-megatest
+	podman run --name apsw-megatest -i --tty -v "`pwd`/../apsw-test:/megatest/apsw-test" -v "`pwd`:/megatest/apsw" -v "$$HOME/.ccache:/megatest/ccache" --entrypoint /bin/bash apsw-megatest

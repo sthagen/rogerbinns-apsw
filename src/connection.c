@@ -246,6 +246,9 @@ Connection_remove_dependent(Connection *self, PyObject *o)
   }
 }
 
+static PyTypeObject APSWSessionType;
+static PyTypeObject APSWChangesetBuilderType;
+
 /* returns zero on success, non-zero on error */
 static int
 Connection_close_internal(Connection *self, int force)
@@ -254,7 +257,7 @@ Connection_close_internal(Connection *self, int force)
 
   PY_ERR_FETCH_IF(force == 2, exc_save);
 
-  /* close out dependents by repeatedly processing first item until
+  /* close our dependents by repeatedly processing first item until
      list is empty.  note that closing an item will cause the list to
      be perturbed as a side effect */
   while (self->dependents && PyList_GET_SIZE(self->dependents))
@@ -270,7 +273,14 @@ Connection_close_internal(Connection *self, int force)
 
     PyObject *vargs[] = { NULL, item, PyBool_FromLong(force) };
     if (vargs[2])
-      closeres = PyObject_VectorcallMethod(apst.close, vargs + 1, 2 | PY_VECTORCALL_ARGUMENTS_OFFSET, NULL);
+    {
+      int nargs = 2;
+      /* these don't have force parameter */
+      if (PyObject_IsInstance(item, (PyObject *)&APSWSessionType)
+          || PyObject_IsInstance(item, (PyObject *)&APSWChangesetBuilderType))
+        nargs = 1;
+      closeres = PyObject_VectorcallMethod(apst.close, vargs + 1, nargs | PY_VECTORCALL_ARGUMENTS_OFFSET, NULL);
+    }
     Py_XDECREF(vargs[2]);
     Py_XDECREF(vargs[1]);
     Py_XDECREF(closeres);
@@ -1923,7 +1933,7 @@ Connection_set_progress_handler(Connection *self, PyObject *const *fast_args, Py
     }
   }
 
-  int min_steps = INT_MAX;
+  int min_steps = INT32_MAX;
   int active = 0;
   for (unsigned i = 0; i < self->progresshandler_count; i++)
   {

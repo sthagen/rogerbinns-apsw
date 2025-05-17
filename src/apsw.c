@@ -27,9 +27,9 @@ Type Annotations
 ================
 
 Comprehensive :mod:`type annotations <typing>` :source:`are included
-<apsw/__init__.pyi>`, and your code can be checked using tools like
-`mypy <https://mypy-lang.org/>`__.  You can refer to the types below
-for your annotations (eg as :class:`apsw.SQLiteValue`)
+<apsw/__init__.pyi>`, and your code can be checked by your editor or
+tools like `mypy <https://mypy-lang.org/>`__.  You can refer to the
+types below for your annotations (eg as :class:`apsw.SQLiteValue`)
 
 Your source files should include::
 
@@ -57,6 +57,13 @@ API Reference
 
 #ifdef APSW_USE_SQLITE_CONFIG
 #include "sqlite3config.h"
+#endif
+
+/* session requires pre-update hook and you get weird things if session is defined but not the hook */
+#ifdef SQLITE_ENABLE_SESSION
+#ifndef SQLITE_ENABLE_PREUPDATE_HOOK
+#define SQLITE_ENABLE_PREUPDATE_HOOK
+#endif
 #endif
 
 /* SQLite amalgamation */
@@ -143,11 +150,6 @@ MakeExistingException(void)
   } while (0)
 
 static int APSW_Should_Fault(const char *);
-
-/* Are we doing 64 bit? - _LP64 is best way I can find as sizeof isn't valid in cpp #if */
-#if defined(_LP64) && _LP64
-#define APSW_TEST_LARGE_OBJECTS
-#endif
 
 #else /* APSW_FAULT_INJECT */
 #define APSW_FAULT(faultName, good, bad)                                                                               \
@@ -240,6 +242,11 @@ static int allow_missing_dict_bindings = 0;
 
 /* virtual file system */
 #include "vfs.c"
+
+/* session extension */
+#ifdef SQLITE_ENABLE_SESSION
+#include "session.c"
+#endif
 
 /* constants */
 #include "constants.c"
@@ -1483,7 +1490,7 @@ formatsqlvalue(PyObject *Py_UNUSED(self), PyObject *value)
     return strres;
   }
   /* Blob */
-  if (PyBytes_Check(value))
+  if (PyBytes_Check(value) || PyObject_CheckBuffer(value))
   {
     int asrb;
     PyObject *strres;
@@ -1494,7 +1501,7 @@ formatsqlvalue(PyObject *Py_UNUSED(self), PyObject *value)
     const unsigned char *bufferc;
 
     asrb = PyObject_GetBufferContiguous(value, &buffer, PyBUF_SIMPLE);
-    if (asrb == -1)
+    if (asrb != 0)
       return NULL;
 
     strres = PyUnicode_New(buffer.len * 2 + 3, 127);
@@ -1844,6 +1851,10 @@ static PyMethodDef module_methods[] = {
   { "__getattr__", (PyCFunction)apsw_getattr, METH_O, "module getattr" },
   { "connections", (PyCFunction)apsw_connections, METH_NOARGS, Apsw_connections_DOC },
   { "sleep", (PyCFunction)apsw_sleep, METH_FASTCALL | METH_KEYWORDS, Apsw_sleep_DOC },
+#ifdef SQLITE_ENABLE_SESSION
+  { "session_config", (PyCFunction)apsw_session_config, METH_VARARGS, Apsw_session_config_DOC },
+#endif
+
 #ifndef APSW_OMIT_OLD_NAMES
   { Apsw_sqlite_lib_version_OLDNAME, (PyCFunction)get_sqlite_version, METH_NOARGS, Apsw_sqlite_lib_version_OLDDOC },
   { Apsw_apsw_version_OLDNAME, (PyCFunction)get_apsw_version, METH_NOARGS, Apsw_apsw_version_OLDDOC },
@@ -1887,7 +1898,13 @@ PyInit_apsw(void)
       || PyType_Ready(&FunctionCBInfoType) < 0 || PyType_Ready(&APSWBackupType) < 0
       || PyType_Ready(&SqliteIndexInfoType) < 0 || PyType_Ready(&apsw_no_change_object) < 0
       || PyType_Ready(&APSWFTS5TokenizerType) < 0 || PyType_Ready(&APSWFTS5ExtensionAPIType) < 0
-      || PyType_Ready(&PyObjectBindType) < 0)
+      || PyType_Ready(&PyObjectBindType) < 0
+#ifdef SQLITE_ENABLE_SESSION
+      || PyType_Ready(&APSWSessionType) <0  || PyType_Ready(&APSWTableChangeType) <0
+      || PyType_Ready(&APSWChangesetType) <0 || PyType_Ready(&APSWChangesetBuilderType) <0
+      || PyType_Ready(&APSWChangesetIteratorType) <0  || PyType_Ready(&APSWRebaserType) <0
+#endif
+      )
     goto fail;
 
   /* PyStructSequence_NewType is broken in some Pythons
@@ -1937,6 +1954,13 @@ PyInit_apsw(void)
   ADD(FTS5Tokenizer, APSWFTS5TokenizerType);
   ADD(FTS5ExtensionApi, APSWFTS5ExtensionAPIType);
   ADD(pyobject, PyObjectBindType);
+#ifdef SQLITE_ENABLE_SESSION
+  ADD(Session, APSWSessionType);
+  ADD(Changeset, APSWChangesetType);
+  ADD(ChangesetBuilder, APSWChangesetBuilderType);
+  ADD(TableChange, APSWTableChangeType);
+  ADD(Rebaser, APSWRebaserType);
+#endif
 #undef ADD
 
   /** .. attribute:: connection_hooks
@@ -1993,8 +2017,8 @@ PyInit_apsw(void)
     :type: object
 
     A sentinel value used to indicate no change in a value when
-    used with :meth:`VTCursor.ColumnNoChange` and
-    :meth:`VTTable.UpdateChangeRow`
+    used with :meth:`VTCursor.ColumnNoChange`,
+    :meth:`VTTable.UpdateChangeRow`, and :attr:`TableChange.new`.
   */
 
   if (PyModule_AddObject(m, "no_change", Py_NewRef((PyObject *)&apsw_no_change_object)))

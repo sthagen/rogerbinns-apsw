@@ -19,11 +19,13 @@ static struct _apsw_string_table
     PyObject *Commit;
     PyObject *Connect;
     PyObject *Create;
+    PyObject *DELETE;
     PyObject *Destroy;
     PyObject *Disconnect;
     PyObject *Eof;
     PyObject *Filter;
     PyObject *FindFunction;
+    PyObject *INSERT;
     PyObject *Integrity;
     PyObject *sNULL;
     PyObject *Next;
@@ -36,6 +38,7 @@ static struct _apsw_string_table
     PyObject *Savepoint;
     PyObject *ShadowName;
     PyObject *Sync;
+    PyObject *UPDATE;
     PyObject *UpdateChangeRow;
     PyObject *UpdateDeleteRow;
     PyObject *UpdateInsertRow;
@@ -52,6 +55,7 @@ static struct _apsw_string_table
     PyObject *final;
     PyObject *get;
     PyObject *inverse;
+    PyObject *release;
     PyObject *result;
     PyObject *step;
     PyObject *value;
@@ -101,11 +105,13 @@ fini_apsw_strings(void)
     Py_CLEAR(apst.Commit);
     Py_CLEAR(apst.Connect);
     Py_CLEAR(apst.Create);
+    Py_CLEAR(apst.DELETE);
     Py_CLEAR(apst.Destroy);
     Py_CLEAR(apst.Disconnect);
     Py_CLEAR(apst.Eof);
     Py_CLEAR(apst.Filter);
     Py_CLEAR(apst.FindFunction);
+    Py_CLEAR(apst.INSERT);
     Py_CLEAR(apst.Integrity);
     Py_CLEAR(apst.sNULL);
     Py_CLEAR(apst.Next);
@@ -118,6 +124,7 @@ fini_apsw_strings(void)
     Py_CLEAR(apst.Savepoint);
     Py_CLEAR(apst.ShadowName);
     Py_CLEAR(apst.Sync);
+    Py_CLEAR(apst.UPDATE);
     Py_CLEAR(apst.UpdateChangeRow);
     Py_CLEAR(apst.UpdateDeleteRow);
     Py_CLEAR(apst.UpdateInsertRow);
@@ -134,6 +141,7 @@ fini_apsw_strings(void)
     Py_CLEAR(apst.final);
     Py_CLEAR(apst.get);
     Py_CLEAR(apst.inverse);
+    Py_CLEAR(apst.release);
     Py_CLEAR(apst.result);
     Py_CLEAR(apst.step);
     Py_CLEAR(apst.value);
@@ -184,11 +192,13 @@ init_apsw_strings()
         || (!apst.Commit && 0 == (apst.Commit = PyUnicode_FromString("Commit")))
         || (!apst.Connect && 0 == (apst.Connect = PyUnicode_FromString("Connect")))
         || (!apst.Create && 0 == (apst.Create = PyUnicode_FromString("Create")))
+        || (!apst.DELETE && 0 == (apst.DELETE = PyUnicode_FromString("DELETE")))
         || (!apst.Destroy && 0 == (apst.Destroy = PyUnicode_FromString("Destroy")))
         || (!apst.Disconnect && 0 == (apst.Disconnect = PyUnicode_FromString("Disconnect")))
         || (!apst.Eof && 0 == (apst.Eof = PyUnicode_FromString("Eof")))
         || (!apst.Filter && 0 == (apst.Filter = PyUnicode_FromString("Filter")))
         || (!apst.FindFunction && 0 == (apst.FindFunction = PyUnicode_FromString("FindFunction")))
+        || (!apst.INSERT && 0 == (apst.INSERT = PyUnicode_FromString("INSERT")))
         || (!apst.Integrity && 0 == (apst.Integrity = PyUnicode_FromString("Integrity")))
         || (!apst.sNULL && 0 == (apst.sNULL = PyUnicode_FromString("NULL")))
         || (!apst.Next && 0 == (apst.Next = PyUnicode_FromString("Next")))
@@ -201,6 +211,7 @@ init_apsw_strings()
         || (!apst.Savepoint && 0 == (apst.Savepoint = PyUnicode_FromString("Savepoint")))
         || (!apst.ShadowName && 0 == (apst.ShadowName = PyUnicode_FromString("ShadowName")))
         || (!apst.Sync && 0 == (apst.Sync = PyUnicode_FromString("Sync")))
+        || (!apst.UPDATE && 0 == (apst.UPDATE = PyUnicode_FromString("UPDATE")))
         || (!apst.UpdateChangeRow && 0 == (apst.UpdateChangeRow = PyUnicode_FromString("UpdateChangeRow")))
         || (!apst.UpdateDeleteRow && 0 == (apst.UpdateDeleteRow = PyUnicode_FromString("UpdateDeleteRow")))
         || (!apst.UpdateInsertRow && 0 == (apst.UpdateInsertRow = PyUnicode_FromString("UpdateInsertRow")))
@@ -217,6 +228,7 @@ init_apsw_strings()
         || (!apst.final && 0 == (apst.final = PyUnicode_FromString("final")))
         || (!apst.get && 0 == (apst.get = PyUnicode_FromString("get")))
         || (!apst.inverse && 0 == (apst.inverse = PyUnicode_FromString("inverse")))
+        || (!apst.release && 0 == (apst.release = PyUnicode_FromString("release")))
         || (!apst.result && 0 == (apst.result = PyUnicode_FromString("result")))
         || (!apst.step && 0 == (apst.step = PyUnicode_FromString("step")))
         || (!apst.value && 0 == (apst.value = PyUnicode_FromString("value")))

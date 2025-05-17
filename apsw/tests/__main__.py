@@ -338,7 +338,13 @@ class APSW(unittest.TestCase):
         "set_row_trace": 1,
     }
 
-    blob_nargs = {"write": 1, "read": 1, "read_into": 1, "reopen": 1, "seek": 2}
+    blob_nargs = {
+        "write": 1,
+        "read": 1,
+        "read_into": 1,
+        "reopen": 1,
+        "seek": 2,
+    }
 
     def setUp(self):
         apsw.config(apsw.SQLITE_CONFIG_LOG, None)
@@ -5787,28 +5793,6 @@ class APSW(unittest.TestCase):
                 self.assertEqual(row[0], text)
             db.close()
 
-    # calls that need protection
-    calls = {}
-
-    def sourceCheckMutexCall(self, filename, name, lines):
-        # we check that various calls are wrapped with various macros
-        for i, line in enumerate(lines):
-            if "PYSQLITE_CALL" in line and "Py" in line:
-                self.fail("%s: %s() line %d - Py call while GIL released - %s" % (filename, name, i, line.strip()))
-            for k, v in self.calls.items():
-                if v.get("skipfiles", None) and v["skipfiles"].match(filename):
-                    continue
-                mo = v["match"].search(line)
-                if mo:
-                    func = mo.group(1)
-                    if v.get("skipcalls", None) and v["skipcalls"].match(func):
-                        continue
-                    if not v["needs"].search(line) and not v["needs"].search(lines[i - 1]):
-                        self.fail(
-                            "%s: %s() line %d call to %s(): %s - %s\n"
-                            % (filename, name, i, func, v["desc"], line.strip())
-                        )
-
     def sourceCheckFunction(self, filename, name, lines):
         # existing exception in callbacks
         if any("PyGILState_Ensure" in line for line in lines):
@@ -5825,6 +5809,7 @@ class APSW(unittest.TestCase):
             "FunctionCBInfo",
             "APSWFTS5Tokenizer",
             "cursor",
+            "APSWChangesetIterator",
         ):
             return
 
@@ -5874,6 +5859,36 @@ class APSW(unittest.TestCase):
                     "closed": "CHECK_CLOSED",
                 },
                 "order": ("use", "closed"),
+            },
+            "APSWSession": {
+                "skip": {
+                    "init",
+                    "close_internal",
+                    "close",
+                    "get_change_patch_set",
+                    "get_change_patch_set_stream",
+                    "dealloc",
+                },
+                "req": {"closed": "CHECK_SESSION_CLOSED"},
+                "order": ("closed",),
+            },
+            "APSWTableChange": {
+                "skip": {
+                    "tp_str",
+                    "dealloc",
+                },
+                "req": {"scope": "CHECK_TABLE_SCOPE"},
+                "order": ("scope",),
+            },
+            "APSWChangesetBuilder": {
+                "skip": {"dealloc", "close_internal", "close", "init"},
+                "req": {"closed": "CHECK_BUILDER_CLOSED"},
+                "order": ("closed",),
+            },
+            "APSWRebaser": {
+                "skip": {"dealloc", "init"},
+                "req": {"closed": "CHECK_REBASER_CLOSED"},
+                "order": ("closed",),
             },
             "APSWBlob": {
                 "skip": ("dealloc", "init", "close", "close_internal", "tp_str"),
@@ -5995,7 +6010,8 @@ class APSW(unittest.TestCase):
             # check not using C++ style comments
             code = read_whole_file(filename, "rt").replace("http://", "http:__").replace("https://", "https:__")
             if "//" in code:
-                self.fail("// style comment in " + filename)
+                lines = [linenum for linenum, line in enumerate(code.splitlines(), 1) if "//" in line]
+                self.fail(f"// style comment in {filename} lines {lines}")
 
             if filename.replace("\\", "/") != "src/pyutil.c":
                 for n in self.should_use_compat:
@@ -6016,10 +6032,9 @@ class APSW(unittest.TestCase):
             for line in read_whole_file(filename, "rt").split("\n"):
                 if line.startswith("}") and infunc:
                     if infunc == 1:
-                        self.sourceCheckMutexCall(filename, name1, lines)
                         self.sourceCheckFunction(filename, name1, lines)
                     elif infunc == 2:
-                        self.sourceCheckMutexCall(filename, name2, lines)
+                        pass
                     else:
                         assert False
                     infunc = 0
@@ -11726,7 +11741,8 @@ test_types_vals = (
     False,
 )
 
-from apsw.ftstests import *
+from .ftstests import *
+from .sessiontests import *
 
 if __name__ == "__main__":
     setup()

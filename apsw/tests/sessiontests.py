@@ -144,17 +144,12 @@ class Session(unittest.TestCase):
         """)
 
         session = apsw.Session(self.db, "main")
+        session.attach("zebra")
 
-        needs_attach = apsw.SQLITE_VERSION_NUMBER < 3050000
-
-        # errors
-        if needs_attach:
-            session.attach("zebra")
-        self.assertRaises(apsw.SchemaChangeError, session.diff, "zebra", "zebra")
+        self.assertRaises(apsw.SQLError, session.diff, "zebra", "zebra")
         self.assertRaises(apsw.SchemaChangeError, session.diff, "another", "zebra")
 
-        if needs_attach:
-            session.attach("t")
+        session.attach("t")
         self.assertRaisesRegex(apsw.SchemaChangeError, ".*table schemas do not match.*", session.diff, "other", "t")
 
         session.diff("another", "t")
@@ -685,7 +680,7 @@ class Session(unittest.TestCase):
 
         self.db.execute("update [delete] set two = 77")
 
-        for handler_return in (None, 3.4, 1 + 5j, "hello", sys.maxsize * 1024):
+        for handler_return in (None, apsw, 1 + 5j, "hello", sys.maxsize * 1024):
             self.assertRaises(
                 (TypeError, OverflowError),
                 apsw.Changeset.apply,

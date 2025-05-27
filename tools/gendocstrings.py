@@ -3,8 +3,6 @@
 This implements functionality similar to Argument Clinic.
 
 * Docstrings are available as C symbols, and then used
-* The syntax for __text_signature is used to give a partial type
-  signature
 * Argument parsing is automated
 * Type stubs are generated
 
@@ -236,24 +234,10 @@ def fixup(item: dict, eol: str) -> str:
     lines = item["doc"]
     if item["signature"]:
         # cpython can't handle the arg or return type info
-        sig = simple_signature(item["signature"])
         func = item["name"].split(".")[1]
-        lines = [f"""{ func }{ sig }\n--\n\n{ item["name"] }{ item["signature_original"] }\n\n"""] + lines
+        lines = [f"""{ item["name"] }{ item["signature_original"] }\n\n"""] + lines
 
     return cppsafe(lines, eol)
-
-
-def simple_signature(signature: list[dict]) -> str:
-    "Return signature simple enough to be accepted for __text_signature__"
-    res = ["$self"]
-    for param in signature:
-        if param["name"] == "return":
-            continue
-        p = param["name"]
-        if param["default"]:
-            p += f"={ param['default'] }"
-        res.append(p)
-    return "(" + ",".join(res) + ")"
 
 
 def analyze_signature(s: str) -> list[dict]:

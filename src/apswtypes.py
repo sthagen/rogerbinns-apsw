@@ -9,11 +9,14 @@ import types
 Mapping: TypeAlias = collections.abc.Mapping
 
 # Anything that resembles a sequence of bytes
-Buffer: TypeAlias = collections.abc.Buffer
+if sys.version_info >= (3, 12):
+    Buffer: TypeAlias = collections.abc.Buffer
+else:
+    Buffer: TypeAlias = bytes
 
-SQLiteValue = None | int | float | bytes | str
+SQLiteValue = None | int | float | Buffer | str
 """SQLite supports 5 types - None (NULL), 64 bit signed int, 64 bit
-float, bytes, and str (unicode text)"""
+float, bytes (Buffer), and str (unicode text)"""
 
 SQLiteValues = tuple[SQLiteValue, ...]
 "A sequence of zero or more SQLiteValue"

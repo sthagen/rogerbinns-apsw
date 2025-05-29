@@ -1,8 +1,8 @@
 
-SQLITEVERSION=3.49.2
+SQLITEVERSION=3.50.0
 APSWSUFFIX=.0
 
-RELEASEDATE="7 May 2025"
+RELEASEDATE="30 May 2025"
 
 VERSION=$(SQLITEVERSION)$(APSWSUFFIX)
 VERDIR=apsw-$(VERSION)
@@ -194,6 +194,8 @@ compile-win:  ## Builds and tests against all the Python versions on Windows
 	-cmd /c del /s /q build
 	-cmd /c del /s /q .venv
 	-cmd /c md dist
+	$(MAKE) compile-win-one PYTHON=c:/python314/python
+	$(MAKE) compile-win-one PYTHON=c:/python314-32/python
 	$(MAKE) compile-win-one PYTHON=c:/python313/python
 	$(MAKE) compile-win-one PYTHON=c:/python313-32/python
 	$(MAKE) compile-win-one PYTHON=c:/python312/python

@@ -2541,6 +2541,7 @@ class APSW(unittest.TestCase):
             self.db.create_aggregate_function("twelve", None)
 
         self.assertRaises(TypeError, self.db.create_aggregate_function, "twelve\N{BLACK STAR}", 12)  # must be ascii
+        self.db.create_aggregate_function("longest", None)
         self.db.create_aggregate_function("longest", longest.factory)
 
         vals = (
@@ -2559,6 +2560,9 @@ class APSW(unittest.TestCase):
 
         v = curnext(c.execute("select longest(x,y,z) from foo"))[0]
         self.assertEqual(v, vals[0][2])
+
+        self.db.create_aggregate_function("longest", None)
+        self.assertRaisesRegex(apsw.SQLError, ".*no such function.*longest.*", c.execute, "select longest(x,y,z) from foo")
 
         # SQLite doesn't allow step functions to return an error, so we have to defer to the final
         def badfactory():
@@ -2709,6 +2713,10 @@ class APSW(unittest.TestCase):
                 return self.v
 
         self.assertRaises(TypeError, self.db.create_window_function, 3, 3)
+        self.assertRaises(TypeError, self.db.create_window_function, "fred", windowfunc, 77, flags="zebra")
+        self.assertRaises(TypeError, self.db.create_window_function, "fred", windowfunc, 77, orange="zebra")
+        # sqlite doesn't complain about unknown flag values
+        self.db.create_window_function("fred", windowfunc, 77, flags=0b1111111111)
         self.db.create_window_function("sumint", None)
         self.db.create_window_function("sumint", windowfunc)
         self.db.execute("""CREATE TABLE t3(x, y);
@@ -2795,6 +2803,17 @@ class APSW(unittest.TestCase):
         with self.assertRaises(ZeroDivisionError):
             self.db.execute(query, can_cache=True).close()
         self.db.close()
+
+    def testDataVersion(self):
+        self.assertRaises(TypeError, self.db.data_version, 3)
+        self.assertRaises(TypeError, self.db.data_version, "main", "main")
+        # unknown schema
+        self.assertRaises(apsw.SQLError, self.db.data_version, "orange")
+        b4 = self.db.data_version()
+        self.db.execute("create table foo(x)")
+        self.db.execute("insert into foo values(3)")
+        new = self.db.data_version()
+        self.assertNotEqual(b4, new)
 
     def testFastcall(self):
         "fastcall argument processing"
@@ -3458,6 +3477,8 @@ class APSW(unittest.TestCase):
 
         for fn in (hook1, hook2, hook3):
             self.db.set_rollback_hook(fn, id=fn)
+
+        self.assertIn(hook1, gc.get_referents(self.db))
 
         self.assertRaisesChain(
             (ZeroDivisionError, FileExistsError, TypeError),
@@ -6487,15 +6508,9 @@ class APSW(unittest.TestCase):
 
         self.db.execute("insert into foo values(null, null, null)")
 
-        if hasattr(apsw, "Session") and "DEBUG" not in apsw.compile_options:
-            # SQLITE_DEBUG causes an assertion failure
-            session = apsw.Session(self.db, "main")
-            self.assertRaisesRegex(
-                Exception,
-                ".*This WILL result in crashes in session, so the hook has been disabled.*",
-                self.db.preupdate_hook,
-                lambda x: None,
-            )
+        # there used to be a test for clashing with session here, but it results
+        # in crashes because this and session cannot co-exist.  we can't control
+        # the order destructors run across all the python versions and systems.
 
         count = 0
         last_row = (None, None, None)

@@ -87,21 +87,26 @@ returns = {
             apsw_strdup convertutf8string MakeExistingException get_window_function_context
             MakeTableChange
 
-            PyModule_Create2 PyErr_NewExceptionWithDoc PySet_New
-            PyUnicode_New  PyUnicode_AsUTF8 PyObject_GetAttr _PyObject_New PyUnicode_FromString
-            PyObject_Str PyUnicode_AsUTF8AndSize PyTuple_New PyDict_New Py_BuildValue Py_VaBuildValue PyList_New
-            PyWeakref_NewRef PyMem_Calloc PyLong_FromLong PyObject_GetIter
-            PyObject_CallObject PyUnicode_FromStringAndSize
-            PySequence_GetItem PyLong_FromLongLong PySequence_GetSlice PyBytes_FromStringAndSize
-            PyFloat_FromDouble  PyBool_FromLong PyCode_NewEmpty PyFloat_AsDouble
-            PyIter_Next PyList_GetItem  PyLong_FromVoidPtr PyMapping_GetItemString PyNumber_Float
-            PyNumber_Long PySequence_Fast PySequence_List PySequence_Tuple PySequence_SetItem
-            PyFrame_New PyStructSequence_NewType PyStructSequence_New
-            PyMem_Realloc PyMem_Malloc PyUnicode_FromFormat PyTuple_Pack PyUnicode_AsUTF8String
-            PyObject_VectorcallMethod PyObject_Vectorcall PyWeakref_GetObject PyUnicode_DecodeUTF8
-            PyLong_FromSsize_t PyLong_FromUnsignedLongLong PyLong_FromSize_t
-            PyFrozenSet_New PyType_FromModuleAndSpec PyModule_AddStringConstant
-            PyMemoryView_FromMemory PyObject_CallMethodNoArgs PyType_GenericNew
+            PyBool_FromLong PyBytes_FromStringAndSize PyCode_NewEmpty PyDict_New
+            PyErr_NewExceptionWithDoc PyFloat_AsDouble PyFloat_FromDouble PyFloat_FromString
+            PyFrame_New PyFrozenSet_New PyIter_Next PyList_GetItem PyList_New
+            PyLong_FromLong PyLong_FromLongLong PyLong_FromSize_t
+            PyLong_FromSsize_t PyLong_FromUnsignedLongLong PyLong_FromVoidPtr
+            PyMapping_GetItemString PyMem_Calloc PyMem_Malloc PyMem_Realloc
+            PyMemoryView_FromMemory PyModule_AddStringConstant PyModule_Create2
+            PyNumber_Float PyNumber_Long PyObject_CallMethodNoArgs
+            PyObject_CallObject PyObject_GetAttr PyObject_GetIter PyObject_Str
+            PyObject_Vectorcall PyObject_VectorcallMethod PySequence_Fast
+            PySequence_GetItem PySequence_GetSlice PySequence_List
+            PySequence_SetItem PySequence_Tuple PySet_New PyStructSequence_New
+            PyStructSequence_NewType PyTuple_New PyTuple_Pack
+            PyType_FromModuleAndSpec PyType_GenericNew PyUnicode_AsUTF8
+            PyUnicode_AsUTF8AndSize PyUnicode_AsUTF8String PyUnicode_DecodeUTF8
+            PyUnicode_FromFormat PyUnicode_FromKindAndData PyUnicode_FromString
+            PyUnicode_FromStringAndSize  PyUnicode_New PyWeakref_GetObject PyWeakref_NewRef Py_BuildValue
+            Py_VaBuildValue _PyObject_New
+
+            realloc
 
             Connection_fts5_api get_token_value fts5extensionapi_acquire
 
@@ -165,19 +170,23 @@ returns = {
             sqlite3rebaser_rebase
 
             """.split(),
-    # py functions that return a number to indicate failure
-    "number": """
+    # py functions that return a number (-1) to indicate failure
+    "number": """Py_EnterRecursiveCall
         PyType_Ready PyModule_AddObject PyModule_AddIntConstant PyLong_AsLong
         PyLong_AsLongLong PyList_Append PyDict_SetItemString
         PyObject_SetAttr _PyBytes_Resize PyDict_SetItem
         PyObject_IsTrue PySequence_Size PySet_Add PyObject_IsTrueStrict
         PyStructSequence_InitType2 PyList_Size PyLong_AsInt
-        PyList_SetItem
+        PyList_SetItem PyList_Sort PySet_Contains PyObject_IsInstance
+        PyMapping_Size PySet_Discard
 
         PyObject_GetBufferContiguous PyObject_GetBuffer PyObject_GetBufferContiguousBounded
         _PyTuple_Resize
 
         connection_trace_and_exec getfunctionargs
+
+        jsonb_grow_buffer jsonb_add_tag jsonb_update_tag jsonb_append_data
+        jsonb_add_tag_and_data jsonb_encode_internal jsonb_encode_object_key
         """.split(),
 }
 
@@ -219,7 +228,7 @@ no_error.update(
     """PyArg_ParseTuple PyBytes_AsString PyErr_GivenExceptionMatches PyFrame_GetBack
     PyImport_ImportModule PyLong_AsLongAndOverflow PyLong_AsVoidPtr
     PyObject_IsInstance PySys_GetObject PyErr_ExceptionMatches
-    PyErr_SetString PyStructSequence_SetItem PyObject_Print Py_EnterRecursiveCall
+    PyErr_SetString PyStructSequence_SetItem PyObject_Print
     Py_GetRecursionLimit Py_LeaveRecursiveCall Py_SetRecursionLimit _PyErr_ChainExceptions
 
 """.split()

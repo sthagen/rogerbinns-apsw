@@ -17,10 +17,10 @@ jobs:
 
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Build ${{ matrix.os }} ${{ matrix.pyver }}
-        uses: pypa/cibuildwheel@v3.1
+        uses: pypa/cibuildwheel@v3.2
         env:
           CIBW_BUILD: ${{ matrix.pyver }}-*
           CIBW_BEFORE_BUILD: python -c "import shutil ; shutil.copyfile('tools/setup-pypi.cfg','setup.apsw')"
@@ -36,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Create source dist
       run: python setup.py sdist --for-pypi
@@ -54,7 +54,7 @@ jobs:
 
     steps:
     - name: Stage wheels
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v5
       with:
         pattern: dist-*
         merge-multiple: true

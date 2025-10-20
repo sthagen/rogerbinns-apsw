@@ -185,8 +185,6 @@ class TypesConverterCursorFactory:
 
     def adapt_value(self, value: Any) -> apsw.SQLiteValue:
         "Returns SQLite representation of `value`"
-        if value is None or isinstance(value, (int, bytes, str, float)):
-            return value
         if isinstance(value, self.abstract_base_class):
             return value.to_sqlite_value()
         adapter = self.adapters.get(type(value))
@@ -201,38 +199,9 @@ class TypesConverterCursorFactory:
             return value
         return converter(value)
 
-    def wrap_bindings(self, bindings: apsw.Bindings | None) -> apsw.Bindings | None:
-        "Wraps bindings that are supplied to underlying execute"
-        if bindings is None:
-            return None
-        if isinstance(bindings, (dict, collections.abc.Mapping)):
-            return TypesConverterCursorFactory.DictAdapter(self, bindings)  # type: ignore[arg-type]
-        return tuple(self.adapt_value(v) for v in bindings)
-
-    def wrap_sequence_bindings(
-        self, sequenceofbindings: Iterable[apsw.Bindings]
-    ) -> Generator[apsw.Bindings, None, None]:
-        "Wraps a sequence of bindings that are supplied to the underlying executemany"
-        for binding in sequenceofbindings:
-            yield self.wrap_bindings(binding)  # type: ignore[misc]
-
-    class DictAdapter(collections.abc.Mapping):
-        "Used to wrap dictionaries supplied as bindings"
-
-        def __init__(self, factory: TypesConverterCursorFactory, data: collections.abc.Mapping[str, apsw.SQLiteValue]):
-            self.data = data
-            self.factory = factory
-
-        def __getitem__(self, key: str) -> apsw.SQLiteValue:
-            return self.factory.adapt_value(self.data[key])
-
-        def __iter__(self):
-            "Required by mapping, but not used"
-            raise NotImplementedError
-
-        def __len__(self):
-            "Required by mapping, but not used"
-            raise NotImplementedError
+    def convert_binding(self, _, __, value: Any):
+        "convert_binding callback"
+        return self.adapt_value(value)
 
     class TypeConverterCursor(apsw.Cursor):
         "Cursor used to do conversions"
@@ -240,50 +209,93 @@ class TypesConverterCursorFactory:
         def __init__(self, connection: apsw.Connection, factory: TypesConverterCursorFactory):
             super().__init__(connection)
             self.factory = factory
+            self.convert_binding = factory.convert_binding
             self.row_trace = self._rowtracer
 
         def _rowtracer(self, cursor: apsw.Cursor, values: apsw.SQLiteValues) -> tuple[Any, ...]:
             return tuple(self.factory.convert_value(d[1], v) for d, v in zip(cursor.get_description(), values))
 
-        def execute(
-            self,
-            statements: str,
-            bindings: apsw.Bindings | None = None,
-            *,
-            can_cache: bool = True,
-            prepare_flags: int = 0,
-            explain: int = -1,
-        ) -> apsw.Cursor:
-            """Executes the statements doing conversions on supplied and returned values
 
-            See :meth:`apsw.Cursor.execute` for parameter details"""
-            return super().execute(
-                statements,
-                self.factory.wrap_bindings(bindings),
-                can_cache=can_cache,
-                prepare_flags=prepare_flags,
-                explain=explain,
-            )
+class Function:
+    """Provides a direct Python way to call a SQL level function
 
-        def executemany(
-            self,
-            statements: str,
-            sequenceofbindings: Iterable[apsw.Bindings],
-            *,
-            can_cache: bool = True,
-            prepare_flags: int = 0,
-            explain: int = -1,
-        ) -> apsw.Cursor:
-            """Executes the statements against each item in sequenceofbindings, doing conversions on supplied and returned values
+    An example::
 
-            See :meth:`apsw.Cursor.executemany` for parameter details"""
-            return super().executemany(
-                statements,
-                self.factory.wrap_sequence_bindings(sequenceofbindings),  # type: ignore[arg-type]
-                can_cache=can_cache,
-                prepare_flags=prepare_flags,
-                explain=explain,
-            )
+        json_extract = apsw.ext.Function(connection, "json_extract")
+        value = json_extract(some_json, '$.c[2].f')
+
+    :attr:`~apsw.Cursor.get` is used to return the results
+    """
+    # This is tested in tests/jsonb.py because it was developed in
+    # conjunction with jsonb
+    def __init__(
+        self,
+        connection: apsw.Connection,
+        name: str,
+        *,
+        convert_binding=None,
+        convert_jsonb=None,
+        exec_trace=None,
+    ):
+        """
+        :param connection: Connection to use
+        :param name: SQL function name.
+
+        Converters and tracers are off by default for the call, and must be
+        provided if you want to use them,
+        """
+        self.name = name.replace('"', '""')
+        cursor = connection.cursor()
+        cursor.convert_binding = convert_binding
+        cursor.convert_jsonb = convert_jsonb
+        cursor.exec_trace = exec_trace
+        self.cursor = cursor
+
+    def __call__(self, *args: apsw.SQLiteValue) -> apsw.SQLiteValue:
+        "Calls the function with zero or more parameters, returning the result"
+        return self.cursor.execute(f'SELECT "{self.name}"({",".join("?" * len(args))})', args).get
+
+
+def make_jsonb(tag: int, value: None | str | bytes | Any = None):
+    """Creates JSONB (binary) from tag and value
+
+    The value will be converted to a :class:`str` and UTF8 encoded if
+    necessary.  JSONB format is `documented here
+    <https://sqlite.org/jsonb.html>`__.
+    """
+    # Only tags 0 through 12 are valid
+    if not 0 <= tag <= 12:
+        raise ValueError("tag must be between 0 and 12 inclusive")
+
+    # we need the value as bytes
+    if value is None:
+        value = b""
+    elif isinstance(value, bytes):
+        # all good
+        pass
+    else:
+        # stringize and encode
+        value = str(value).encode("utf8")
+
+    len_value = len(value)
+
+    if len_value <= 11:
+        # length is encoded in the same byte as the tag
+        return bytes([(len_value << 4) | tag]) + value
+
+    # The length is encoded after the tag
+    if len_value <= 0xFF:
+        bytes_len = 1
+    elif len_value <= 0xFFFF:
+        bytes_len = 2
+    elif len_value <= 0xFFFF_FFFF:
+        bytes_len = 4
+    elif len_value <= 0xFFFF_FFFF_FFFF_FFFF:
+        bytes_len = 8
+    else:
+        raise ValueError("Value is too large")
+
+    return bytes([((11 + bytes_len) << 4) | tag]) + len_value.to_bytes(bytes_len, "big") + value
 
 
 def log_sqlite(*, level: int = logging.ERROR, logger: logging.Logger | None = None) -> None:

@@ -2297,7 +2297,7 @@ class APSW(unittest.TestCase):
         traced = [False, False]
         c.set_exec_trace(None)
         c.execute("select 3")
-        self.assertEqual(traced, [True, False])
+        self.assertEqual(traced, [False, False])
         traced = [False, False]
         self.db.cursor().execute("select 3")
         self.assertEqual(traced, [True, False])
@@ -2396,7 +2396,7 @@ class APSW(unittest.TestCase):
         c.set_row_trace(None)
         for row in c.execute("select 3"):
             pass
-        self.assertEqual(traced, [True, False])
+        self.assertEqual(traced, [False, False])
         self.assertEqual(self.db.get_row_trace(), contrace)
 
     def testScalarFunctions(self):
@@ -5956,7 +5956,8 @@ class APSW(unittest.TestCase):
             "APSWFTS5Tokenizer",
             "cursor",
             "APSWChangesetIterator",
-        ) or name in {"apsw_no_change_repr"}:
+            "JSONB",
+        ) or name in {"apsw_no_change_repr", "convert_column_to_pyobject"}:
             return
 
         checks = {
@@ -6306,12 +6307,16 @@ class APSW(unittest.TestCase):
 
     def testPyObject(self):
         "apsw.pyobject runtime objects"
+
+        self.assertRaises(TypeError, apsw.pyobject)
+        self.assertRaises(TypeError, apsw.pyobject, 1, 2)
+
         # a bunch of things SQLite should complain about
         objects = (set((1, 2, 3)), sys, 3 + 4j, self)
 
         for o in objects:
             self.assertRaises(TypeError, self.db.execute, "select ?", (o,))
-            self.assertEqual(o, self.db.execute("select ?", (apsw.pyobject(o),)).get)
+            self.assertIs(o, self.db.execute("select ?", (apsw.pyobject(o),)).get)
 
         def check(items):
             for i in items:
@@ -12141,6 +12146,7 @@ test_types_vals = (
 
 from .ftstests import *
 from .sessiontests import *
+from .jsonb import *
 
 if __name__ == "__main__":
     setup()

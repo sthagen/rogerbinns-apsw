@@ -10,8 +10,8 @@ history <https://devguide.python.org/versions/>`__.
 APSW changes by version
 -----------------------
 
-next
-====
+3.51.0.0
+========
 
 :ref:`JSON <jsontype>` can be used as though it is a native type of
 SQLite, with automatic conversion of Python objects on writing and
@@ -22,8 +22,8 @@ callback to allow conversion of bindings when executing SQL.
 
 :attr:`Connection.convert_jsonb` (and :attr:`Cursor.convert_jsonb`)
 callback to allow conversion of :ref:`JSONB <jsonb>`  when reading
-query results.  (JSONB is SQLite's internal parsed format for quick
-operations on JSON.)
+query results.  (JSONB is SQLite's binary internal parsed format for
+quick operations on JSON.)
 
 :ref:`3 functions <apsw_jsonb>` for working directly with JSONB
 allowing direct conversion between Python objects and JSONB, without
@@ -31,6 +31,21 @@ having to go through the intermediate JSON text format.
 
 Added :func:`apsw.ext.Function` for calling SQL functions directly
 from Python.
+
+Updated :meth:`Connection.status` to use 64 bit API, and
+:func:`apsw.ext.ShowResourceUsage` to show `TEMPBUF_SPILL
+<https://sqlite.org/c3ref/c_dbstatus_options.html>`__.
+(`cache_size <https://sqlite.org/pragma.html#pragma_cache_size>`__
+controls the amount of memory available.)
+
+The `percentile extension <https://sqlite.org/percentile.html>`__ is
+enabled when enabling all extensions, which is standard for pypi
+downloads.
+
+``SQLITE_SCM_`` constants (``BRANCH``, ``TAGS``, ``DATETIME``) are available
+on the module if built with the :attr:`amalgamation <using_amalgamation>`.
+
+This is the final release supporting Python 3.9.
 
 3.50.4.0
 ========

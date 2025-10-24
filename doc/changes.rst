@@ -32,6 +32,11 @@ having to go through the intermediate JSON text format.
 Added :func:`apsw.ext.Function` for calling SQL functions directly
 from Python.
 
+:meth:`Changeset.apply` now takes ``filter_change`` parameter for
+allowing filtering on individual change level, taking advantage of
+`sqlite3changeset_apply_v3
+<https://sqlite.org/session/sqlite3changeset_apply.html>`__
+
 Updated :meth:`Connection.status` to use 64 bit API, and
 :func:`apsw.ext.ShowResourceUsage` to show `TEMPBUF_SPILL
 <https://sqlite.org/c3ref/c_dbstatus_options.html>`__.
@@ -40,7 +45,16 @@ controls the amount of memory available.)
 
 The `percentile extension <https://sqlite.org/percentile.html>`__ is
 enabled when enabling all extensions, which is standard for pypi
-downloads.
+downloads.  It enables several percentile, median and related SQL
+functions.
+
+The `carray extension <https://sqlite.org/carray.html>`__ is enabled
+when enabling all extensions, which is standard for pypi downloads.
+It allows :meth:`binding single dimension packed arrays <apsw.carray>`
+of 32/64 bit integers, or 64 bit floats.  For example these can come
+from :mod:`array`, `numpy arrays
+<https://numpy.org/doc/stable/reference/generated/numpy.array.html>`__
+or binary data.
 
 ``SQLITE_SCM_`` constants (``BRANCH``, ``TAGS``, ``DATETIME``) are available
 on the module if built with the :attr:`amalgamation <using_amalgamation>`.

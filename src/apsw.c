@@ -288,40 +288,55 @@ static int allow_missing_dict_bindings = 0;
   :ref:`runtime value <pyobject>`.
 */
 
-/** .. method:: carray(object: Buffer, *, start: int = 0, stop: int = -1, flags: int = -1)
+/** .. method:: carray(object: Buffer | tuple[str] | tuple[Buffer], *, start: int = 0, stop: int = -1, flags: int = -1)
 
   Indicates a Python object is being provided as a runtime array for the
   `Carray extension <https://sqlite.org/carray.html>`__.  This is useful if you
-  need a large number of int or float available during a query, as they will
-  be used without calling back into Python code or acquiring the GIL.
+  need many numbers (int or float), strings, or blobs available during a query,
+  You can avoid temporary tables, formatting SQL with corresponding numbers of ``?``,
+  and the array will be used without calling back into Python code or acquiring the GIL.
 
-  .. code-block:: python
+  See the :ref:`example <example_carray>`.
 
-    import array
-
-    # packed array of 32 bit int
-    ids = array.array("l", [1, 73, 94567, 62])
-
-    # get records matching those ids
-    for row in con.execute("SELECT * FROM record WHERE record.id IN CARRAY(?)",
-      apsw.carray(ids)):
-      print(row)
-
-  :param object: Any object that implements the buffer protocol as
+  :param object: For numbers, any object that implements the buffer protocol as
      a single contiguous binary data like :class:`bytes`, :class:`bytearray`,
      :class:`array.array`, numpy.array etc.
+
+     Otherwise it should be a tuple of strings, or a tuple of binary data
+     objects.
   :param start: Index of the first entry to bind
   :param stop: Index to stop at - ie one beyond the last entry bound.  Default
-      is all remaining members.  There is a limit of 2 billion, and a minimum
-      of 1.
-  :param flags: Indicates if the data is 32/64 bit int, or 64 bit double (floating point).
-      If not supplied then the buffer format is detected.
-      You can see the `format string <https://docs.python.org/3/library/struct.html#byte-order-size-and-alignment>`__
-      with :code:`memoryview(object).format`.  Alternately provide a :data:`constant <apsw.mapping_carray>`
-      like :code:`apsw.SQLITE_CARRAY_INT32`
+      is all remaining members.
+  :param flags: Default auto detect.
 
-  Carray support is only present if APSW was compiled with ``SQLITE_ENABLE_CARRAY`` such as
-  PyPi builds.
+      For numbers, detection is done from the buffer
+      `format code <https://docs.python.org/3/library/struct.html#byte-order-size-and-alignment>`__.
+      Use :code:`memoryview(object).format` to see it..
+
+      .. list-table::
+        :widths: auto
+        :header-rows: 1
+
+        * - Format
+          - Flag
+        * - ``i``
+          - ``SQLITE_CARRAY_INT32``
+        * - ``l``
+          - ``SQLITE_CARRAY_INT64``
+        * - ``d``
+          - ``SQLITE_CARRAY_DOUBLE``
+
+      You can explicitly provide the type such as :code:`apsw.SQLITE_CARRAY_INT32`.  If
+      it is incorrect then the values will be nonsense.
+
+      If using a tuple of string or blobs, you can specify :code:`apsw.SQLITE_CARRAY_TEXT`
+      and :code:`apsw.SQLITE_CARRAY_BLOB` respectively, but they would be detected anyway.
+      A wrong value will fail.
+
+  .. note::
+
+    Carray support is only present if APSW was compiled with ``SQLITE_ENABLE_CARRAY`` such as
+    PyPi builds.  The array must have at least one member and at most 2 billion.
 */
 
 /** .. method:: sqlite_lib_version() -> str

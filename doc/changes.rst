@@ -15,7 +15,7 @@ APSW changes by version
 
 :ref:`JSON <jsontype>` can be used as though it is a native type of
 SQLite, with automatic conversion of Python objects on writing and
-reading.
+reading. (:doc:`example <example-json>`)
 
 :attr:`Connection.convert_binding` (and :attr:`Cursor.convert_binding`)
 callback to allow conversion of bindings when executing SQL.
@@ -50,11 +50,8 @@ functions.
 
 The `carray extension <https://sqlite.org/carray.html>`__ is enabled
 when enabling all extensions, which is standard for pypi downloads.
-It allows :meth:`binding single dimension packed arrays <apsw.carray>`
-of 32/64 bit integers, or 64 bit floats.  For example these can come
-from :mod:`array`, `numpy arrays
-<https://numpy.org/doc/stable/reference/generated/numpy.array.html>`__
-or binary data.  See the :ref:`example <example_carray>`.
+:meth:`apsw.carray` allows binding bulk numbers, strings, and blobs
+to a query.   See the :ref:`example <example_carray>`.
 
 ``SQLITE_SCM_`` constants (``BRANCH``, ``TAGS``, ``DATETIME``) are available
 on the module if built with the :attr:`amalgamation <using_amalgamation>`.

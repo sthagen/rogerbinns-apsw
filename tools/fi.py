@@ -762,6 +762,8 @@ class Tester:
             "sys.stdout,": "string_sink,",
             # fix pprint
             "from pprint import pprint": "pprint = print",
+            # needs to reraise nested exceptions - absurd syntax from chatgpt so I can make it one line
+            'print("commit was not allowed")': "(inner := exc.__cause__ or exc.__context__) and (_ for _ in ()).throw(inner)",
         }
 
         example_files = []
@@ -809,6 +811,8 @@ class Tester:
                 # runs the destructor on failure
                 "sqlite3_create_function_v2",
                 "sqlite3_window_function",
+                "sqlite3_carray_bind_apsw",
+                "sqlite3_carray_bind",
             }:
                 self.expect_exception.append(apsw_attr("ConnectionNotClosedError"))
                 self.expect_exception.append(apsw_attr("TooBigError"))  # code 18

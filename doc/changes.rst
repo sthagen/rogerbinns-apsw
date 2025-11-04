@@ -32,6 +32,11 @@ having to go through the intermediate JSON text format.
 Added :func:`apsw.ext.Function` for calling SQL functions directly
 from Python.
 
+When using ``with`` (:meth:`Connection context manager
+<Connection.__enter__>`) you can :attr:`set the outer transaction mode
+<Connection.transaction_mode>` to ``DEFERRED`` (default)  /
+``IMMEDIATE`` / ``EXCLUSIVE``. (:issue:`578`)
+
 :meth:`Changeset.apply` now takes ``filter_change`` parameter for
 allowing filtering on individual change level, taking advantage of
 `sqlite3changeset_apply_v3
@@ -64,6 +69,11 @@ Updated :mod:`apsw.unicode` to support `Unicode 17.0
 <https://www.unicode.org/versions/Unicode17.0.0/>`__ which adds 4,803
 new codepoints and updated line breaking, along with other small
 tweaks.
+
+The `Geopoly extension <https://www.sqlite.org/geopoly.html>`__
+(GeoJSON access to `RTree <https://www.sqlite.org/rtree.html>`__) is
+enabled when ``--enable-all-extensions`` is used with :ref:`setup.py
+<setup_py_flags>`.  This includes :ref:`PyPI <pypi>` builds.
 
 This is the final release supporting Python 3.9.
 

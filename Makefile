@@ -2,7 +2,7 @@
 SQLITEVERSION=3.51.0
 APSWSUFFIX=.0
 
-RELEASEDATE="31 October 2025"
+RELEASEDATE="6 November 2025"
 
 VERSION=$(SQLITEVERSION)$(APSWSUFFIX)
 VERDIR=apsw-$(VERSION)
@@ -210,8 +210,6 @@ compile-win:  ## Builds and tests against all the Python versions on Windows
 	$(MAKE) compile-win-one PYTHON=c:/python311-32/python
 	$(MAKE) compile-win-one PYTHON=c:/python310-32/python
 	$(MAKE) compile-win-one PYTHON=c:/python310/python
-	$(MAKE) compile-win-one PYTHON=c:/python39-32/python
-	$(MAKE) compile-win-one PYTHON=c:/python39/python
 
 # I did try to make this use venv but then the pip inside the venv and
 # other packages were skipped due to metadata issues

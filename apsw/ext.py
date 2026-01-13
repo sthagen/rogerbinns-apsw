@@ -1940,7 +1940,7 @@ def _format_table(
         def colour_wrap(text: str, kind: type | None, header: bool = False) -> str:
             return text
 
-    colwidths = [max(len(v) for v in c.splitlines()) for c in colnames]
+    colwidths = [(max(len(v) for v in c.splitlines()) if c else 0) for c in colnames]
     coltypes: list[set[type]] = [set() for _ in colnames]
 
     # type, measure and stringize each cell
@@ -2023,7 +2023,7 @@ def _format_table(
             break
 
         # this makes wider columns take more of the width blame
-        proportions = [w * 1.1 / total_width() for w in colwidths]
+        proportions = [w * 1.15 / total_width() for w in colwidths]
 
         excess = total_width() - text_width
 
@@ -2055,7 +2055,7 @@ def _format_table(
 
     # break headers and cells into lines
     def wrap(text: str, width: int) -> list[str]:
-        return list(apsw.unicode.text_wrap(text, width))
+        return list(apsw.unicode.text_wrap(text, width)) or [""]
 
     colnames = [wrap(colnames[i], colwidths[i]) for i in range(len(colwidths))]  # type: ignore
     for row in rows:
@@ -2105,17 +2105,19 @@ def _format_table(
                 line += text + sep
             out_lines.append(line)
 
-    do_bar("┌─┬┐" if use_unicode else "+-++")
+    do_bar("╭─┬╮" if use_unicode else "+-++")
     do_row([(c, None) for c in colnames], "│" if use_unicode else "|", centre=True, header=True)
 
     # rows
+    which = 0
     if rows:
         for row in rows:
             if multiline:
-                do_bar("├─┼┤" if use_unicode else "+-++")
+                do_bar(["╞═╪╡", "├─┼┤"][which] if use_unicode else ["+=++", "+-++"][which])
+                which = 1
             do_row(row, "│" if use_unicode else "|")
 
-    do_bar("└─┴┘" if use_unicode else "+-++")
+    do_bar("╰─┴╯" if use_unicode else "+-++")
 
     return "\n".join(out_lines) + "\n"
 

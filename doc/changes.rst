@@ -10,6 +10,17 @@ history <https://devguide.python.org/versions/>`__.
 APSW changes by version
 -----------------------
 
+3.52.0.0
+--------
+
+Fix wrapping, indents. and space for hyphens in
+:func:`apsw.unicode.text_wrap` under various conditions (:issue:`600`)
+
+Added option to :func:`apsw.unicode.text_wrap`  for justifying text.  This
+is used in :func:`apsw.ext.format_query_table` to centre column names,
+and right align integers.  That updates the :doc:`shell <shell>` output.
+(:issue:`601`)
+
 3.51.2.0
 ========
 

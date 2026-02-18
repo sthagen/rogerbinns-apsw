@@ -234,6 +234,9 @@ static void apsw_write_unraisable(PyObject *hookobject);
 /* Augment tracebacks */
 #include "traceback.c"
 
+/* aio/async stuff */
+#include "async.c"
+
 /* various utility functions and macros */
 #include "util.c"
 
@@ -410,7 +413,7 @@ enable_shared_cache(PyObject *Py_UNUSED(self), PyObject *const *fast_args, Py_ss
 
 /** .. method:: connections() -> list[Connection]
 
-  Returns a list of the connections
+  Returns a list of the open connections
 
 */
 static PyObject *the_connections;
@@ -1086,6 +1089,9 @@ static PyObject *
 apsw_fini(PyObject *Py_UNUSED(self), PyObject *Py_UNUSED(unused))
 {
   fini_apsw_strings();
+  Py_CLEAR(coro_for_value);
+  Py_CLEAR(coro_for_exception);
+  Py_CLEAR(coro_for_stopasynciteration);
   Py_RETURN_NONE;
 }
 #endif
@@ -1862,27 +1868,7 @@ apsw_allow_missing_dict_bindings(PyObject *Py_UNUSED(module), PyObject *const *f
   Py_RETURN_FALSE;
 }
 
-static PyObject *
-apsw_getattr(PyObject *Py_UNUSED(module), PyObject *name)
-{
-  PyObject *shellmodule = NULL, *res = NULL;
-#undef PyUnicode_AsUTF8
-  /* we can't do this because it messes up the import machinery */
-  const char *cname = PyUnicode_AsUTF8(name);
-#include "faultinject.h"
 
-  if (!cname)
-    return NULL;
-
-  if (strcmp(cname, "Shell") && strcmp(cname, "main"))
-    return PyErr_Format(PyExc_AttributeError, "Unknown apsw attribute %R", name);
-
-  shellmodule = PyImport_ImportModule("apsw.shell");
-  if (shellmodule)
-    res = PyObject_GetAttr(shellmodule, name);
-  Py_XDECREF(shellmodule);
-  return res;
-}
 
 static PyMethodDef module_methods[] = {
   { "sqlite3_sourceid", (PyCFunction)get_sqlite3_sourceid, METH_NOARGS, Apsw_sqlite3_sourceid_DOC },
@@ -1923,7 +1909,6 @@ static PyMethodDef module_methods[] = {
 #ifdef APSW_FORK_CHECKER
   { "fork_checker", (PyCFunction)apsw_fork_checker, METH_NOARGS, Apsw_fork_checker_DOC },
 #endif
-  { "__getattr__", (PyCFunction)apsw_getattr, METH_O, "module getattr" },
   { "connections", (PyCFunction)apsw_connections, METH_NOARGS, Apsw_connections_DOC },
   { "sleep", (PyCFunction)apsw_sleep, METH_FASTCALL | METH_KEYWORDS, Apsw_sleep_DOC },
 #ifdef SQLITE_ENABLE_SESSION
@@ -1953,6 +1938,62 @@ static PyMethodDef module_methods[] = {
   { 0, 0, 0, 0 } /* Sentinel */
 };
 
+/* This next section until PyInit_apsw is to catch attempts to overwrite the async context vars */
+static int module_is_initialized;
+
+static int
+apsw_module_setattr(PyObject *module, PyObject *name, PyObject *value)
+{
+  if (module_is_initialized
+      && (PyObject_RichCompareBool(name, apst.async_controller, Py_EQ) == 1
+          || PyObject_RichCompareBool(name, apst.async_cursor_prefetch, Py_EQ) == 1))
+  {
+    PyErr_Format(PyExc_AttributeError,
+                 "Do not overwrite apsw.%S.  It is a context var - use its set method in your context", name);
+    return -1;
+  }
+
+  if (module_is_initialized && (PyObject_RichCompareBool(name, apst.async_run_coro, Py_EQ) == 1))
+  {
+    if (!Py_IsNone(value) && !PyCallable_Check(value))
+    {
+      PyErr_Format(PyExc_TypeError, "Expected None or a callable for async_run_coro, not %s", Py_TypeName(value));
+      return -1;
+    }
+    return PyDict_SetItem(PyThreadState_GetDict(), async_run_coro_sentinel, value);
+  }
+
+  return PyErr_Occurred() ? -1 : PyObject_GenericSetAttr(module, name, value);
+}
+
+static PyObject *
+apsw_module_getattr(PyObject *module, PyObject *name)
+{
+  if (module_is_initialized && (PyObject_RichCompareBool(name, apst.async_run_coro, Py_EQ) == 1))
+  {
+    PyObject *runner = PyDict_GetItemWithError(PyThreadState_GetDict(), async_run_coro_sentinel);
+    if (PyErr_Occurred())
+      return NULL;
+    if (!runner)
+      Py_RETURN_NONE;
+    return Py_NewRef(runner);
+  }
+  if (module_is_initialized && (PyObject_RichCompareBool(name, apst.main, Py_EQ) == 1))
+    return PyImport_ImportModuleAttr(apst.apsw_shell, apst.main);
+
+  if (module_is_initialized && (PyObject_RichCompareBool(name, apst.Shell, Py_EQ) == 1))
+    return PyImport_ImportModuleAttr(apst.apsw_shell, apst.Shell);
+
+  return PyObject_GenericGetAttr(module, name);
+}
+
+static PyTypeObject ApswModuleType = {
+  PyVarObject_HEAD_INIT(NULL, 0).tp_name = "APSWModule",
+  .tp_flags = Py_TPFLAGS_DEFAULT,
+  .tp_setattro = apsw_module_setattr,
+  .tp_getattro = apsw_module_getattr,
+};
+
 static struct PyModuleDef apswmoduledef = { PyModuleDef_HEAD_INIT, "apsw", NULL, -1, module_methods, 0, 0, 0, 0 };
 
 PyMODINIT_FUNC
@@ -1970,6 +2011,18 @@ PyInit_apsw(void)
     PyErr_Format(PyExc_EnvironmentError, "SQLite was compiled without thread safety and cannot be used.");
     goto fail;
   }
+  module_is_initialized = 0;
+  if (ApswModuleType.tp_base == NULL)
+  {
+    ApswModuleType.tp_base = &PyModule_Type;
+    ApswModuleType.tp_basicsize = PyModule_Type.tp_basicsize;
+
+    if (PyType_Ready(&ApswModuleType) < 0)
+    {
+      ApswModuleType.tp_base = NULL;
+      goto fail;
+    }
+  }
 
   if (PyType_Ready(&ConnectionType) < 0 || PyType_Ready(&APSWCursorType) < 0 || PyType_Ready(&ZeroBlobBindType) < 0
       || PyType_Ready(&APSWBlobType) < 0 || PyType_Ready(&APSWVFSType) < 0 || PyType_Ready(&APSWVFSFileType) < 0
@@ -1977,7 +2030,7 @@ PyInit_apsw(void)
       || PyType_Ready(&FunctionCBInfoType) < 0 || PyType_Ready(&APSWBackupType) < 0
       || PyType_Ready(&SqliteIndexInfoType) < 0 || PyType_Ready(&apsw_no_change_type) < 0
       || PyType_Ready(&APSWFTS5TokenizerType) < 0 || PyType_Ready(&APSWFTS5ExtensionAPIType) < 0
-      || PyType_Ready(&PyObjectBindType) < 0
+      || PyType_Ready(&PyObjectBindType) < 0 || PyType_Ready(&BoxedCallType) < 0
 #ifdef SQLITE_ENABLE_CARRAY
       || PyType_Ready(&CArrayBindType) < 0
 #endif
@@ -2005,6 +2058,11 @@ PyInit_apsw(void)
   m = apswmodule = PyModule_Create2(&apswmoduledef, PYTHON_API_VERSION);
 
   if (m == NULL)
+    goto fail;
+
+  Py_SET_TYPE(apswmodule, &ApswModuleType);
+
+  if (PyModule_AddFunctions(m, apswmoduledef.m_methods) < 0)
     goto fail;
 
   the_connections = PyList_New(0);
@@ -2114,6 +2172,62 @@ PyInit_apsw(void)
 
 #endif
 
+  /** .. attribute:: async_controller
+    :type: type[AsyncConnectionController]
+
+    This sets the controller for :meth:`Connection.as_async`.  It will use
+    :func:`apsw.aio.Auto` if not explicitly set.
+  */
+  /* we can't PyImport_ImportModuleAttr here to set apsw.aio.Auto as the
+     default because calling that results in a RecursionError because apsw
+     is in the middle of being imported */
+  if (!async_controller_context_var)
+    if (NULL == (async_controller_context_var = PyContextVar_New("apsw.async_controller", Py_None)))
+      goto fail;
+
+  if (PyModule_AddObjectRef(m, "async_controller", async_controller_context_var))
+    goto fail;
+
+  /** .. attribute:: async_run_coro
+    :type: Callable[[Coroutine], Any]
+
+    When APSW encounters a :class:`~typing.Coroutine` this called to run
+    it and block until getting the result.  The callable would typically
+    have the coroutine run in the event loop.  See :doc:`async` for
+    details.
+
+    This is a per-thread value.
+  */
+
+  if (!async_run_coro_sentinel)
+    if (NULL == (async_run_coro_sentinel = PyBaseObject_Type.tp_alloc(&PyBaseObject_Type, 0)))
+      goto fail;
+
+  if (PyModule_AddObjectRef(m, "async_run_coro", Py_None))
+    goto fail;
+
+  /** .. attribute:: async_cursor_prefetch
+    :type: contextvars.ContextVar[int]
+
+    When iterating on a :class:`Cursor` in async mode, it is more
+    efficient to get multiple result rows at once.  This controls how many
+    that is.  The default is 64 if not set. See :doc:`async` for details.
+    Typical usage is:
+
+    .. code-block:: python
+
+      with apsw.aio.contextvar_set(apsw.async_cursor_prefetch, 1):
+        async for row in await db.execute("SELECT ..."):
+            print(f"{row=})
+  */
+
+  if (!async_cursor_prefetch_context_var)
+    if (NULL == (async_cursor_prefetch_context_var = PyContextVar_New("apsw.async_cursor_prefetch", Py_None)))
+      goto fail;
+
+  if (PyModule_AddObjectRef(m, "async_cursor_prefetch", async_cursor_prefetch_context_var))
+    goto fail;
+
   /** .. attribute:: no_change
     :type: object
 
@@ -2123,10 +2237,10 @@ PyInit_apsw(void)
     and :class:`PreUpdate.update`.
   */
 
-  if(!apsw_no_change_object)
+  if (!apsw_no_change_object)
   {
     apsw_no_change_object = _PyObject_New(&apsw_no_change_type);
-    if(!apsw_no_change_object)
+    if (!apsw_no_change_object)
       goto fail;
   }
 
@@ -2181,19 +2295,15 @@ modules etc. For example::
 
   if (!PyErr_Occurred())
   {
-    PyObject *mod = PyImport_ImportModule("collections.abc");
-    if (mod)
-    {
-      collections_abc_Mapping = PyObject_GetAttrString(mod, "Mapping");
-      Py_DECREF(mod);
-    }
-    /* should always have succeeded */
-    if(!mod || !collections_abc_Mapping)
+    collections_abc_Mapping = PyImport_ImportModuleAttr(apst.collections_abc, apst.Mapping);
+
+    if (!collections_abc_Mapping)
       goto fail;
   }
 
   if (!PyErr_Occurred())
   {
+    module_is_initialized = 1;
     return m;
   }
 

@@ -1,7 +1,8 @@
-import sys
+import contextvars
 
-from typing import Callable, Any, Iterable, Sequence, Literal, Protocol, TypeAlias, final
-from collections.abc import Mapping, Buffer, Iterator
+from typing import Callable, Any, Iterable, Sequence, Literal, Protocol, TypeAlias, final, Self, Coroutine, overload
+from collections.abc import Mapping, Buffer, Iterator, Awaitable
+
 import array
 import types
 
@@ -178,3 +179,52 @@ JSONBTypes = (
 """Used by :func:`apsw.jsonb_encode`. Mapping (dict) keys must be str
 in JSONB.  Like the builtin JSON module, None/int/float/bool keys will be
 stringized."""
+
+class AsyncConnectionController(Protocol):
+    """Manages a worker thread and marshalling async requests to it
+
+    To support async callbacks, it should implement
+    :attr:`apsw.async_run_coro` to send them to the event loop.
+
+    See :mod:`apsw.aio` for some implementations.
+    """
+
+    def configure(self, connection: Connection):
+        """
+        Called in the worker thead once the connection is available
+
+        To support async callbacks, it should set
+        :attr:`apsw.async_run_coro`.
+
+        This must run the :attr:`Connection.connection_hooks`.
+        """
+        ...
+
+    async def send(self, call: Callable[[], Any]) -> Any:
+        """Called from outside the worker thread to send to worker thread
+
+        This should be async or return an awaitable, and forward
+        ``call`` to the worker thread where it is called with no
+        arguments, and return the result or exception
+        """
+        ...
+
+    def close(self):
+        """Called after the connection has closed
+
+        This allows shutting down the worker thread and similar
+        housekeeping.  Because of when this called, any exceptions are
+        :func:`unraisable <sys.unraisablehook>`.
+        """
+        ...
+
+# Async Note: These types do not exist separately at runtime.  They
+# are present in type stubs to allow IDE and type checking.
+
+class AsyncConnection:
+    "A type stub to indicate a Connection in async mode"
+    ...
+
+class AsyncSession:
+    "A type stub to indicate a :class:`Session` in async mode"
+    ...

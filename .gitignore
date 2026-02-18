@@ -23,6 +23,7 @@ doc/renames.rstgen
 doc/docdb.json
 *.pyc
 testextension.*
+!testextension.c
 testdbx-journal
 testdbx
 *~
@@ -47,11 +48,11 @@ testdb
 apsw.egg-info
 /.ropeproject/
 /.mypy_cache/
-/System Volume Informationm/
+/System Volume Information/
 __pycache__/
 setup.cfg
 work/
-.venv/
+.venv*/
 compile_commands.json
 .vscode/
 .cache/

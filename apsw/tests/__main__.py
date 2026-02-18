@@ -244,6 +244,9 @@ bgdelthread.start()
 def deletefile(name):
     try:
         os.remove(name)
+        return
+    except FileNotFoundError:
+        return
     except:
         pass
     l = list("abcdefghijklmn")
@@ -254,6 +257,9 @@ def deletefile(name):
         count += 1
         try:
             os.rename(name, newname)
+            return
+        except FileNotFoundError:
+            return
         except:
             if count > 30:  # 3 seconds we have been at this!
                 # So give up and give it a stupid name.  The sooner
@@ -502,6 +508,7 @@ class APSW(unittest.TestCase):
             called = []
 
             def ehook(*args):
+                str(args)
                 if len(args) == 1:
                     t = args[0].exc_type
                     v = args[0].exc_value
@@ -4860,7 +4867,7 @@ class APSW(unittest.TestCase):
         blob = self.db.blob_open("main", "foo", "x", rowid, True)
         blob.close()
         nargs = self.blob_nargs
-        for func in [x for x in dir(blob) if not x.startswith("__") and not x in ("close",)]:
+        for func in [x for x in dir(blob) if not x.startswith("__") and x not in ("close", "aclose")]:
             args = ("one", "two", "three")[: nargs.get(func, 0)]
             try:
                 getattr(blob, func)(*args)
@@ -4871,7 +4878,7 @@ class APSW(unittest.TestCase):
         self.db.close()
         nargs = self.connection_nargs
         tested = 0
-        for func in [x for x in dir(self.db) if x in nargs or (not x.startswith("__") and not x in ("close",))]:
+        for func in [x for x in dir(self.db) if x in nargs or (not x.startswith("__") and x not in ("close", "aclose", "as_async"))]:
             tested += 1
             args = ("one", "two", "three")[: nargs.get(func, 0)]
 
@@ -4888,7 +4895,7 @@ class APSW(unittest.TestCase):
         # do the same thing, but for cursor
         nargs = self.cursor_nargs
         tested = 0
-        for func in [x for x in dir(cur) if not x.startswith("__") and not x in ("close",)]:
+        for func in [x for x in dir(cur) if not x.startswith("__") and x not in ("close", "aclose")]:
             tested += 1
             args = ("one", "two", "three")[: nargs.get(func, 0)]
             try:
@@ -5517,10 +5524,11 @@ class APSW(unittest.TestCase):
 
         for o in objects:
             for n in dir(o):
-                try:
-                    getattr(o, n)
-                except apsw.Error:
-                    pass
+                if n not in {"async_controller"}:
+                    try:
+                        getattr(o, n)
+                    except apsw.Error:
+                        pass
 
     def testIssue488(self):
         "__init__ called multiple times"
@@ -6021,6 +6029,9 @@ class APSW(unittest.TestCase):
             "cursor",
             "APSWChangesetIterator",
             "JSONB",
+            "AwaitableWrapper",
+            "BoxedCall",
+            "APSWChangeset",
         ) or name in {"apsw_no_change_repr", "convert_column_to_pyobject"}:
             return
 
@@ -6035,9 +6046,10 @@ class APSW(unittest.TestCase):
                     "do_row_trace",
                     "step",
                     "close",
+                    "aclose",
                     "close_internal",
                     "tp_traverse",
-                    "tp_str",
+                    "tp_repr",
                     "get_description",
                     "get_description_full",
                     "getdescription_dbapi",
@@ -6054,6 +6066,7 @@ class APSW(unittest.TestCase):
                     "dealloc",
                     "init",
                     "close",
+                    "aclose",
                     "interrupt",
                     "close_internal",
                     "remove_dependent",
@@ -6065,7 +6078,7 @@ class APSW(unittest.TestCase):
                     "tp_traverse",
                     "get_cursor_factory",
                     "set_cursor_factory",
-                    "tp_str",
+                    "tp_repr",
                     "bool",
                 ),
                 "req": {
@@ -6078,9 +6091,11 @@ class APSW(unittest.TestCase):
                     "init",
                     "close_internal",
                     "close",
+                    "aclose",
                     "get_change_patch_set",
                     "get_change_patch_set_stream",
                     "dealloc",
+                    "tp_repr",
                     "tp_traverse",
                     "bool",
                 },
@@ -6089,7 +6104,7 @@ class APSW(unittest.TestCase):
             },
             "APSWTableChange": {
                 "skip": {
-                    "tp_str",
+                    "tp_repr",
                     "dealloc",
                 },
                 "req": {"scope": "CHECK_TABLE_SCOPE"},
@@ -6106,12 +6121,12 @@ class APSW(unittest.TestCase):
                 "order": ("closed",),
             },
             "APSWBlob": {
-                "skip": ("dealloc", "init", "close", "close_internal", "tp_str", "bool"),
+                "skip": ("dealloc", "init", "close", "close_internal", "tp_repr", "bool", "aclose"),
                 "req": {"closed": "CHECK_BLOB_CLOSED"},
                 "order": ("use", "closed"),
             },
             "APSWBackup": {
-                "skip": ("dealloc", "init", "close_internal", "get_remaining", "get_page_count", "tp_str", "bool"),
+                "skip": ("dealloc", "init", "close_internal", "get_remaining", "get_page_count", "tp_repr", "bool", "aclose"),
                 "req": {"closed": "CHECK_BACKUP_CLOSED"},
                 "order": ("use", "closed"),
             },
@@ -6157,7 +6172,7 @@ class APSW(unittest.TestCase):
             },
             "PreUpdate":
             {
-                "skip": ("dealloc", "tp_str", ),
+                "skip": ("dealloc", "tp_repr", ),
                 "req": {"check": "CHECK_PREUPDATE_SCOPE"},
                 "order": ("check",),
             },
@@ -7328,10 +7343,13 @@ class APSW(unittest.TestCase):
                 self.basevfs = basevfs
                 apsw.VFS.__init__(self, self.vfsname, self.basevfs, exclude=None)
 
-            def xOpen(self, name, flags):
-                return ObfuscatedVFSFile(self.basevfs, name, flags)
+            def xOpen(innerself, name, flags):
+                x=ObfuscatedVFSFile(innerself.basevfs, name, flags)
+                self.assertIsNotNone(re.match("<ObfuscatedVFSFile filename \".*\" at 0x[a-f0-9]+>", str(x)))
+                return x
 
         vfs = ObfuscatedVFS()
+        self.assertIsNotNone(re.match("<ObfuscatedVFS \"obfu\" inherits from \".*\" at 0x[0-9a-f]+>", str(vfs)))
 
         query = "create table foo(x,y); insert into foo values(1,2); insert into foo values(3,4)"
         self.db.cursor().execute(query)
@@ -7882,6 +7900,13 @@ class APSW(unittest.TestCase):
                 return "a" * amount
 
             def xRead5(self, amount, offset):
+                # This does short reads on purpose.
+                if "DEBUG" in apsw.compile_options:
+                    # SQLite has an assertion that gets hit if amount
+                    # is zero which happens under Windows but not
+                    # other platforms so we avoid zero length reads
+                    # when assertions are enabled
+                    return super().xRead(max(1, amount - 1), offset)
                 return super().xRead(amount - 1, offset)
 
             def xRead99(self, amount, offset):
@@ -8711,6 +8736,7 @@ class APSW(unittest.TestCase):
         for v in "deFerreD", "IMMEDiAte", "EXCLUSive":
             setattr(self.db, "transaction_mode", v)
             self.assertEqual(v.upper(), self.db.transaction_mode)
+        self.assertRaises(TypeError, setattr, self.db, "transaction_mode", 3+4j)
 
         self.assertRaises(TypeError, setattr, self.db, 3)
 
@@ -11692,7 +11718,7 @@ SELECT group_concat(rtrim(t),x'0a') FROM a;
             backup2,
         )
         for o in objects:
-            self.assertNotEqual(repr(o), str(o))
+            self.assertEqual(repr(o), str(o))
             # issue 501
             if isinstance(o, apsw.URIFilename):
                 self.assertNotEqual(repr(o), urinamestr)
@@ -11843,6 +11869,10 @@ class ZZFaultInjection(unittest.TestCase):
         self.db.read("main", 0, 0, 1)
         apsw.faultdict["ConnectionReadError"] = True
         self.assertRaises(apsw.IOError, self.db.read, "main", 0, 0, 1)
+
+        ## ConnectionAsyncTpNewFails
+        apsw.faultdict["ConnectionAsyncTpNewFails"] = True
+        self.assertRaises(MemoryError, apsw.Connection.as_async, "")
 
         ### vfs routines
 
@@ -12258,6 +12288,7 @@ from .ftstests import *
 from .sessiontests import *
 from .jsonb import *
 from .carray import *
+from .aiotest import *
 
 if __name__ == "__main__":
     setup()

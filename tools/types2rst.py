@@ -50,6 +50,7 @@ std_typing = {
     "List",
     "Any",
     "Protocol",
+    "Coroutine",
 }
 
 # stuff in collections.abc

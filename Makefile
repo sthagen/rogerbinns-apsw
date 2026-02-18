@@ -25,7 +25,8 @@ GENDOCS = \
 GENEXAMPLES = \
     doc/example-fts.rst \
 	doc/example-session.rst \
-	doc/example-json.rst
+	doc/example-json.rst \
+	doc/example-async.rst
 
 .PHONY : help all tagpush clean doc docs build_ext build_ext_debug coverage pycoverage test test_debug fulltest linkcheck unwrapped \
 		 publish stubtest showsymbols compile-win setup-wheel source_nocheck source release pydebug \
@@ -69,13 +70,13 @@ docs-no-fetch: $(GENDOCS) doc/example.rst $(GENEXAMPLES) doc/typing.rstgen doc/r
 
 doc/example.rst: examples/main.py tools/example2rst.py src/apswversion.h
 	rm -f dbfile
-	env PYTHONPATH=. $(PYTHON) -sS tools/example2rst.py examples/main.py doc/example.rst
+	env PYTHONPATH=. $(PYTHON) -s tools/example2rst.py examples/main.py doc/example.rst
 	rm -f dbfile
 
 doc/example-%.rst: examples/%.py tools/example2rst.py src/apswversion.h apsw/ext.py
 	-rm -f recipes.db* other.db* diff_demo.db* alice.db* bob.db*
 	cp ../apsw-extended-testing/recipes.db .
-	env PYTHONPATH=. $(PYTHON) -sS tools/example2rst.py $< $@
+	env PYTHONPATH=. $(PYTHON) -s tools/example2rst.py $< $@
 	-rm -f recipes.db* other.db* diff_demo.db* alice.db* bob.db*
 
 doc/typing.rstgen: src/apswtypes.py tools/types2rst.py
@@ -91,7 +92,7 @@ doc-depends: ## pip installs packages needed to build doc
 
 dev-depends: ## pip installs packages useful for development (none are necessary except setuptools)
 	$(PYTHON) -m pip install -U --upgrade-strategy eager build wheel setuptools pip
-	$(PYTHON) -m pip install -U --upgrade-strategy eager mypy pdbp coverage ruff
+	$(PYTHON) -m pip install -U --upgrade-strategy eager pdbp coverage ruff anyio trio
 
 # This is probably gnu make specific but only developers use this makefile
 $(GENDOCS): doc/%.rst: src/%.c tools/code2rst.py  tools/tocupdate.sql
@@ -181,7 +182,7 @@ fossil: ## Grabs latest trunk from SQLite source control, extracts and builds in
 	-rm -rf sqlite3
 	mkdir sqlite3
 	set -e ; cd sqlite3 ; curl --output - $(FOSSIL_URL) | tar xfz - --strip-components=1
-	set -e ; cd sqlite3 ; ./configure --quiet --all --disable-tcl ; $(MAKE) sqlite3.c sqlite3
+	set -e ; cd sqlite3 ; ./configure --quiet --all --column-metadata --disable-tcl $(CONFIGURE_OPTS) ; $(MAKE) sqlite3.c sqlite3 libsqlite3.so ; ln -s libsqlite3.so libsqlite3.so.0
 	$(PYTHON) setup.py patch
 
 # the funky test stuff is to exit successfully when grep has rc==1 since that means no lines found.
@@ -219,7 +220,7 @@ compile-win:  ## Builds and tests against all the Python versions on Windows
 # I did try to make this use venv but then the pip inside the venv and
 # other packages were skipped due to metadata issues
 compile-win-one:  ## Does one Windows build - set PYTHON variable
-	$(PYTHON) -m pip install --upgrade --upgrade-strategy eager pip wheel setuptools
+	$(PYTHON) -m pip install --upgrade --upgrade-strategy eager pip wheel setuptools trio anyio
 	$(PYTHON) -m pip uninstall -y apsw
 	copy tools\\setup-pypi.cfg setup.apsw
 	$(PYTHON)  -m pip --no-cache-dir wheel -v .
@@ -281,9 +282,9 @@ pydebug: ## Build a debug python including address sanitizer.  Extensions it bui
 	set -x && cd "$(PYDEBUG_DIR)" && find . -delete && \
 	curl https://www.python.org/ftp/python/`echo $(PYDEBUG_VER) | sed 's/[abr].*//'`/Python-$(PYDEBUG_VER).tar.xz | tar xfJ - && \
 	cd Python-$(PYDEBUG_VER) && \
-	./configure --with-address-sanitizer --with-undefined-behavior-sanitizer --with-strict-overflow \
-	--without-pymalloc --with-pydebug --prefix="$(PYDEBUG_DIR)" \
-	--without-freelists --with-assertions && \
+	./configure --enable-slower-safety --with-address-sanitizer --with-undefined-behavior-sanitizer --with-strict-overflow \
+    --without-pymalloc --with-pydebug --with-strict-overflow --prefix="$(PYDEBUG_DIR)" \
+	--with-assertions --with-trace-refs && \
 	env ASAN_OPTIONS=detect_leaks=false $(MAKE) -j install
 	$(MAKE) dev-depends PYTHON=$(PYDEBUG_DIR)/bin/python3
 

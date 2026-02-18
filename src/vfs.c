@@ -662,9 +662,7 @@ apswvfs_xOpen(sqlite3_vfs *vfs, const char *zName, sqlite3_file *file, int infla
      object supports version 2 io_methods (Shm* family of functions)
      then we need to allocate an io_methods dupe of our own and fill
      in their shm methods. */
-  int is_file = PyObject_IsInstance(pyresult, (PyObject *)&APSWVFSFileType) == 1;
-  if (PyErr_Occurred())
-    goto finally;
+  int is_file = PyObject_TypeCheck(pyresult, &APSWVFSFileType) == 1;
   if (is_file)
   {
     APSWVFSFile *f = (APSWVFSFile *)pyresult;
@@ -815,7 +813,7 @@ apswvfs_xDlOpen(sqlite3_vfs *vfs, const char *zName)
   {
     if (PyLong_Check(pyresult) && PyLong_AsDouble(pyresult) >= 0)
       result = PyLong_AsVoidPtr(pyresult);
-    else
+    else if (!PyErr_Occurred())
       PyErr_Format(PyExc_TypeError, "Pointer returned must be int and non-negative");
   }
   if (PyErr_Occurred())
@@ -1906,15 +1904,15 @@ error:
 }
 
 static PyObject *
-APSWVFS_tp_str(PyObject *self_)
+APSWVFS_tp_repr(PyObject *self_)
 {
   APSWVFS *self = (APSWVFS *)self_;
   if (!self->containingvfs)
-    return PyUnicode_FromFormat("<apsw.VFS object at %p>", self);
+    return PyUnicode_FromFormat("<%s object at %p>", Py_TypeName(self_), self);
   if (self->basevfs)
-    return PyUnicode_FromFormat("<apsw.VFS object \"%s\" inherits from \"%s\" at %p>", self->containingvfs->zName,
-                                self->basevfs->zName, self);
-  return PyUnicode_FromFormat("<apsw.VFS object \"%s\" at %p>", self->containingvfs->zName, self);
+    return PyUnicode_FromFormat("<%s \"%s\" inherits from \"%s\" at %p>", Py_TypeName(self_),
+                                self->containingvfs->zName, self->basevfs->zName, self);
+  return PyUnicode_FromFormat("<%s \"%s\" at %p>", Py_TypeName(self_), self->containingvfs->zName, self);
 }
 
 static PyMethodDef APSWVFS_methods[] = {
@@ -1949,7 +1947,8 @@ static PyTypeObject APSWVFSType = {
   .tp_methods = APSWVFS_methods,
   .tp_init = APSWVFS_init,
   .tp_new = PyType_GenericNew,
-  .tp_str = APSWVFS_tp_str,
+  .tp_str = NULL,
+  .tp_repr = APSWVFS_tp_repr,
 };
 
 static int
@@ -2999,11 +2998,11 @@ apswvfsfilepy_xClose(PyObject *self_, PyObject *Py_UNUSED(unused))
 }
 
 static PyObject *
-APSWVFSFile_tp_str(PyObject *self_)
+APSWVFSFile_tp_repr(PyObject *self_)
 {
   APSWVFSFile *self = (APSWVFSFile *)self_;
-  return PyUnicode_FromFormat("<apsw.VFSFile object filename \"%s\" at %p>", self->filename ? self->filename : "(nil)",
-                              self);
+  return PyUnicode_FromFormat("<%s filename \"%s\" at %p>", Py_TypeName(self_),
+                              self->filename ? self->filename : "(nil)", self);
 }
 
 #define APSWPROXYBASE                                                                                                  \
@@ -3107,7 +3106,8 @@ static PyTypeObject APSWVFSFileType = {
   .tp_methods = APSWVFSFile_methods,
   .tp_init = APSWVFSFile_init,
   .tp_new = PyType_GenericNew,
-  .tp_str = APSWVFSFile_tp_str,
+  .tp_str = NULL,
+  .tp_repr = APSWVFSFile_tp_repr,
 };
 
 /** .. class:: URIFilename
@@ -3264,13 +3264,13 @@ apswurifilename_uri_boolean(PyObject *self_, PyObject *const *fast_args, Py_ssiz
 }
 
 static PyObject *
-apswurifilename_tp_str(PyObject *self_)
+apswurifilename_tp_repr(PyObject *self_)
 {
   APSWURIFilename *self = (APSWURIFilename *)self_;
   /* CHECK_SCOPE not needed since we manually check */
   if (!self->filename)
-    return PyUnicode_FromFormat("<apsw.URIFilename object (out of scope) at %p>", self);
-  return PyUnicode_FromFormat("<apsw.URIFilename object \"%s\" at %p>", self->filename, self);
+    return PyUnicode_FromFormat("<%s (out of scope) at %p>", Py_TypeName(self_), self);
+  return PyUnicode_FromFormat("<%s \"%s\" at %p>", Py_TypeName(self_), self->filename, self);
 }
 
 static PyMethodDef APSWURIFilenameMethods[]
@@ -3294,7 +3294,8 @@ static PyTypeObject APSWURIFilenameType = {
   .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
   .tp_doc = URIFilename_class_DOC,
   .tp_methods = APSWURIFilenameMethods,
-  .tp_str = apswurifilename_tp_str,
+  .tp_str = NULL,
+  .tp_repr = apswurifilename_tp_repr,
   .tp_getset = APSWURIFilename_getset,
 };
 

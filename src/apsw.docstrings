@@ -112,7 +112,7 @@
 "Calls: `sqlite3_config <https://sqlite.org/c3ref/config.html>`__\n" 
 
 #define  Apsw_connections_DOC "apsw.connections() -> list[Connection]\n\n" \
-"Returns a list of the connections\n" 
+"Returns a list of the open connections\n" 
 
 #define  Apsw_enable_shared_cache_DOC "apsw.enable_shared_cache(enable: bool) -> None\n\n" \
 "`Discouraged\n" \
@@ -678,6 +678,37 @@
 #define Apsw_vfs_names_USAGE "apsw.vfs_names() -> list[str]"
 #define Apsw_vfs_names_OLDDOC Apsw_vfs_names_USAGE "\n(Old less clear name vfsnames)"
 
+#define  Backup_aclose_DOC "Backup.aclose(force: bool = False) -> None\n\n" \
+"Async version of :meth:`close`\n" 
+
+#define Backup_aclose_KWNAMES "force"
+#define Backup_aclose_USAGE "Backup.aclose(force: bool = False) -> None"
+
+#define Backup_aclose_CHECK do { \
+  assert(__builtin_types_compatible_p(typeof(force), int)); \
+  assert(force == 0); \
+} while(0)
+
+
+#define  Backup_aenter_DOC "Backup.__aenter__() -> Self\n\n" \
+"Async context manager enter\n" 
+
+#define  Backup_aexit_DOC "Backup.__aexit__(etype: type[BaseException] | None, evalue: BaseException | None, etraceback: types.TracebackType | None) -> None\n\n" \
+"Async context manager exit\n" 
+
+#define Backup_aexit_KWNAMES "etype", "evalue", "etraceback"
+#define Backup_aexit_USAGE "Backup.__aexit__(etype: type[BaseException] | None, evalue: BaseException | None, etraceback: types.TracebackType | None) -> None"
+
+#define Backup_aexit_CHECK do { \
+  assert(__builtin_types_compatible_p(typeof(etype), PyObject *)); \
+  assert(__builtin_types_compatible_p(typeof(evalue), PyObject *)); \
+  assert(__builtin_types_compatible_p(typeof(etraceback), PyObject *)); \
+} while(0)
+
+
+#define  Backup_afinish_DOC "Backup.afinish() -> None\n\n" \
+"Async version of meth:`finish`\n" 
+
 #define  Backup_class_DOC "You create a backup instance by calling :meth:`Connection.backup`.\n" 
 
 #define  Backup_close_DOC "Backup.close(force: bool = False) -> None\n\n" \
@@ -776,6 +807,34 @@
 } while(0)
 
 
+#define  Blob_aclose_DOC "Blob.aclose(force: bool = False) -> None\n\n" \
+"Async version of :meth:`close`\n" 
+
+#define Blob_aclose_KWNAMES "force"
+#define Blob_aclose_USAGE "Blob.aclose(force: bool = False) -> None"
+
+#define Blob_aclose_CHECK do { \
+  assert(__builtin_types_compatible_p(typeof(force), int)); \
+  assert(force == 0); \
+} while(0)
+
+
+#define  Blob_aenter_DOC "Blob.__aenter__() -> Self\n\n" \
+"Async context manager enter\n" 
+
+#define  Blob_aexit_DOC "Blob.__aexit__(etype: type[BaseException] | None, evalue: BaseException | None, etraceback: types.TracebackType | None) -> None\n\n" \
+"Async context manager exit\n" 
+
+#define Blob_aexit_KWNAMES "etype", "evalue", "etraceback"
+#define Blob_aexit_USAGE "Blob.__aexit__(etype: type[BaseException] | None, evalue: BaseException | None, etraceback: types.TracebackType | None) -> None"
+
+#define Blob_aexit_CHECK do { \
+  assert(__builtin_types_compatible_p(typeof(etype), PyObject *)); \
+  assert(__builtin_types_compatible_p(typeof(evalue), PyObject *)); \
+  assert(__builtin_types_compatible_p(typeof(etraceback), PyObject *)); \
+} while(0)
+
+
 #define  Blob_class_DOC "This object is created by :meth:`Connection.blob_open` and provides\n" \
 "access to a blob in the database.  It behaves like a Python file.\n" \
 "It wraps a `sqlite3_blob\n" \
@@ -836,6 +895,16 @@
 "Implements context manager in conjunction with\n" \
 ":meth:`~Blob.__enter__`.  Any exception that happened in the\n" \
 "*with* block is raised after closing the blob.\n" 
+
+#define Blob_exit_KWNAMES "etype", "evalue", "etraceback"
+#define Blob_exit_USAGE "Blob.__exit__(etype: type[BaseException] | None, evalue: BaseException | None, etraceback: types.TracebackType | None) -> bool"
+
+#define Blob_exit_CHECK do { \
+  assert(__builtin_types_compatible_p(typeof(etype), PyObject *)); \
+  assert(__builtin_types_compatible_p(typeof(evalue), PyObject *)); \
+  assert(__builtin_types_compatible_p(typeof(etraceback), PyObject *)); \
+} while(0)
+
 
 #define  Blob_length_DOC "Blob.length() -> int\n\n" \
 "Returns the size of the blob in bytes.\n" \
@@ -994,13 +1063,6 @@
 "\n" \
 "Calls: `sqlite3changegroup_delete <https://sqlite.org/session/sqlite3changegroup_delete.html>`__\n" 
 
-#define ChangesetBuilder_close_KWNAMES NULL
-#define ChangesetBuilder_close_USAGE "ChangesetBuilder.close() -> None"
-
-#define ChangesetBuilder_close_CHECK do { \
-} while(0)
-
-
 #define  ChangesetBuilder_init_DOC "ChangesetBuilder.__init__()\n\n" \
 "Creates a new empty builder.\n" \
 "\n" \
@@ -1018,13 +1080,6 @@
 "\n" \
 "Calls: `sqlite3changegroup_output <https://sqlite.org/session/sqlite3changegroup_output.html>`__\n" 
 
-#define ChangesetBuilder_output_KWNAMES NULL
-#define ChangesetBuilder_output_USAGE "ChangesetBuilder.output() -> bytes"
-
-#define ChangesetBuilder_output_CHECK do { \
-} while(0)
-
-
 #define  ChangesetBuilder_output_stream_DOC "ChangesetBuilder.output_stream(output: SessionStreamOutput) -> None\n\n" \
 "Produces a streaming changeset of what was built so far\n" \
 "\n" \
@@ -1038,7 +1093,7 @@
 } while(0)
 
 
-#define  ChangesetBuilder_schema_DOC "ChangesetBuilder.schema(db: Connection, schema: str) -> None\n\n" \
+#define  ChangesetBuilder_schema_DOC "ChangesetBuilder.schema(db: Connection | AsyncConnection, schema: str) -> None\n\n" \
 "Ensures the changesets comply with the tables in the database\n" \
 "\n" \
 ":param db: Connection to consult\n" \
@@ -1050,7 +1105,7 @@
 "Calls: `sqlite3changegroup_schema <https://sqlite.org/session/sqlite3changegroup_schema.html>`__\n" 
 
 #define ChangesetBuilder_schema_KWNAMES "db", "schema"
-#define ChangesetBuilder_schema_USAGE "ChangesetBuilder.schema(db: Connection, schema: str) -> None"
+#define ChangesetBuilder_schema_USAGE "ChangesetBuilder.schema(db: Connection | AsyncConnection, schema: str) -> None"
 
 #define ChangesetBuilder_schema_CHECK do { \
   assert(__builtin_types_compatible_p(typeof(db), Connection *)); \
@@ -1058,7 +1113,9 @@
 } while(0)
 
 
-#define  Changeset_apply_DOC "Changeset.apply(changeset: ChangesetInput, db: Connection, *, filter: Callable[[str], bool] | None = None, filter_change: Callable[[TableChange], bool] | None = None, conflict: Callable[[int,TableChange], int] | None = None, flags: int = 0, rebase: bool = False) -> bytes | None\n\n" \
+#define  Changeset_apply_DOC "Changeset.apply(changeset: ChangesetInput, db: Connection | AsyncConnection, *, filter: Callable[[str], bool] | None = None, filter_change: Callable[[TableChange], bool] | None = None, conflict: Callable[[int,TableChange], int] | None = None, flags: int = 0, rebase: bool = False) -> bytes | None\n\n" \
+"|badge-async-dual|\n" \
+"\n" \
 "Applies a changeset to a database.\n" \
 "\n" \
 ":param source: The changeset either as the bytes, or a stream\n" \
@@ -1108,7 +1165,7 @@
 "  * `sqlite3changeset_apply_v3_strm <https://sqlite.org/session/sqlite3changegroup_add_strm.html>`__\n" 
 
 #define Changeset_apply_KWNAMES "changeset", "db", "filter", "filter_change", "conflict", "flags", "rebase"
-#define Changeset_apply_USAGE "Changeset.apply(changeset: ChangesetInput, db: Connection, *, filter: Callable[[str], bool] | None = None, filter_change: Callable[[TableChange], bool] | None = None, conflict: Callable[[int,TableChange], int] | None = None, flags: int = 0, rebase: bool = False) -> bytes | None"
+#define Changeset_apply_USAGE "Changeset.apply(changeset: ChangesetInput, db: Connection | AsyncConnection, *, filter: Callable[[str], bool] | None = None, filter_change: Callable[[TableChange], bool] | None = None, conflict: Callable[[int,TableChange], int] | None = None, flags: int = 0, rebase: bool = False) -> bytes | None"
 
 #define Changeset_apply_CHECK do { \
   assert(__builtin_types_compatible_p(typeof(changeset), PyObject *)); \
@@ -1217,6 +1274,63 @@
 } while(0)
 
 
+#define  Connection_aclose_DOC "Connection.aclose(force: bool = False) -> None\n\n" \
+"The async version of :meth:`close`\n" 
+
+#define Connection_aclose_KWNAMES "force"
+#define Connection_aclose_USAGE "Connection.aclose(force: bool = False) -> None"
+
+#define Connection_aclose_CHECK do { \
+  assert(__builtin_types_compatible_p(typeof(force), int)); \
+  assert(force == 0); \
+} while(0)
+
+
+#define  Connection_aenter_DOC "Connection.__aenter__() -> Self\n\n" \
+"Async version of :meth:`__enter__` context manager.\n" 
+
+#define  Connection_aexit_DOC "Connection.__aexit__(etype: type[BaseException] | None, evalue: BaseException | None, etraceback: types.TracebackType | None) -> bool | None\n\n" \
+"Async version of :meth:`__exit__` context manager.\n" 
+
+#define Connection_aexit_KWNAMES "etype", "evalue", "etraceback"
+#define Connection_aexit_USAGE "Connection.__aexit__(etype: type[BaseException] | None, evalue: BaseException | None, etraceback: types.TracebackType | None) -> bool | None"
+
+#define Connection_aexit_CHECK do { \
+  assert(__builtin_types_compatible_p(typeof(etype), PyObject *)); \
+  assert(__builtin_types_compatible_p(typeof(evalue), PyObject *)); \
+  assert(__builtin_types_compatible_p(typeof(etraceback), PyObject *)); \
+} while(0)
+
+
+#define  Connection_as_async_DOC "Connection.as_async(filename: str, flags: int = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, vfs: str | None = None, statementcachesize: int = 100) -> Awaitable[AsyncConnection]\n\n" \
+":classmethod:\n" \
+"\n" \
+"Uses the :attr:`async_controller` to start a :class:`Connection`\n" \
+"with the parameters in a background worker thread.  The resulting\n" \
+":class:`AsyncConnection` is the same as regular :class:`Connection`\n" \
+"but with most methods and attributes and related objects configured\n" \
+"for async operation.\n" \
+"\n" \
+"See :mod:`apsw.aio` for some controller implementations and :doc:`async`\n" \
+"for more details.\n" \
+"\n" \
+".. note:: Inheritance\n" \
+"\n" \
+"  If you inherit from :class:`Connection` then this still works without\n" \
+"  having to write your own.  The returned object will be of your\n" \
+"  Connection subclass.  The parameters can be any positional and keyword\n" \
+"  arguments, and will be passed to your ``__init__`` method in the\n" \
+"  worker thread first.  ``super().__init__`` should be called\n" \
+"  from it as normal for inheritance.\n" 
+
+#define  Connection_async_controller_DOC ":type: AsyncConnectionController\n" \
+"\n" \
+"The controller in effect in async mode.\n" 
+
+#define  Connection_async_run_DOC "Connection.async_run(call: Callable, /, *args, **kwargs) -> Any\n\n" \
+"Calls ``call`` with the provided arguments in the async worker thread for this\n" \
+"connection.\n" 
+
 #define  Connection_authorizer_DOC ":type: Authorizer | None\n" \
 "\n" \
 "While `preparing <https://sqlite.org/c3ref/prepare.html>`_\n" \
@@ -1273,7 +1387,7 @@
 } while(0)
 
 
-#define  Connection_backup_DOC "Connection.backup(databasename: str, sourceconnection: Connection, sourcedatabasename: str)  -> Backup\n\n" \
+#define  Connection_backup_DOC "Connection.backup(databasename: str, sourceconnection: Connection | AsyncConnection, sourcedatabasename: str)  -> Backup\n\n" \
 "Opens a :ref:`backup object <Backup>`.  All data will be copied from source\n" \
 "database to this database.\n" \
 "\n" \
@@ -1291,7 +1405,7 @@
 "Calls: `sqlite3_backup_init <https://sqlite.org/c3ref/backup_finish.html#sqlite3backupinit>`__\n" 
 
 #define Connection_backup_KWNAMES "databasename", "sourceconnection", "sourcedatabasename"
-#define Connection_backup_USAGE "Connection.backup(databasename: str, sourceconnection: Connection, sourcedatabasename: str)  -> Backup"
+#define Connection_backup_USAGE "Connection.backup(databasename: str, sourceconnection: Connection | AsyncConnection, sourcedatabasename: str)  -> Backup"
 
 #define Connection_backup_CHECK do { \
   assert(__builtin_types_compatible_p(typeof(databasename), const char *)); \
@@ -2121,7 +2235,7 @@
 
 #define  Connection_in_transaction_DOC ":type: bool\n" \
 "\n" \
-"True if currently in a transaction, else False\n" \
+"It is recommended to use :meth:`txn_state` instead which is more reliable.\n" \
 "\n" \
 "Calls: `sqlite3_get_autocommit <https://sqlite.org/c3ref/get_autocommit.html>`__\n" 
 
@@ -2167,6 +2281,10 @@
 "will be raised in the queries that got interrupted.\n" \
 "\n" \
 "Calls: `sqlite3_interrupt <https://sqlite.org/c3ref/interrupt.html>`__\n" 
+
+#define  Connection_is_async_DOC ":type: bool\n" \
+"\n" \
+"`True` if this connection is operating in async mode.\n" 
 
 #define  Connection_is_interrupted_DOC ":type: bool\n" \
 "\n" \
@@ -3034,6 +3152,24 @@
 } while(0)
 
 
+#define  Cursor_aclose_DOC "Cursor.aclose(force: bool = False) -> None\n\n" \
+"Async version of :meth:`close`\n" 
+
+#define Cursor_aclose_KWNAMES "force"
+#define Cursor_aclose_USAGE "Cursor.aclose(force: bool = False) -> None"
+
+#define Cursor_aclose_CHECK do { \
+  assert(__builtin_types_compatible_p(typeof(force), int)); \
+  assert(force == 0); \
+} while(0)
+
+
+#define  Cursor_aiter_DOC "Cursor.__aiter__() -> Self\n\n" \
+"AsyncCursors are async iterators\n" 
+
+#define  Cursor_anext_DOC "Cursor.__anext__() -> Any\n\n" \
+"Cursors are iterators\n" 
+
 #define  Cursor_bindings_count_DOC ":type: int\n" \
 "\n" \
 "How many bindings are in the statement.  The ``?`` form\n" \
@@ -3061,6 +3197,8 @@
 "Cursors are automatically garbage collected and when there\n" \
 "are none left will allow the connection to be garbage collected if\n" \
 "it has no other references.\n" \
+"\n" \
+"It is safe to call the method multiple times.\n" \
 "\n" \
 "A cursor is open if there are remaining statements to execute (if\n" \
 "your query included multiple statements), or if you called\n" \
@@ -3249,7 +3387,7 @@
 "\n" \
 "Calls: `sqlite3_expanded_sql <https://sqlite.org/c3ref/expanded_sql.html>`__\n" 
 
-#define  Cursor_fetchall_DOC "Cursor.fetchall() -> list[tuple[SQLiteValue, ...]]\n\n" \
+#define  Cursor_fetchall_DOC "Cursor.fetchall() -> list[SQLiteValues]\n\n" \
 "Returns all remaining result rows as a list.  This method is defined\n" \
 "in DBAPI.  See :meth:`get` which does the same thing, but with the least\n" \
 "amount of structure to unpack.\n" 
@@ -3370,7 +3508,7 @@
 #define  Cursor_iter_DOC "Cursor.__iter__(self: Cursor) -> Cursor\n\n" \
 "Cursors are iterators\n" 
 
-#define  Cursor_next_DOC "Cursor.__next__(self: Cursor) -> Any\n\n" \
+#define  Cursor_next_DOC "Cursor.__next__() -> Any\n\n" \
 "Cursors are iterators\n" 
 
 #define  Cursor_row_trace_DOC ":type: RowTracer | None\n" \
@@ -3951,14 +4089,14 @@
 "\n" \
 "Calls: `sqlite3_preupdate_depth <https://sqlite.org/c3ref/preupdate_blobwrite.html>`__\n" 
 
-#define  PreUpdate_new_DOC ":type: tuple[SQLiteValue, ...] | None\n" \
+#define  PreUpdate_new_DOC ":type: SQLiteValues | None\n" \
 "\n" \
 "Row values for an INSERT, or after an UPDATE.  :class:`None` for\n" \
 "DELETE.  See also :attr:`old` and :attr:`update`.\n" \
 "\n" \
 "Calls: `sqlite3_preupdate_new <https://sqlite.org/c3ref/preupdate_blobwrite.html>`__\n" 
 
-#define  PreUpdate_old_DOC ":type: tuple[SQLiteValue, ...] | None\n" \
+#define  PreUpdate_old_DOC ":type: SQLiteValues | None\n" \
 "\n" \
 "Row values for a DELETE, or before an UPDATE. :class:`None` for\n" \
 "INSERT.  See also :attr:`new` and :attr:`update`.\n" \
@@ -4008,13 +4146,6 @@
 "Releases the rebaser.\n" \
 "\n" \
 "Calls: `sqlite3rebaser_delete <https://sqlite.org/session/sqlite3rebaser_delete.html>`__\n" 
-
-#define Rebaser_close_KWNAMES NULL
-#define Rebaser_close_USAGE "Rebaser.close() -> None"
-
-#define Rebaser_close_CHECK do { \
-} while(0)
-
 
 #define  Rebaser_configure_DOC "Rebaser.configure(cr: Buffer) -> None\n\n" \
 "Tells the rebaser about conflict resolutions made in an earlier\n" \
@@ -4069,6 +4200,9 @@
   assert(__builtin_types_compatible_p(typeof(output), PyObject *)); \
 } while(0)
 
+
+#define  Session_aclose_DOC "Session.aclose() -> None\n\n" \
+"Async close\n" 
 
 #define  Session_attach_DOC "Session.attach(name: str | None = None) -> None\n\n" \
 "Attach to a specific table, or all tables if no name is provided.  The\n" \
@@ -4131,13 +4265,6 @@
 "so there is no need to manually call this.\n" \
 "\n" \
 "Calls: `sqlite3session_delete <https://sqlite.org/session/sqlite3session_delete.html>`__\n" 
-
-#define Session_close_KWNAMES NULL
-#define Session_close_USAGE "Session.close() -> None"
-
-#define Session_close_CHECK do { \
-} while(0)
-
 
 #define  Session_config_DOC "Session.config(op: int, *args: Any) -> Any\n\n" \
 "Set or get `configuration values <https://www.sqlite.org/session/c_session_objconfig_rowid.html>`__\n" \
@@ -4274,7 +4401,7 @@
 "\n" \
 " Number of columns in the affected table\n" 
 
-#define  TableChange_conflict_DOC ":type: tuple[SQLiteValue, ...] | None\n" \
+#define  TableChange_conflict_DOC ":type: SQLiteValues | None\n" \
 "\n" \
 ":class:`None` if not applicable (not in a conflict).  Otherwise a\n" \
 "tuple of values for the conflicting row.\n" \

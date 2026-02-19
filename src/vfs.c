@@ -2821,12 +2821,9 @@ apswvfsfile_xFileControl(sqlite3_file *file, int op, void *pArg)
 
     PyErr_Clear();
 
-    PyObject *module = PyObject_GetAttrString((PyObject *)Py_TYPE(apswfile->file), "__module__");
+    PyObject *module = PyObject_GetAttr((PyObject *)Py_TYPE(apswfile->file), apst.__module__);
     if (module && PyUnicode_Check(module))
-    {
       modname = PyUnicode_AsUTF8(module);
-      PyErr_Clear();
-    }
 
     /* the above calls could have exceptions but they aren't useful,
        so ignore */
@@ -2957,8 +2954,7 @@ apswvfsfile_xClose(sqlite3_file *file)
   else
     result = SQLITE_OK;
 
-  Py_XDECREF(apswfile->file);
-  apswfile->file = NULL;
+  Py_CLEAR(apswfile->file);
   Py_XDECREF(pyresult);
   FILEPOSTAMBLE;
   return result;

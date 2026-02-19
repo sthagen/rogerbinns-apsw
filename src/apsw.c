@@ -185,8 +185,7 @@ static PyObject *apsw_no_change_object;
 static PyObject *
 apsw_no_change_repr(PyObject *self)
 {
-  Py_INCREF(apst.no_change);
-  return apst.no_change;
+  return Py_NewRef(apst.no_change);
 }
 
 static PyTypeObject apsw_no_change_type = {
@@ -1033,8 +1032,7 @@ get_apsw_exception_for(PyObject *Py_UNUSED(self), PyObject *const *fast_args, Py
     goto error;
   if (0 != PyObject_SetAttr(result, apst.extendedresult, tmp))
     goto error;
-  Py_DECREF(tmp);
-  tmp = PyLong_FromLong(code & 0xff);
+  Py_SETREF(tmp, PyLong_FromLong(code & 0xff));
   if (!tmp)
     goto error;
   if (0 != PyObject_SetAttr(result, apst.result, tmp))
@@ -2079,9 +2077,8 @@ PyInit_apsw(void)
 #define ADD(name, item)                                                                                                \
   do                                                                                                                   \
   {                                                                                                                    \
-    if (PyModule_AddObject(m, #name, (PyObject *)&item))                                                               \
+    if (PyModule_AddObjectRef(m, #name, (PyObject *)&item))                                                            \
       goto fail;                                                                                                       \
-    Py_INCREF(&item);                                                                                                  \
   } while (0)
 
   ADD(Connection, ConnectionType);
@@ -2155,10 +2152,10 @@ PyInit_apsw(void)
       */
 
 #ifdef APSW_USE_SQLITE_AMALGAMATION
-  if (PyModule_AddObject(m, "using_amalgamation", Py_NewRef(Py_True)))
+  if (PyModule_AddObjectRef(m, "using_amalgamation", Py_True))
     goto fail;
 #else
-  if (PyModule_AddObject(m, "using_amalgamation", Py_NewRef(Py_False)))
+  if (PyModule_AddObjectRef(m, "using_amalgamation", Py_False))
     goto fail;
 #endif
 
@@ -2244,20 +2241,20 @@ PyInit_apsw(void)
       goto fail;
   }
 
-  if (PyModule_AddObject(m, "no_change", Py_NewRef(apsw_no_change_object)))
+  if (PyModule_AddObjectRef(m, "no_change", apsw_no_change_object))
     goto fail;
 
   /* undocumented sentinel to do no bindings */
   if (!apsw_cursor_null_bindings)
-    apsw_cursor_null_bindings = PyObject_CallObject((PyObject *)&PyBaseObject_Type, NULL);
+    apsw_cursor_null_bindings = PyObject_CallNoArgs((PyObject *)&PyBaseObject_Type);
   if (!apsw_cursor_null_bindings)
     goto fail;
 
-  if (PyModule_AddObject(m, "_null_bindings", Py_NewRef(apsw_cursor_null_bindings)))
+  if (PyModule_AddObjectRef(m, "_null_bindings", apsw_cursor_null_bindings))
     goto fail;
 
 #ifdef APSW_FAULT_INJECT
-  if (PyModule_AddObject(m, "apsw_fault_inject", Py_NewRef(Py_True)))
+  if (PyModule_AddObjectRef(m, "apsw_fault_inject", Py_True))
     goto fail;
 #endif
 

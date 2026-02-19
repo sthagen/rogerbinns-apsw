@@ -109,7 +109,9 @@ class Async(unittest.TestCase):
                 BC.configure = BC.configure1
                 BC.close = BC.close1
                 self.assertRaisesRegex(RuntimeError, ".*only be called once.*", apsw.Connection.as_async, "")
-                apsw.connections()[0].close()
+                # we can't guarantee exactly when gc runs for the failure above
+                if apsw.connections():
+                    apsw.connections()[0].close()
                 self.assertIs(unraised.exc_type, ZeroDivisionError)
                 unraised = None
         finally:
@@ -868,7 +870,7 @@ class Async(unittest.TestCase):
 
             def get(x):
                 # extracts the useful bit
-                return re.match("<(.* at 0x[0-9a-f]+)>", x).group(1)
+                return re.match("<(.* at 0x[0-9a-fA-F]+)>", x).group(1)
 
             class Banana(apsw.Connection):
                 pass
@@ -942,13 +944,13 @@ class Async(unittest.TestCase):
             for sobj, aobj, async_run, klass_name in to_test:
                 # sync object
                 s = get(str(sobj))
-                addr = f" at {hex(id(sobj))}"
+                addr = f" at {hex(id(sobj))}".lower()
                 self.assertNotIn(" object ", s)
                 self.assertNotIn(tag_a, s)
                 self.assertNotIn(tag_c, s)
                 self.assertNotIn(tag_aw, s)
                 self.assertStartsWith(s, klass_name)
-                self.assertEndsWith(s, addr)
+                self.assertEndsWith(s.lower(), addr)
 
                 # async object in event loop
                 s = get(str(aobj))
@@ -958,7 +960,7 @@ class Async(unittest.TestCase):
                 self.assertNotIn(tag_c, s)
                 self.assertNotIn(tag_aw, s)
                 self.assertStartsWith(s, klass_name)
-                self.assertEndsWith(s, addr)
+                self.assertEndsWith(s.lower(), addr)
 
                 # async object in worker thread
                 s = get(await async_run(lambda: str(aobj)))
@@ -968,7 +970,7 @@ class Async(unittest.TestCase):
                 self.assertNotIn(tag_c, s)
                 self.assertIn(tag_aw, s)
                 self.assertStartsWith(s, klass_name)
-                self.assertEndsWith(s, addr)
+                self.assertEndsWith(s.lower(), addr)
 
                 # after closing
                 sobj.close()
@@ -979,7 +981,7 @@ class Async(unittest.TestCase):
                 self.assertIn(tag_c, s)
                 self.assertNotIn(tag_aw, s)
                 self.assertStartsWith(s, klass_name)
-                self.assertEndsWith(s, addr)
+                self.assertEndsWith(s.lower(), addr)
 
                 aobj.close()
                 s = get(str(aobj))
@@ -989,7 +991,7 @@ class Async(unittest.TestCase):
                 self.assertIn(tag_c, s)
                 self.assertNotIn(tag_aw, s)
                 self.assertStartsWith(s, klass_name)
-                self.assertEndsWith(s, addr)
+                self.assertEndsWith(s.lower(), addr)
 
         # get unavailable database name due to mutex being held in another thread
         scon = apsw.Connection("")

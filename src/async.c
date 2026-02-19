@@ -78,9 +78,9 @@ BoxedCall_clear(PyObject *self_)
     return;
 
   case ConnectionInit:
-    Py_DECREF(self->ConnectionInit.connection);
     Py_DECREF(self->ConnectionInit.args);
     Py_XDECREF(self->ConnectionInit.kwargs);
+    Py_DECREF(self->ConnectionInit.connection);
     break;
 
   case FastCallWithKeywords: {
@@ -165,10 +165,6 @@ BoxedCall_internal_call(BoxedCall *self)
   if (!result && PyErr_Occurred() && !PyErr_ExceptionMatches(PyExc_StopAsyncIteration)
       && !PyErr_ExceptionMatches(PyExc_StopIteration))
   {
-    if (self->call_type == ConnectionInit)
-      /* this causes close on init failure so threads don't get leaked */
-      Py_DECREF(self->ConnectionInit.connection);
-
     AddTraceBackHere(__FILE__, __LINE__, "apsw.aio.BoxedCall.__call__", "{s:i}", "call_type", (int)self->call_type);
   }
 

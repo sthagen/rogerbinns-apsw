@@ -32,11 +32,11 @@ if not os.getenv("APSW_NO_GA"):
 
 # how we link to various things
 rst_prolog = """
-.. |anyio| replace:: :external+anyio:doc:`anyio <index>`
+.. |anyio| replace:: :external+anyio:doc:`anyio <index>` (:ref:`note <anyio_note>`)
 
 .. |uvloop| replace:: `uvloop <https://uvloop.readthedocs.io/>`__
 
-.. |trio| replace:: :external+trio:doc:`trio <index>`
+.. |trio| replace:: :external+trio:doc:`trio <index>` (:ref:`note <trio_note>`)
 
 .. |aiosqlite| replace:: `aiosqlite <https://aiosqlite.omnilib.dev/en/stable/>`__
 

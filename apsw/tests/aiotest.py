@@ -11,6 +11,7 @@ import threading
 import unittest
 import tempfile
 import sys
+import math
 import inspect
 import re
 
@@ -638,6 +639,11 @@ class Async(unittest.TestCase):
         sleep = getattr(sys.modules[fw], "sleep")
         Event = getattr(sys.modules[fw], "Event")
 
+
+        apsw.aio.check_progress_steps.set(10)
+        db = await apsw.Connection.as_async("")
+
+
         match fw:
             case "asyncio":
                 time = asyncio.get_running_loop().time
@@ -648,12 +654,11 @@ class Async(unittest.TestCase):
             case "anyio":
                 time = anyio.current_time
                 timeout_exc_class = TimeoutError
+                # If not using AnyIO controller with trio, then trio's timeout can leak
+                if isinstance(db.async_controller, apsw.aio.Trio):
+                    timeout_exc_class = (TimeoutError, trio.TooSlowError)
 
         # check apsw.aio.deadline first
-
-        apsw.aio.check_progress_steps.set(10)
-        db = await apsw.Connection.as_async("")
-
         async def block():
             while True:
                 await sleep(0)
@@ -714,11 +719,19 @@ class Async(unittest.TestCase):
             # of check.  debug python builds also increase the delta
             this_ced = ced()
             that_ced = await (await db.execute("select ced()")).get
-            # The values should be exactly equal, but with anyio they
-            # differ by some of the digits after the decimal point on
-            # slow/debug builds, so we allow a divergence of up to 1
-            # second
-            self.assertLessEqual(that_ced - this_ced, 1)
+
+            if that_ced == math.inf and fw == "anyio":
+                # if using anyio < 4.11.0 with asyncio backend
+                # then out asyncio controller is used and so there
+                # is no current effective deadline to extract and it
+                # gives inf
+                pass
+            else:
+                # The values should be exactly equal, but with anyio they
+                # differ by some of the digits after the decimal point on
+                # slow/debug builds, so we allow a divergence of up to 1
+                # second
+                self.assertLessEqual(that_ced - this_ced, 1)
 
         timed_out = Event()
 
@@ -869,8 +882,13 @@ class Async(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="apsw-atestStr") as tempd:
 
             def get(x):
-                # extracts the useful bit
-                return re.match("<(.* at 0x[0-9a-fA-F]+)>", x).group(1)
+                # extracts the useful bit and normalizes the address
+                # which is libc dependent
+                mo = re.match("<(.*) at 0?[Xx]?([0-9a-fA-F]+)>", x)
+                return f"{mo.group(1)} at 0x{mo.group(2).lower().lstrip('0')}"
+
+            def saddr(o):
+                return f" at {hex(id(o))}"
 
             class Banana(apsw.Connection):
                 pass
@@ -944,54 +962,54 @@ class Async(unittest.TestCase):
             for sobj, aobj, async_run, klass_name in to_test:
                 # sync object
                 s = get(str(sobj))
-                addr = f" at {hex(id(sobj))}".lower()
+                addr=saddr(sobj)
                 self.assertNotIn(" object ", s)
                 self.assertNotIn(tag_a, s)
                 self.assertNotIn(tag_c, s)
                 self.assertNotIn(tag_aw, s)
-                self.assertStartsWith(s, klass_name)
-                self.assertEndsWith(s.lower(), addr)
+                self.assertTrue(s.startswith(klass_name))
+                self.assertTrue(s.endswith(addr))
 
                 # async object in event loop
                 s = get(str(aobj))
-                addr = f" at {hex(id(aobj))}"
+                addr = saddr(aobj)
                 self.assertNotIn(" object ", s)
                 self.assertIn(tag_a, s)
                 self.assertNotIn(tag_c, s)
                 self.assertNotIn(tag_aw, s)
-                self.assertStartsWith(s, klass_name)
-                self.assertEndsWith(s.lower(), addr)
+                self.assertTrue(s.startswith(klass_name))
+                self.assertTrue(s.endswith(addr))
 
                 # async object in worker thread
                 s = get(await async_run(lambda: str(aobj)))
-                addr = f" at {hex(id(aobj))}"
+                addr = saddr(aobj)
                 self.assertNotIn(" object ", s)
                 self.assertNotIn(tag_a, s)
                 self.assertNotIn(tag_c, s)
                 self.assertIn(tag_aw, s)
-                self.assertStartsWith(s, klass_name)
-                self.assertEndsWith(s.lower(), addr)
+                self.assertTrue(s.startswith(klass_name))
+                self.assertTrue(s.endswith(addr))
 
                 # after closing
                 sobj.close()
-                addr = f" at {hex(id(sobj))}"
+                addr = saddr(sobj)
                 s = get(str(sobj))
                 self.assertNotIn(" object ", s)
                 self.assertNotIn(tag_a, s)
                 self.assertIn(tag_c, s)
                 self.assertNotIn(tag_aw, s)
-                self.assertStartsWith(s, klass_name)
-                self.assertEndsWith(s.lower(), addr)
+                self.assertTrue(s.startswith(klass_name))
+                self.assertTrue(s.endswith(addr))
 
                 aobj.close()
                 s = get(str(aobj))
-                addr = f" at {hex(id(aobj))}"
+                addr = saddr(aobj)
                 self.assertNotIn(" object ", s)
                 self.assertNotIn(tag_a, s)
                 self.assertIn(tag_c, s)
                 self.assertNotIn(tag_aw, s)
-                self.assertStartsWith(s, klass_name)
-                self.assertEndsWith(s.lower(), addr)
+                self.assertTrue(s.startswith(klass_name))
+                self.assertTrue(s.endswith(addr))
 
         # get unavailable database name due to mutex being held in another thread
         scon = apsw.Connection("")
@@ -1009,7 +1027,7 @@ class Async(unittest.TestCase):
         e_wait.wait()
         s = get(str(scon))
         try:
-            self.assertIsNotNone(re.match(r"apsw.Connection \"\(unavailable\)\" at 0x[0-9a-f]+", s))
+            self.assertIsNotNone(re.match(r"apsw.Connection \"\(unavailable\)\" at 0x[0-9a-fA-F]+", s))
         finally:
             e_continue.set()
             t.join()
@@ -1050,7 +1068,7 @@ class Async(unittest.TestCase):
                     e_continue.set()
 
         try:
-            self.assertIsNotNone(re.match(r"apsw.Connection \(async\) \"\(unavailable\)\" at 0x[0-9a-f]+", s))
+            self.assertIsNotNone(re.match(r"apsw.Connection \(async\) \"\(unavailable\)\" at 0x[0-9a-fA-F]+", s))
         finally:
             await acon.aclose()
 
@@ -1073,10 +1091,18 @@ class Async(unittest.TestCase):
                 asyncio.run(self.asyncTearDown(fn("asyncio")), debug=False)
 
     def testTrio(self):
+        import importlib.metadata
         global trio
         try:
             import trio
-        except ImportError:
+
+            ver = tuple(map(int, importlib.metadata.version("trio").split(".")))
+            if ver < (0, 20, 0):
+                if self.verbose:
+                    print(f"trio {ver=} is too old to run tests")
+                return
+
+        except (ImportError, TypeError):
             return
 
         for fn in self.get_all_atests():
@@ -1084,6 +1110,8 @@ class Async(unittest.TestCase):
                 trio.run(self.asyncTearDown, fn("trio"))
 
     def testAnyIO(self):
+        import importlib.metadata
+
         backends = []
         try:
             global asyncio
@@ -1097,13 +1125,28 @@ class Async(unittest.TestCase):
             global trio
             import trio
 
-            backends.append("trio")
-        except ImportError:
+            ver = tuple(map(int, importlib.metadata.version("trio").split(".")))
+            if ver >= (0, 31, 0):
+                backends.append("trio")
+            elif self.verbose:
+                print(f"trio {ver=} is too old for anyio")
+        except (ImportError, TypeError):
             pass
+
+        if not backends:
+            return
+
         try:
             global anyio
             import anyio
         except ImportError:
+            return
+
+        ver = tuple(map(int, importlib.metadata.version("anyio").split(".")))
+        if ver < (4, 0):
+            # our tests use the v4 apis
+            if self.verbose:
+                print(f"anyio {ver=} is too old to run the tests")
             return
 
         for be in backends:

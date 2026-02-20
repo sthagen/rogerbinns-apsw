@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import logging
 import math
 import queue
 import sys
@@ -13,6 +14,8 @@ from collections.abc import Callable, Coroutine
 from typing import Any, TypeVar
 
 import apsw
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -562,6 +565,9 @@ class AnyIO:
         self.token = anyio.lowlevel.current_token()
         threading.Thread(name=thread_name, target=self.worker_thread_run).start()
 
+# True means they can be tried, False means too old etc
+_anyio_usable = True
+_trio_usable = True
 
 def Auto() -> Trio | AsyncIO | AnyIO:
     """
@@ -584,12 +590,13 @@ def Auto() -> Trio | AsyncIO | AnyIO:
     :exc:`RuntimeError` is raised if the framework can't be detected.
 
     """
+    global _anyio_usable, _trio_usable
     # This variable tracks which class to use.  It is instantiated
     # outside of the try/except blocks so exceptions in its
     # initialization will be raised.
     found = None
 
-    if found is None and "anyio" in sys.modules:
+    if found is None and "anyio" in sys.modules and _anyio_usable:
         try:
             import anyio
 
@@ -606,15 +613,36 @@ def Auto() -> Trio | AsyncIO | AnyIO:
                     found = AnyIO
                     break
                 frame = frame.f_back
+
+            if found:
+                found = None
+                # check its version is ok
+                import importlib.metadata
+                ver = tuple(map(int, importlib.metadata.version("anyio").split(".")))
+                if  ver >= (4, 11, 0):
+                    found = AnyIO
+                else:
+                    logger.error(f"anyio {ver} was found but is too old to be used with the AnyIO controller")
+                    _anyio_usable = False
+
         except:
             pass
 
-    if found is None and "trio" in sys.modules:
+    if found is None and "trio" in sys.modules and _trio_usable:
         try:
             import trio
 
             trio.lowlevel.current_trio_token()
-            found = Trio
+
+            # check its version is ok
+            import importlib.metadata
+            ver = tuple(map(int, importlib.metadata.version("trio").split(".")))
+            if  ver >= (0, 20, 0):
+                found = Trio
+            else:
+                logger.error(f"trio {ver=} was found but is too old to be used with the Trio controller")
+                _trio_usable = False
+
         except:
             pass
 

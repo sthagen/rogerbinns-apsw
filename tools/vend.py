@@ -421,14 +421,37 @@ def do_build(verbose: bool):
                   printf("hello world %d\\n", argc);
                   return 0;
                 }""")
+    print("Checking if compiler works")
     try:
         objs = compiler.compile([f.name], output_dir=str(build_dir))
         compiler.link_executable(objs, "compile_check", output_dir=str(build_dir))
+        print("   OK")
     except Exception as exc:
-        print(f"Failed to compile hello world because {exc_type(exc)}")
+        print(f"      Failed to compile hello world because {exc_type(exc)}")
         return
 
-    # ::TODO:: figure out if compile and link pre args work, and remove them if not
+    # figure out if compile and link pre args work, and remove them if not
+    new_objs = objs
+    if compile_extra_preargs:
+        print(f"Checking {compile_extra_preargs=}")
+        try:
+            new_objs = compiler.compile([f.name], output_dir=str(build_dir), extra_preargs=compile_extra_preargs)
+            print("   OK")
+        except Exception as exc:
+            if exc_type(exc):
+                print(f"   Failed - skipping them")
+                compile_extra_preargs = None
+    if link_extra_preargs:
+        print(f"Checking {link_extra_preargs=}")
+        try:
+            compiler.link_executable(
+                new_objs, "compile_check_link_args", output_dir=str(build_dir), extra_preargs=link_extra_preargs
+            )
+            print("   OK")
+        except Exception as exc:
+            if exc_type(exc):
+                print(f"    Failed - skipping them")
+                link_extra_preargs = None
 
     # figure out if attribute is understood
     if compiler.compiler_type != "msvc":
@@ -437,11 +460,17 @@ def do_build(verbose: bool):
             f.write(unix_resource_header + ";")
 
         try:
-            compiler.compile([f.name], output_dir=str(build_dir), macros=[("APSW_SUPPORTS_ATTRIBUTE", 1)])
+            compiler.compile(
+                [f.name],
+                output_dir=str(build_dir),
+                macros=[("APSW_SUPPORTS_ATTRIBUTE", 1)],
+                extra_preargs=compile_extra_preargs,
+            )
             compiler.macros.append(("APSW_SUPPORTS_ATTRIBUTE", 1))
             print("   Supported")
-        except Exception:
-            print("   NOT SUPPORTED")
+        except Exception as exc:
+            if exc_type(exc):
+                print("   NOT SUPPORTED")
 
     # build sqlite3 library
     print(">>> sqlite3 library")

@@ -11,8 +11,12 @@
 # this code works through building and documenting them first
 # for later refactoring
 
+from __future__ import annotations
+
+import sysconfig
 from typing import Literal
-import dataclasses, sys
+import dataclasses
+import sys
 
 
 @dataclasses.dataclass
@@ -249,7 +253,6 @@ extras = [
 
 import os
 import pathlib
-import tempfile
 import re
 import setuptools._distutils.ccompiler as ccompiler
 from setuptools._distutils.compilers.C.errors import CompileError, LinkError
@@ -304,7 +307,7 @@ unix_resource_header = """
 #ifdef APSW_SUPPORTS_ATTRIBUTE
 #if defined(__APPLE__)
 /* Mach-O section */
-__attribute__((section("__TEXT,__apsw_info"), used))
+__attribute__((section("__TEXT,__apsw"), used))
 #else
 /* ELF note section */
 __attribute__((section(".note.apsw"), used))
@@ -348,6 +351,7 @@ Version = {
     "SQLITE_SCM_DATETIME": None,
 }
 
+
 def get_version():
     pat = r"#define\s+(" + "|".join(Version.keys()) + r')\s+"(.*)"\s*$'
     for line in pathlib.Path("sqlite3/sqlite3.c").read_text(encoding="utf8").splitlines():
@@ -358,10 +362,23 @@ def get_version():
         if v is None:
             raise Exception(f"Version {k} not found")
 
+
+def exc_type(exc: Exception) -> str:
+    # we have to do this because using Compile/Link Error in the
+    # except doesn't work because distutils is all messed up via
+    # setuptools shimming
+    if type(exc).__name__ not in (CompileError.__name__, LinkError.__name__):
+        raise
+    return type(exc).__name__
+
+
 def do_build(verbose: bool):
     get_version()
     compiler = ccompiler.new_compiler(verbose=True)
     customize_compiler(compiler)
+
+    compile_extra_preargs = None
+    link_extra_preargs = None
 
     match compiler.compiler_type:
         # These put each function and data item in their own section at
@@ -369,40 +386,62 @@ def do_build(verbose: bool):
         # saves ~7% on the binary sizes.  We check they work, and if not
         # remove them
         case "msvc":
-            compile_extra_preargs=["/Gy", "/Gw"]
+            compile_extra_preargs = ["/Gy", "/Gw"]
             link_extra_preargs = ["/OPT:REF", "/OPT:ICF"]
-        case _:
-            compile_extra_preargs=["-ffunction-sections", "-fdata-sections"]
-            link_extra_preargs = ["-Wl,--gc-sections"]
+        case "unix":
+            cc = getattr(compiler, "compiler", None)
+            if isinstance(cc, list) and any("gcc" in item or "clang" in item for item in cc):
+                compile_extra_preargs = ["-ffunction-sections", "-fdata-sections"]
+                if sys.platform == "darwin":
+                    link_extra_preargs = ["-Wl,-dead_strip"]
+                else:
+                    link_extra_preargs = ["-Wl,--gc-sections"]
 
     compiler.add_include_dir("sqlite3")
 
     # where the build artifacts go
-    build_dir = pathlib.Path() / "build" / "sqlite_extra"
+    build_dir = (
+        pathlib.Path()
+        / "build"
+        / "sqlite_extra"
+        / f"{sysconfig.get_platform()}-{sysconfig.get_python_version()}{getattr(sys, 'abiflags', '')}"
+    )
     compiler.mkpath(str(build_dir))
 
     # where the final binaries go
     output_dir = pathlib.Path() / "apsw" / "sqlite_extra_binaries"
     compiler.mkpath(str(output_dir))
 
-    # ::TODO:: do a test compile of hello world
+    # check if compiler works
+    with open(build_dir / "compile_check.c", mode="wt") as f:
+        f.write("""#include <stdio.h>
+
+                int main(int argc, char **argv)
+                {
+                  printf("hello world %d\\n", argc);
+                  return 0;
+                }""")
+    try:
+        objs = compiler.compile([f.name], output_dir=str(build_dir))
+        compiler.link_executable(objs, "compile_check", output_dir=str(build_dir))
+    except Exception as exc:
+        print(f"Failed to compile hello world because {exc_type(exc)}")
+        return
 
     # ::TODO:: figure out if compile and link pre args work, and remove them if not
-
 
     # figure out if attribute is understood
     if compiler.compiler_type != "msvc":
         print("Checking if attribute section and used are supported")
-        with tempfile.NamedTemporaryFile(mode="wt", suffix=".c") as f:
+        with open(build_dir / "attr_test.c", mode="wt") as f:
             f.write(unix_resource_header + ";")
-            f.flush()
 
-            try:
-                compiler.compile([f.name], output_dir=str(build_dir), macros=[("APSW_SUPPORTS_ATTRIBUTE", 1)])
-                compiler.macros.append(("APSW_SUPPORTS_ATTRIBUTE", 1))
-                print("   Supported")
-            except Exception:
-                print("   NOT SUPPORTED")
+        try:
+            compiler.compile([f.name], output_dir=str(build_dir), macros=[("APSW_SUPPORTS_ATTRIBUTE", 1)])
+            compiler.macros.append(("APSW_SUPPORTS_ATTRIBUTE", 1))
+            print("   Supported")
+        except Exception:
+            print("   NOT SUPPORTED")
 
     # build sqlite3 library
     print(">>> sqlite3 library")
@@ -413,17 +452,32 @@ def do_build(verbose: bool):
     if cfg.exists():
         macros.append(("SQLITE_CUSTOM_INCLUDE", "sqlite_cfg.h"))
     macros.append(("SQLITE_THREADSAFE", 1))
-    lib_objs = compiler.compile([str(pathlib.Path("sqlite3") / "sqlite3.c")], output_dir=str(build_dir), macros=macros, extra_preargs=compile_extra_preargs)
+    try:
+        lib_objs = compiler.compile(
+            [str(pathlib.Path("sqlite3") / "sqlite3.c")],
+            output_dir=str(build_dir),
+            macros=macros,
+            extra_preargs=compile_extra_preargs,
+        )
+    except Exception as exc:
+        print(f"Compiling SQLite failed {exc_type(exc)} - giving up")
+        return
 
     # sqlite stdio
     print(">>> sqlite3 stdio library")
-    lib_stdio_objs = compiler.compile(
-        [str(pathlib.Path("sqlite3") / "ext" / "misc" / "sqlite3_stdio.c")], output_dir=str(build_dir), extra_preargs=compile_extra_preargs
-    )
+    try:
+        lib_stdio_objs = compiler.compile(
+            [str(pathlib.Path("sqlite3") / "ext" / "misc" / "sqlite3_stdio.c")],
+            output_dir=str(build_dir),
+            extra_preargs=compile_extra_preargs,
+        )
+    except Exception as exc:
+        print(f"Compiling sqlite3_stdio failed {exc_type(exc)} - giving up")
+        return
+
     lib_stdio_include = pathlib.Path("sqlite3") / "ext" / "misc"
 
-
-    failed:list[tuple[Extra, str]] = []
+    failed: list[tuple[Extra, str]] = []
 
     for extra in extras:
         print(f">>> {extra.name:30}({extra.type})")
@@ -444,12 +498,10 @@ def do_build(verbose: bool):
                 output_dir=str(build_dir),
                 include_dirs=include_dirs,
                 macros=extra.defines,
-                extra_preargs=compile_extra_preargs
+                extra_preargs=compile_extra_preargs,
             )
         except Exception as exc:
-            if type(exc).__name__ not in (CompileError.__name__, LinkError.__name__):
-                raise
-            failed.append((extra, "Compilation error"))
+            failed.append((extra, exc_type(exc)))
             continue
 
         if extra.lib_sqlite:
@@ -460,18 +512,16 @@ def do_build(verbose: bool):
 
         match extra.type:
             case "extension":
-                # ::TODO:: do we want sqlext vs platform native dll extension?
-                # dll means properties show up in explorer
-                out_name = f"{extra.name}.sqlite_extension"
-                out_name = f"{extra.name}{compiler.shared_lib_extension}"
+                # .so works just fine on macos, but sqlite only looks
+                # for ,dylib if you don't give the extension
+                out_name = f"{extra.name}{compiler.shared_lib_extension if sys.platform != 'darwin' else '.dylib'}"
                 try:
-                    compiler.link_shared_object(objs, out_name, output_dir=str(build_dir), extra_preargs=link_extra_preargs)
+                    compiler.link_shared_object(
+                        objs, out_name, output_dir=str(build_dir), extra_preargs=link_extra_preargs
+                    )
                 except Exception as exc:
-                    if type(exc).__name__ not in (CompileError.__name__, LinkError.__name__):
-                        raise
-                    failed.append((extra, "Linking as extension error"))
+                    failed.append((extra, f"Linking as extension {exc_type(exc)} error"))
                     continue
-
 
             case "executable":
                 out_name = f"{extra.name}{compiler.exe_extension if compiler.exe_extension else ''}"
@@ -481,11 +531,15 @@ def do_build(verbose: bool):
                     case _:
                         libraries = ["m"]
                 try:
-                    compiler.link_executable(objs, extra.name, output_dir=str(build_dir), libraries=libraries, extra_preargs=link_extra_preargs)
+                    compiler.link_executable(
+                        objs,
+                        extra.name,
+                        output_dir=str(build_dir),
+                        libraries=libraries,
+                        extra_preargs=link_extra_preargs,
+                    )
                 except Exception as exc:
-                    if type(exc).__name__ not in (CompileError.__name__, LinkError.__name__):
-                        raise
-                    failed.append((extra, "Linking executable"))
+                    failed.append((extra, f"Linking executable {exc_type(exc)}"))
                     continue
                 # ::TODO:: is this needed? macos xattr -d com.apple.quarantine str(build_dir / out_name)
 
@@ -497,9 +551,14 @@ def do_build(verbose: bool):
         except FileNotFoundError:
             pass
 
+        # windows doesn't have strip
         if compiler.compiler_type != "msvc":
-            # we don't care if this fails
-            subprocess.run(["strip", str(build_dir / out_name)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # macos strip messes up code signing and doesn't save any space
+            if sys.platform != "darwin":
+                # we don't care if this fails
+                subprocess.run(
+                    ["strip", str(build_dir / out_name)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
         compiler.move_file(str(build_dir / out_name), str(output_dir / out_name))
 
         logging.info("")
@@ -512,18 +571,16 @@ def do_build(verbose: bool):
             print()
 
 
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     import argparse
 
-    parser =argparse.ArgumentParser()
+    parser = argparse.ArgumentParser()
     parser.set_defaults(function=None)
 
     subparsers = parser.add_subparsers()
-    p=subparsers.add_parser("compile", help="Build things")
+    p = subparsers.add_parser("compile", help="Build things")
     p.set_defaults(function="compile")
-    p.add_argument("-v", default = False, action="store_true", dest="verbose", help="Show compiler command")
-
+    p.add_argument("-v", default=False, action="store_true", dest="verbose", help="Show compiler command")
 
     options = parser.parse_args()
 

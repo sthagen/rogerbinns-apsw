@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 # Package up all the SQLite extensions and binaries #547
-# most likely exposed as apsw.sqlite_extras
+# most likely exposed as apsw.sqlite_extra
 
 # for windows we have to get and extract the full source, followed by
 # getting and extracting the amalgamation over the top.  It is too
@@ -12,7 +12,7 @@
 # for later refactoring
 
 from typing import Literal
-import dataclasses
+import dataclasses, sys
 
 
 @dataclasses.dataclass
@@ -98,6 +98,7 @@ extras = [
     Extra(
         name="fileio",
         description="Implements SQL functions readfile() and writefile(), and eponymous virtual type 'fsdir'",
+        lib_sqlite_stdio=True,
     ),
     # ::TODO:: fossildelta once RBU extension is wrapped
     Extra(
@@ -137,7 +138,7 @@ extras = [
         description="SHA1 hash and query results hash",
     ),
     Extra(
-        name="sha3",
+        name="shathree",
         description="SHA3 hash and query results hash",
     ),
     Extra(
@@ -205,7 +206,7 @@ extras = [
         lib_sqlite=True,
     ),
     Extra(
-        name="sqlire3_normalize",
+        name="sqlite3_normalize",
         type="executable",
         sources=["ext/misc/normalize.c"],
         description="Normalizes SQL text so private information can be removed, and to identify structurally identical queries",
@@ -245,16 +246,18 @@ extras = [
     ),
 ]
 
+
 import os
 import pathlib
 import tempfile
 import re
 import setuptools._distutils.ccompiler as ccompiler
+from setuptools._distutils.compilers.C.errors import CompileError, LinkError
 from setuptools._distutils.sysconfig import customize_compiler
+import subprocess
+import pprint
 
 import logging
-
-logging.basicConfig(level=logging.DEBUG, format="    %(message)s")
 
 
 def c_quote(value: str, quote='"'):
@@ -312,7 +315,7 @@ const char apsw_resource_metadata[] =
 """
 
 
-def resource_file(extra: Extra):
+def resource_file(build_dir, compiler, extra: Extra):
     if compiler.compiler_type == "msvc":
         with open(build_dir / f"{extra.name}.rc", "wt") as f:
             f.write(
@@ -345,113 +348,189 @@ Version = {
     "SQLITE_SCM_DATETIME": None,
 }
 
-pat = r"#define\s+(" + "|".join(Version.keys()) + r')\s+"(.*)"\s*$'
-for line in pathlib.Path("sqlite3/sqlite3.c").read_text(encoding="utf8").splitlines():
-    if mo := re.match(pat, line):
-        Version[mo.group(1)] = mo.group(2)
+def get_version():
+    pat = r"#define\s+(" + "|".join(Version.keys()) + r')\s+"(.*)"\s*$'
+    for line in pathlib.Path("sqlite3/sqlite3.c").read_text(encoding="utf8").splitlines():
+        if mo := re.match(pat, line):
+            Version[mo.group(1)] = mo.group(2)
 
-for k, v in Version.items():
-    if v is None:
-        raise Exception(f"Version {k} not found")
+    for k, v in Version.items():
+        if v is None:
+            raise Exception(f"Version {k} not found")
 
-compiler = ccompiler.new_compiler(verbose=True)
-customize_compiler(compiler)
+def do_build(verbose: bool):
+    get_version()
+    compiler = ccompiler.new_compiler(verbose=True)
+    customize_compiler(compiler)
 
-compiler.add_include_dir("sqlite3")
+    match compiler.compiler_type:
+        # These put each function and data item in their own section at
+        # compile time and then remove unused sections at link time.  It
+        # saves ~7% on the binary sizes.  We check they work, and if not
+        # remove them
+        case "msvc":
+            compile_extra_preargs=["/Gy", "/Gw"]
+            link_extra_preargs = ["/OPT:REF", "/OPT:ICF"]
+        case _:
+            compile_extra_preargs=["-ffunction-sections", "-fdata-sections"]
+            link_extra_preargs = ["-Wl,--gc-sections"]
 
-# where the build artifacts go
-build_dir = pathlib.Path() / "build" / "sqlite_extras"
-compiler.mkpath(str(build_dir))
+    compiler.add_include_dir("sqlite3")
 
-# where the final binaries go
-output_dir = pathlib.Path() / "apsw" / "sqlite_extras_binaries"
-compiler.mkpath(str(output_dir))
+    # where the build artifacts go
+    build_dir = pathlib.Path() / "build" / "sqlite_extra"
+    compiler.mkpath(str(build_dir))
 
-# figure out if attribute is understood
-if compiler.compiler_type != "msvc":
-    with tempfile.NamedTemporaryFile(mode="wt", suffix=".c") as f:
-        f.write(unix_resource_header + ";")
-        f.flush()
+    # where the final binaries go
+    output_dir = pathlib.Path() / "apsw" / "sqlite_extra_binaries"
+    compiler.mkpath(str(output_dir))
+
+    # ::TODO:: do a test compile of hello world
+
+    # ::TODO:: figure out if compile and link pre args work, and remove them if not
+
+
+    # figure out if attribute is understood
+    if compiler.compiler_type != "msvc":
+        print("Checking if attribute section and used are supported")
+        with tempfile.NamedTemporaryFile(mode="wt", suffix=".c") as f:
+            f.write(unix_resource_header + ";")
+            f.flush()
+
+            try:
+                compiler.compile([f.name], output_dir=str(build_dir), macros=[("APSW_SUPPORTS_ATTRIBUTE", 1)])
+                compiler.macros.append(("APSW_SUPPORTS_ATTRIBUTE", 1))
+                print("   Supported")
+            except Exception:
+                print("   NOT SUPPORTED")
+
+    # build sqlite3 library
+    print(">>> sqlite3 library")
+    lib_enables = "CARRAY COLUMN_METADATA DBPAGE_VTAB DBSTAT_VTAB FTS4 FTS5 GEOPOLY MATH_FUNCTIONS PERCENTILE PREUPDATE_HOOK RTREE SESSION".split()
+
+    macros = [(f"SQLITE_ENABLE_{enable}", 1) for enable in lib_enables]
+    cfg = pathlib.Path("sqlite3") / "sqlite_cfg.h"
+    if cfg.exists():
+        macros.append(("SQLITE_CUSTOM_INCLUDE", "sqlite_cfg.h"))
+    macros.append(("SQLITE_THREADSAFE", 1))
+    lib_objs = compiler.compile([str(pathlib.Path("sqlite3") / "sqlite3.c")], output_dir=str(build_dir), macros=macros, extra_preargs=compile_extra_preargs)
+
+    # sqlite stdio
+    print(">>> sqlite3 stdio library")
+    lib_stdio_objs = compiler.compile(
+        [str(pathlib.Path("sqlite3") / "ext" / "misc" / "sqlite3_stdio.c")], output_dir=str(build_dir), extra_preargs=compile_extra_preargs
+    )
+    lib_stdio_include = pathlib.Path("sqlite3") / "ext" / "misc"
+
+
+    failed:list[tuple[Extra, str]] = []
+
+    for extra in extras:
+        print(f">>> {extra.name:30}({extra.type})")
+        missing = []
+        for source in extra.sources:
+            if not (pathlib.Path("sqlite3") / source).exists():
+                missing.append(source)
+        if missing:
+            failed.append((extra, f"Missing source files {missing}"))
+            continue
+
+        resource = resource_file(build_dir, compiler, extra)
+        include_dirs = [str(lib_stdio_include)] if extra.lib_sqlite_stdio else None
 
         try:
-            compiler.compile([f.name], output_dir=str(build_dir), macros=[("APSW_SUPPORTS_ATTRIBUTE", 1)])
-            compiler.macros.append(("APSW_SUPPORTS_ATTRIBUTE", 1))
-            print("Attribute section and used supported")
-        except ZeroDivisionError:  # ::TODO:: fix this
-            print("Attribute section and used NOT SUPPORTED")
+            objs = compiler.compile(
+                [str(pathlib.Path("sqlite3") / filename) for filename in extra.sources] + [resource],
+                output_dir=str(build_dir),
+                include_dirs=include_dirs,
+                macros=extra.defines,
+                extra_preargs=compile_extra_preargs
+            )
+        except Exception as exc:
+            if type(exc).__name__ not in (CompileError.__name__, LinkError.__name__):
+                raise
+            failed.append((extra, "Compilation error"))
+            continue
 
-# build sqlite3 library
-print(">>> sqlite3 library")
-lib_enables = "CARRAY COLUMN_METADATA DBPAGE_VTAB DBSTAT_VTAB FTS4 FTS5 GEOPOLY MATH_FUNCTIONS PERCENTILE PREUPDATE_HOOK RTREE SESSION".split()
+        if extra.lib_sqlite:
+            objs.extend(lib_objs)
 
-macros = [(f"SQLITE_ENABLE_{enable}", 1) for enable in lib_enables]
-cfg = pathlib.Path("sqlite3") / "sqlite_cfg.h"
-if cfg.exists():
-    macros.append(("SQLITE_CUSTOM_INCLUDE", "sqlite_cfg.h"))
-macros.append(("SQLITE_THREADSAFE", 1))
-lib_objs = compiler.compile([str(pathlib.Path("sqlite3") / "sqlite3.c")], output_dir=str(build_dir), macros=macros)
+        if extra.lib_sqlite_stdio:
+            objs.extend(lib_stdio_objs)
 
-# sqlite stdio
-print(">>> sqlite3 stdio library")
-lib_stdio_objs = compiler.compile(
-    [str(pathlib.Path("sqlite3") / "ext" / "misc" / "sqlite3_stdio.c")], output_dir=str(build_dir)
-)
-lib_stdio_include = pathlib.Path("sqlite3") / "ext" / "misc"
+        match extra.type:
+            case "extension":
+                # ::TODO:: do we want sqlext vs platform native dll extension?
+                # dll means properties show up in explorer
+                out_name = f"{extra.name}.sqlite_extension"
+                out_name = f"{extra.name}{compiler.shared_lib_extension}"
+                try:
+                    compiler.link_shared_object(objs, out_name, output_dir=str(build_dir), extra_preargs=link_extra_preargs)
+                except Exception as exc:
+                    if type(exc).__name__ not in (CompileError.__name__, LinkError.__name__):
+                        raise
+                    failed.append((extra, "Linking as extension error"))
+                    continue
 
 
-## ::TODO:: build up a list of failures and the reason and output them at the end
-## ::TODO:: figure out what exceptions to catch for a failed compile or link
-for extra in extras:
-    print(f">>> {extra.name}")
-    missing = []
-    for source in extra.sources:
-        if not (pathlib.Path("sqlite3") / source).exists():
-            missing.append(source)
-    if missing:
-        print("  Skipping due to missing source:", missing)
-        print()
-        continue
+            case "executable":
+                out_name = f"{extra.name}{compiler.exe_extension if compiler.exe_extension else ''}"
+                match compiler.compiler_type:
+                    case "msvc":
+                        libraries = None
+                    case _:
+                        libraries = ["m"]
+                try:
+                    compiler.link_executable(objs, extra.name, output_dir=str(build_dir), libraries=libraries, extra_preargs=link_extra_preargs)
+                except Exception as exc:
+                    if type(exc).__name__ not in (CompileError.__name__, LinkError.__name__):
+                        raise
+                    failed.append((extra, "Linking executable"))
+                    continue
+                # ::TODO:: is this needed? macos xattr -d com.apple.quarantine str(build_dir / out_name)
 
-    resource = resource_file(extra)
-    include_dirs = [str(lib_stdio_include)] if extra.lib_sqlite_stdio else None
+            case _:
+                raise NotImplementedError
 
-    objs = compiler.compile(
-        [str(pathlib.Path("sqlite3") / filename) for filename in extra.sources] + [resource],
-        output_dir=str(build_dir),
-        include_dirs=include_dirs,
-        macros=extra.defines,
-    )
+        try:
+            os.remove(str(output_dir / out_name))
+        except FileNotFoundError:
+            pass
 
-    if extra.lib_sqlite:
-        objs.extend(lib_objs)
+        if compiler.compiler_type != "msvc":
+            # we don't care if this fails
+            subprocess.run(["strip", str(build_dir / out_name)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        compiler.move_file(str(build_dir / out_name), str(output_dir / out_name))
 
-    match extra.type:
-        case "extension":
-            # ::TODO:: do we want sqlext vs platform native dll extension?
-            # dll means properties show up in explorer
-            out_name = f"{extra.name}.sqlite_extension"
-            out_name = f"{extra.name}{compiler.shared_lib_extension}"
-            compiler.link_shared_object(objs, out_name, output_dir=str(build_dir))
+        logging.info("")
 
-        case "executable":
-            out_name = f"{extra.name}{compiler.exe_extension if compiler.exe_extension else ''}"
-            match compiler.compiler_type:
-                case "msvc":
-                    libraries = None
-                case _:
-                    libraries = ["m"]
-            compiler.link_executable(objs, extra.name, output_dir=str(build_dir), libraries=libraries)
-            # macos xattr -d com.apple.quarantine str(build_dir / out_name)
+    if failed:
+        print(f"\n{len(failed)} failures\n")
+        for extra, reason in failed:
+            print(reason)
+            pprint.pprint(extra)
+            print()
+
+
+
+if __name__ == '__main__':
+    import argparse
+
+    parser =argparse.ArgumentParser()
+    parser.set_defaults(function=None)
+
+    subparsers = parser.add_subparsers()
+    p=subparsers.add_parser("compile", help="Build things")
+    p.set_defaults(function="compile")
+    p.add_argument("-v", default = False, action="store_true", dest="verbose", help="Show compiler command")
+
+
+    options = parser.parse_args()
+
+    match options.function:
+        case "compile":
+            logging.basicConfig(level=logging.DEBUG if options.verbose else logging.WARNING, format="    %(message)s")
+            do_build(options.verbose)
 
         case _:
-            raise NotImplementedError
-
-    try:
-        os.remove(str(output_dir / out_name))
-    except FileNotFoundError:
-        pass
-
-    # ::todo:: strip before moving
-    compiler.move_file(str(build_dir / out_name), str(output_dir / out_name))
-
-    print()
+            parser.error("You must specify a sub-command to run")

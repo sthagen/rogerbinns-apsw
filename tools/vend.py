@@ -103,7 +103,6 @@ extras = [
     Extra(
         name="fileio",
         description="Implements SQL functions readfile() and writefile(), and eponymous virtual type 'fsdir'",
-        lib_sqlite_stdio=True,
     ),
     # ::TODO:: fossildelta once RBU extension is wrapped
     Extra(
@@ -453,30 +452,13 @@ def exc_type(exc: Exception) -> str:
     return type(exc).__name__
 
 
-def do_build(verbose: bool):
+def do_build(verbose: bool, fail_fast: bool = False):
     get_version()
     compiler = ccompiler.new_compiler(verbose=True)
     customize_compiler(compiler)
 
     compile_extra_preargs = None
     link_extra_preargs = None
-
-    match compiler.compiler_type:
-        # These put each function and data item in their own section at
-        # compile time and then remove unused sections at link time.  It
-        # saves ~7% on the binary sizes.  We check they work, and if not
-        # remove them
-        case "msvc":
-            compile_extra_preargs = ["/Gy", "/Gw"]
-            link_extra_preargs = ["/OPT:REF", "/OPT:ICF"]
-        case "unix":
-            cc = getattr(compiler, "compiler", None)
-            if isinstance(cc, list) and any("gcc" in item or "clang" in item for item in cc):
-                compile_extra_preargs = ["-ffunction-sections", "-fdata-sections"]
-                if sys.platform == "darwin":
-                    link_extra_preargs = ["-Wl,-dead_strip"]
-                else:
-                    link_extra_preargs = ["-Wl,--gc-sections"]
 
     compiler.add_include_dir("sqlite3")
 
@@ -487,12 +469,22 @@ def do_build(verbose: bool):
         / "sqlite_extra"
         / f"{sysconfig.get_platform()}-{sysconfig.get_python_version()}{getattr(sys, 'abiflags', '')}"
     )
+    shutil.rmtree(build_dir, ignore_errors=True)
     compiler.mkpath(str(build_dir))
 
     # where the final binaries go
     output_dir = pathlib.Path() / "apsw" / "sqlite_extra_binaries"
     shutil.rmtree(output_dir, ignore_errors=True)
     compiler.mkpath(str(output_dir))
+
+    def strip_and_copy(src: str, dest: str):
+        # windows doesn't have strip
+        if compiler.compiler_type != "msvc":
+            # macos strip messes up code signing and doesn't save any space
+            if sys.platform != "darwin":
+                # we don't care if this fails
+                subprocess.run(["strip", src], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        shutil.copy2(src, dest)
 
     # check if compiler works
     with open(build_dir / "compile_check.c", mode="wt") as f:
@@ -563,13 +555,24 @@ def do_build(verbose: bool):
     if cfg.exists():
         macros.append(("SQLITE_CUSTOM_INCLUDE", "sqlite_cfg.h"))
     macros.append(("SQLITE_THREADSAFE", 1))
+    if compiler.compiler_type == "msvc":
+        macros.append(("SQLITE_API", "__declspec(dllexport)"))
     try:
+        # ::TODO:: make a resource file for this too
         lib_objs = compiler.compile(
             [str(pathlib.Path("sqlite3") / "sqlite3.c")],
             output_dir=str(build_dir),
             macros=macros,
             extra_preargs=compile_extra_preargs,
         )
+        # we have to figure out the library filename
+        before = set(build_dir.glob("*"))
+        compiler.link_shared_lib(lib_objs, "sqlite3_apsw", output_dir=str(build_dir))
+        new_files = set(build_dir.glob("*")) - before
+        assert len(new_files) == 1
+        sqlite_lib_filename = str(list(new_files)[0])
+        strip_and_copy(sqlite_lib_filename, str(output_dir))
+
     except Exception as exc:
         print(f"Compiling SQLite failed {exc_type(exc)} - giving up")
         return
@@ -590,96 +593,111 @@ def do_build(verbose: bool):
 
     failed: list[tuple[Extra, str]] = []
 
-    for extra in extras:
-        print(f">>> {extra.name:30}({extra.type})")
-        missing = []
-        for source in extra.sources:
-            if not (pathlib.Path("sqlite3") / source).exists():
-                missing.append(source)
-        if missing:
-            failed.append((extra, f"Missing source files {missing}"))
-            continue
+    try:
+        for extra in extras:
+            print(f">>> {extra.name:30}({extra.type})")
+            missing = []
+            for source in extra.sources:
+                if not (pathlib.Path("sqlite3") / source).exists():
+                    missing.append(source)
+            if missing:
+                failed.append((extra, f"Missing source files {missing}"))
+                if fail_fast:
+                    return
+                continue
 
-        resource = resource_file(build_dir, compiler, extra)
-        include_dirs = [str(lib_stdio_include)] if extra.lib_sqlite_stdio else None
+            resource = resource_file(build_dir, compiler, extra)
+            include_dirs = [str(lib_stdio_include)] if extra.lib_sqlite_stdio else None
 
-        try:
-            objs = compiler.compile(
-                [str(pathlib.Path("sqlite3") / filename) for filename in extra.sources] + [resource],
-                output_dir=str(build_dir),
-                include_dirs=include_dirs,
-                macros=extra.defines,
-                extra_preargs=compile_extra_preargs,
-            )
-        except Exception as exc:
-            failed.append((extra, exc_type(exc)))
-            continue
-
-        if extra.lib_sqlite:
-            objs.extend(lib_objs)
-
-        if extra.lib_sqlite_stdio:
-            objs.extend(lib_stdio_objs)
-
-        match extra.type:
-            case "extension":
-                # .so works just fine on macos, but sqlite only looks
-                # for ,dylib if you don't give the extension
-                out_name = f"{extra.name}{compiler.shared_lib_extension if sys.platform != 'darwin' else '.dylib'}"
-                try:
-                    compiler.link_shared_object(
-                        objs, out_name, output_dir=str(build_dir), extra_preargs=link_extra_preargs
-                    )
-                except Exception as exc:
-                    failed.append((extra, f"Linking as extension {exc_type(exc)} error"))
-                    continue
-
-            case "executable":
-                out_name = f"{extra.name}{compiler.exe_extension if compiler.exe_extension else ''}"
-                match compiler.compiler_type:
-                    case "msvc":
-                        libraries = None
-                    case _:
-                        libraries = ["m"]
-                try:
-                    compiler.link_executable(
-                        objs,
-                        extra.name,
-                        output_dir=str(build_dir),
-                        libraries=libraries,
-                        extra_preargs=link_extra_preargs,
-                    )
-                except Exception as exc:
-                    failed.append((extra, f"Linking executable {exc_type(exc)}"))
-                    continue
-                # ::TODO:: is this needed? macos xattr -d com.apple.quarantine str(build_dir / out_name)
-
-            case _:
-                raise NotImplementedError
-
-        try:
-            os.remove(str(output_dir / out_name))
-        except FileNotFoundError:
-            pass
-
-        # windows doesn't have strip
-        if compiler.compiler_type != "msvc":
-            # macos strip messes up code signing and doesn't save any space
-            if sys.platform != "darwin":
-                # we don't care if this fails
-                subprocess.run(
-                    ["strip", str(build_dir / out_name)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            try:
+                objs = compiler.compile(
+                    [str(pathlib.Path("sqlite3") / filename) for filename in extra.sources] + [resource],
+                    output_dir=str(build_dir),
+                    include_dirs=include_dirs,
+                    macros=extra.defines,
+                    extra_preargs=compile_extra_preargs,
                 )
-        compiler.move_file(str(build_dir / out_name), str(output_dir / out_name))
+            except Exception as exc:
+                failed.append((extra, exc_type(exc)))
+                if fail_fast:
+                    return
+                continue
 
-        logging.info("")
+            match extra.type:
+                case "extension":
+                    # we don't support these for extensions
+                    assert not extra.lib_sqlite and not extra.lib_sqlite_stdio
 
-    if failed:
-        print(f"\n{len(failed)} failures\n")
-        for extra, reason in failed:
-            print(reason)
-            pprint.pprint(extra)
-            print()
+                    # .so works just fine on macos, but sqlite only looks
+                    # for ,dylib if you don't give the extension
+                    out_name = f"{extra.name}{compiler.shared_lib_extension if sys.platform != 'darwin' else '.dylib'}"
+                    try:
+                        compiler.link_shared_object(
+                            objs, out_name, output_dir=str(build_dir), extra_preargs=link_extra_preargs
+                        )
+                    except Exception as exc:
+                        failed.append((extra, f"Linking as extension {exc_type(exc)} error"))
+                        if fail_fast:
+                            return
+                        continue
+
+                case "executable":
+                    if extra.lib_sqlite_stdio:
+                        objs.extend(lib_stdio_objs)
+
+                    out_name = f"{extra.name}{compiler.exe_extension if compiler.exe_extension else ''}"
+
+                    libraries = None
+
+                    runtime_library_dirs = None
+                    if extra.lib_sqlite:
+                        match compiler.compiler_type:
+                            case "msvc":
+                                libraries = ["sqlite3_apsw"]
+                            case "unix":
+                                libraries = ["sqlite3_apsw", "m"]
+                                runtime_library_dirs = ["@loader_path" if sys.platform=="darwin" else "$ORIGIN"]
+                            case _:
+                                failed.append((extra, "Don't know how to set runtime directory to same as executable"))
+                                if fail_fast:
+                                    return
+                                continue
+                    try:
+                        compiler.link_executable(
+                            objs,
+                            extra.name,
+                            output_dir=str(build_dir),
+                            libraries=libraries,
+                            extra_preargs=link_extra_preargs,
+                            library_dirs=[str(build_dir)] if libraries else None,
+                            runtime_library_dirs = runtime_library_dirs
+                        )
+                    except Exception as exc:
+                        failed.append((extra, f"Linking executable {exc_type(exc)}"))
+                        if fail_fast:
+                            return
+                        continue
+                    # ::TODO:: is this needed? macos xattr -d com.apple.quarantine str(build_dir / out_name)
+
+                case _:
+                    raise NotImplementedError
+
+            try:
+                os.remove(str(output_dir / out_name))
+            except FileNotFoundError:
+                pass
+
+            strip_and_copy(str(build_dir / out_name), str(output_dir / out_name))
+
+            logging.info("")
+
+    finally:
+        if failed:
+            print(f"\n{len(failed)} failures\n")
+            for extra, reason in failed:
+                print(reason)
+                pprint.pprint(extra)
+                print()
 
 
 if __name__ == "__main__":
@@ -693,6 +711,7 @@ if __name__ == "__main__":
     p = subparsers.add_parser("compile", help="Build things")
     p.set_defaults(function="compile")
     p.add_argument("-v", default=False, action="store_true", dest="verbose", help="Show compiler command")
+    p.add_argument("-f", default=False, action="store_true", dest="fail_fast", help="Stop on first failure")
 
     p = subparsers.add_parser("json", help="Generate JSON description file")
     p.set_defaults(function="json")
@@ -707,7 +726,7 @@ if __name__ == "__main__":
     match options.function:
         case "compile":
             logging.basicConfig(level=logging.DEBUG if options.verbose else logging.WARNING, format="    %(message)s")
-            do_build(options.verbose)
+            do_build(options.verbose, options.fail_fast)
 
         case "json":
             out = {}

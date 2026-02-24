@@ -36,7 +36,11 @@ help: ## Show this help
 	@egrep -h '\s##\s' $(MAKEFILE_LIST) | sort | \
 	awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-all: src/apswversion.h src/apsw.docstrings apsw/__init__.pyi src/constants.c src/stringconstants.c  test docs  checkversion ## Update generated files, build, test, make doc
+GENFILES = src/apswversion.h src/apsw.docstrings apsw/__init__.pyi src/constants.c src/stringconstants.c  \
+	apsw/sqlite_extra.json doc/sqlite_extra.rst-inc \
+	$(GENDOCS) $(GENEXAMPLES)
+
+all: $(GENFILES)  checkversion   ## Update generated files
 
 tagpush: ## Tag with version and push
 	test "`git branch --show-current`" = master
@@ -108,6 +112,12 @@ src/constants.c: Makefile tools/genconstants.py src/apswversion.h tools/tocupdat
 src/stringconstants.c: Makefile tools/genstrings.py src/apswversion.h
 	-rm -f src/stringconstants.c
 	$(PYTHON) tools/genstrings.py > src/stringconstants.c
+
+apsw/sqlite_extra.json: tools/vend.py
+	$(PYTHON) tools/vend.py json $@
+
+doc/sqlite_extra.rst-inc: tools/vend.py
+	env PYTHONPATH=. $(PYTHON) tools/vend.py rst $@
 
 build_ext: src/apswversion.h  apsw/__init__.pyi src/apsw.docstrings ## Fetches SQLite and builds the extension
 	env $(PYTHON) setup.py fetch --version=$(SQLITEVERSION) --all build_ext -DSQLITE_ENABLE_COLUMN_METADATA --inplace --force --enable-all-extensions

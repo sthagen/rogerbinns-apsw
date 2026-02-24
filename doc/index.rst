@@ -32,9 +32,11 @@ APSW |version| documentation
    ext
    example-async
    async
-
    exceptions
    execution
+
+   extra
+
    dbapi
    pysqlite
    benchmarking

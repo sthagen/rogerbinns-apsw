@@ -17,6 +17,7 @@ import sysconfig
 from typing import Literal
 import dataclasses
 import sys
+import shutil
 
 
 @dataclasses.dataclass
@@ -142,8 +143,9 @@ extras = [
         description="SHA1 hash and query results hash",
     ),
     Extra(
-        name="shathree",
+        name="sha3",
         description="SHA3 hash and query results hash",
+        sources=["ext/misc/shathree.c"],
     ),
     Extra(
         name="spellfix",
@@ -201,6 +203,20 @@ extras = [
         lib_sqlite=True,
     ),
     Extra(
+        name="sqlite3_dbhash",
+        type="executable",
+        description="Computes SHA1 of the contents of a SQLite database",
+        sources=["tool/dbhash.c"],
+        lib_sqlite=True,
+    ),
+    Extra(
+        name="sqlite3_dbtotxt",
+        sources=["tool/dbtotxt.c"],
+        type="executable",
+        description="Converts a binary file like a database into a friendly human readable text format",
+        doc="src/file?name=tool/dbtotxt.md&ci=trunk",
+    ),
+    Extra(
         name="sqlite3_diff",
         type="executable",
         sources=["tool/sqldiff.c"],
@@ -210,11 +226,46 @@ extras = [
         lib_sqlite=True,
     ),
     Extra(
+        name="sqlite3_expert",
+        type="executable",
+        sources=["ext/expert/expert.c", "ext/expert/sqlite3expert.c"],
+        description="A simple system to propose useful indexes given a database and a set of SQL queries",
+        lib_sqlite=True,
+    ),
+    Extra(
+        name="sqlite3_getlock",
+        type="executable",
+        sources=["tool/getlock.c"],
+        description="Unix only shows if and who is holding a database lock",
+    ),
+    Extra(
+        name="sqlite3_index_usage",
+        type="executable",
+        sources=["tool/index_usage.c"],
+        description="Given a database and a log database, shows how many times each index is used",
+        lib_sqlite=True,
+    ),
+    Extra(
         name="sqlite3_normalize",
         type="executable",
         sources=["ext/misc/normalize.c"],
         description="Normalizes SQL text so private information can be removed, and to identify structurally identical queries",
         defines=[("SQLITE_NORMALIZE_CLI", 1)],
+        lib_sqlite=True,
+    ),
+    Extra(
+        name="sqlite3_offsets",
+        type="executable",
+        sources=["tool/offsets.c"],
+        description="Shows length and offset for every TEXT or BLOB for a column of a table",
+        lib_sqlite=True,
+    ),
+    Extra(
+        name="sqlite3_rsync",
+        type="executable",
+        sources=["tool/sqlite3_rsync.c"],
+        description="Database Remote-Copy Tool",
+        doc="rsync.html",
         lib_sqlite=True,
     ),
     Extra(
@@ -234,22 +285,52 @@ extras = [
         lib_sqlite=True,
     ),
     Extra(
-        name="sqlite3_expert",
+        name="sqlite3_showdb",
         type="executable",
-        sources=["ext/expert/expert.c", "ext/expert/sqlite3expert.c"],
-        description="A simple system to propose useful indexes given a database and a set of SQL queries",
+        sources=["tool/showdb.c"],
+        lib_sqlite=True,
+        description="Prints low level details about a database file",
+    ),
+    Extra(
+        name="sqlite3_showjournal",
+        type="executable",
+        sources=["tool/showjournal.c"],
+        description="Prints low level content of a journal",
+    ),
+    Extra(
+        name="sqlite3_showlocks",
+        type="executable",
+        sources=["tool/showlocks.c"],
+        description="Shows all posix advisory locks on a file",
+    ),
+    Extra(
+        name="sqlite3_showshm",
+        type="executable",
+        sources=["tool/showshm.c"],
+        description="Shows low level content of shm and wal-index files",
+    ),
+    Extra(
+        name="sqlite3_showstat4",
+        type="executable",
+        sources=["tool/showstat4.c"],
+        description="Shows contents of stat4 index of a database",
         lib_sqlite=True,
     ),
     Extra(
-        name="sqlite3_rsync",
+        name="sqlite3_showtmlog",
         type="executable",
-        sources=["tool/sqlite3_rsync.c"],
-        description="Database Remote-Copy Tool",
-        doc="rsync.html",
-        lib_sqlite=True,
+        sources=["tool/showtmlog.c"],
+        description="Makes human/csv readable output from a tmstmpvfs log file",
+    ),
+    Extra(
+        name="sqlite3_showwal",
+        type="executable",
+        sources=["tool/showwal.c"],
+        description="Shows low level content of a WAL file",
     ),
 ]
 
+# ::TODO:: tool/winmain.c for windows
 
 import os
 import pathlib
@@ -289,7 +370,7 @@ def make_windows_resource(**fields):
             if name in fields:
                 v = fields.pop(name)
                 if name == "FileDescription":
-                    v += " (APSW packaged)"
+                    v = "(APSW packaged) " + v
                 out.append(f'      VALUE "{name}", {c_quote(v)}')
             else:
                 out.append(line)
@@ -410,6 +491,7 @@ def do_build(verbose: bool):
 
     # where the final binaries go
     output_dir = pathlib.Path() / "apsw" / "sqlite_extra_binaries"
+    shutil.rmtree(output_dir, ignore_errors=True)
     compiler.mkpath(str(output_dir))
 
     # check if compiler works
@@ -474,7 +556,7 @@ def do_build(verbose: bool):
 
     # build sqlite3 library
     print(">>> sqlite3 library")
-    lib_enables = "CARRAY COLUMN_METADATA DBPAGE_VTAB DBSTAT_VTAB FTS4 FTS5 GEOPOLY MATH_FUNCTIONS PERCENTILE PREUPDATE_HOOK RTREE SESSION".split()
+    lib_enables = "CARRAY COLUMN_METADATA DBPAGE_VTAB DBSTAT_VTAB FTS4 FTS5 GEOPOLY MATH_FUNCTIONS PERCENTILE PREUPDATE_HOOK RTREE SESSION STAT4".split()
 
     macros = [(f"SQLITE_ENABLE_{enable}", 1) for enable in lib_enables]
     cfg = pathlib.Path("sqlite3") / "sqlite_cfg.h"
@@ -602,6 +684,7 @@ def do_build(verbose: bool):
 
 if __name__ == "__main__":
     import argparse
+    import json
 
     parser = argparse.ArgumentParser()
     parser.set_defaults(function=None)
@@ -611,12 +694,75 @@ if __name__ == "__main__":
     p.set_defaults(function="compile")
     p.add_argument("-v", default=False, action="store_true", dest="verbose", help="Show compiler command")
 
+    p = subparsers.add_parser("json", help="Generate JSON description file")
+    p.set_defaults(function="json")
+    p.add_argument("outfile", help="JSON file to output")
+
+    p = subparsers.add_parser("rst", help="Generate rst inclusion file")
+    p.set_defaults(function="rst")
+    p.add_argument("outfile", help="rst file to output")
+
     options = parser.parse_args()
 
     match options.function:
         case "compile":
             logging.basicConfig(level=logging.DEBUG if options.verbose else logging.WARNING, format="    %(message)s")
             do_build(options.verbose)
+
+        case "json":
+            out = {}
+            for extra in extras:
+                out[extra.name] = {"description": extra.description, "type": extra.type}
+
+            with open(options.outfile, "wt") as f:
+                json.dump(out, f, indent=4, sort_keys=True)
+
+        case "rst":
+            with open(options.outfile, "wt") as f:
+                print(
+                    """
+.. generated by tools/vend.py - edit that not this
+
+Programs
+--------
+
+                """,
+                    file=f,
+                )
+
+                for extra in sorted(extras, key=lambda x: x.name):
+                    if extra.type != "executable":
+                        continue
+
+                    print(f"{extra.name} (`doc <{extra.doc}>`__)", file=f)
+                    print(file=f)
+                    print(f"   {extra.description}", file=f)
+                    print(file=f)
+
+                print(
+                    """
+Extensions
+----------
+
+.. list-table::
+    :header-rows: 1
+    :widths: auto
+
+    * - Name
+      - Doc
+      - Description
+                """,
+                    file=f,
+                )
+
+                for extra in sorted(extras, key=lambda x: x.name):
+                    if extra.type != "extension":
+                        continue
+
+                    print(f"    * - {extra.name}", file=f)
+                    print(f"      - `link <{extra.doc}>`__", file=f)
+                    print(f"      - {extra.description}", file=f)
+                    print(file=f)
 
         case _:
             parser.error("You must specify a sub-command to run")

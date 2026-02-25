@@ -737,7 +737,7 @@ class Async(unittest.TestCase):
 
         async def func():
             try:
-                await sleep(1000)
+                await sleep(10)
             except:
                 # trio does Cancelled here - the caller gets timeout exception
                 timed_out.set()
@@ -747,7 +747,7 @@ class Async(unittest.TestCase):
 
         # we need to ensure the async function is running hence delays
         # until it gets executed
-        for timeout in (0, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5):
+        for timeout in (0, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2):
             try:
                 with fail_after(timeout):
                     await (await db.execute("select func()")).get

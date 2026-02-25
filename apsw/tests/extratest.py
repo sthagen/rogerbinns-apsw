@@ -54,7 +54,7 @@ class Extra(unittest.TestCase):
             # there is the winmain shenanigans
             spicy = "√π⁷≤∞"
 
-            with open(pathlib.Path(tmpd) / f"{spicy}.sql", "wt") as sqlf:
+            with open(pathlib.Path(tmpd) / f"{spicy}.sql", "wt", encoding="utf8") as sqlf:
                 print(f"CrEaTe       Table {spicy}(one, two);\ninsert into {spicy} values(7,8)", file=sqlf)
 
 

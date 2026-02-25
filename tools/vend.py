@@ -616,19 +616,6 @@ def do_build(what: set[str], verbose: bool, fail_fast: bool = False):
 
     lib_stdio_include = pathlib.Path("sqlite3") / "ext" / "misc"
 
-    # winmain - should be used for all files except shell which has a
-    # slightly different version embedded
-    winmain_objs = []
-    if compiler.compiler_type == "msvc":
-        winmain_c = pathlib.Path("sqlite3") / "tool" / "winmain.c"
-        if winmain_c.exists():
-            print(">>> winmain UTF8 handling for main")
-            winmain_objs = compiler.compile(
-                [str(winmain_c)],
-                output_dir=str(build_dir),
-                extra_preargs=compile_extra_preargs,
-            )
-
     failed: list[tuple[Extra, str]] = []
 
     try:
@@ -649,18 +636,13 @@ def do_build(what: set[str], verbose: bool, fail_fast: bool = False):
             resource = resource_file(build_dir, compiler, extra)
             include_dirs = [str(lib_stdio_include)] if extra.lib_sqlite_stdio else None
 
-            defines = extra.defines
-            if winmain_objs and "shell.c" not in extra.sources:
-                defines = defines or []
-                defines.append(("main", "utf8_main"))
-
             try:
                 objs = compiler.compile(
                     [str(pathlib.Path("sqlite3") / filename) for filename in extra.sources] + [resource],
                     output_dir=str(build_dir),
                     include_dirs=include_dirs,
-                    macros=defines,
                     extra_preargs=compile_extra_preargs,
+                    macros=extra.defines,
                 )
             except Exception as exc:
                 failed.append((extra, exc_type(exc)))
@@ -709,7 +691,7 @@ def do_build(what: set[str], verbose: bool, fail_fast: bool = False):
                                 continue
                     try:
                         compiler.link_executable(
-                            (winmain_objs if "shell.c" not in extra.sources else []) + objs,
+                            objs,
                             extra.name,
                             output_dir=str(build_dir),
                             libraries=libraries,

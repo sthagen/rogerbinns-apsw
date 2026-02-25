@@ -44,7 +44,7 @@ class Extra:
             self.sources = [f"ext/misc/{self.name}.c"]
         assert len(self.sources)
         assert not any("\\" in source for source in self.sources)
-        if self.doc:
+        if self.doc is not None:
             assert not self.doc.startswith("/")
             self.doc = f"https://sqlite.org/{self.doc}"
         else:
@@ -343,7 +343,7 @@ import pprint
 import logging
 
 
-def c_quote(value: str, quote='"'):
+def c_quote(value: str, quote: str = '"'):
     # I originally tried to backslash escape double quotes but rc
     # required double backslashes and there was no way to make
     # everyone happy except to ban them
@@ -359,6 +359,9 @@ def make_windows_resource(**fields):
     for line in source.splitlines():
         if line.strip().startswith("IDI_SQLITE ICON"):
             out.append(r'IDI_SQLITE ICON "sqlite3\\art\\sqlite370.ico"')
+            continue
+        if line.strip().split() == ["#include", '"sqlite3rc.h"']:
+            out.append(f"#define SQLITE_RESOURCE_VERSION {','.join(Version['SQLITE_VERSION'].split('.'))}")
             continue
         if line.strip().startswith("VALUE"):
             seen_value = True
@@ -452,7 +455,7 @@ def exc_type(exc: Exception) -> str:
     return type(exc).__name__
 
 
-def do_build(verbose: bool, fail_fast: bool = False):
+def do_build(what: set[str], verbose: bool, fail_fast: bool = False):
     get_version()
     compiler = ccompiler.new_compiler(verbose=True)
     customize_compiler(compiler)
@@ -548,6 +551,9 @@ def do_build(verbose: bool, fail_fast: bool = False):
 
     # build sqlite3 library
     print(">>> sqlite3 library")
+
+    SQLITE_LIB_NAME = "sqlite3_apsw"
+
     lib_enables = "CARRAY COLUMN_METADATA DBPAGE_VTAB DBSTAT_VTAB FTS4 FTS5 GEOPOLY MATH_FUNCTIONS PERCENTILE PREUPDATE_HOOK RTREE SESSION STAT4".split()
 
     macros = [(f"SQLITE_ENABLE_{enable}", 1) for enable in lib_enables]
@@ -559,18 +565,41 @@ def do_build(verbose: bool, fail_fast: bool = False):
         macros.append(("SQLITE_API", "__declspec(dllexport)"))
     try:
         # ::TODO:: make a resource file for this too
+        lib_resource = resource_file(
+            build_dir, compiler, Extra(name="libsqlite3", description="SQLite 3 library", doc="")
+        )
         lib_objs = compiler.compile(
-            [str(pathlib.Path("sqlite3") / "sqlite3.c")],
+            [str(pathlib.Path("sqlite3") / "sqlite3.c"), lib_resource],
             output_dir=str(build_dir),
             macros=macros,
             extra_preargs=compile_extra_preargs,
         )
+        # dlopen libraries are different than shared libraries so flags have to be given
+        so_link_flags = None
+        match compiler.compiler_type:
+            case "msvc":
+                so_link_flags = ["/DLL"]
+            case "unix":
+                linker_so_orig = compiler.linker_so
+                if sys.platform == "darwin":
+                    so_link_flags = ["-dynamiclib", "-install_name", f"@rpath/lib{SQLITE_LIB_NAME}.dylib"]
+                    compiler.linker_so = [l for l in linker_so_orig if l != "-bundle"]
+
         # we have to figure out the library filename
         before = set(build_dir.glob("*"))
-        compiler.link_shared_lib(lib_objs, "sqlite3_apsw", output_dir=str(build_dir))
+        compiler.link_shared_lib(lib_objs, SQLITE_LIB_NAME, output_dir=str(build_dir), extra_preargs=so_link_flags)
+        if compiler.compiler_type == "unix":
+            compiler.linker_so = linker_so_orig
         new_files = set(build_dir.glob("*")) - before
+        if len(new_files) > 1 and compiler.compiler_type == "msvc":
+            new_files = {f for f in new_files if str(f).lower().endswith(".dll")}
         assert len(new_files) == 1
         sqlite_lib_filename = str(list(new_files)[0])
+        if sys.platform == "darwin":
+            # compiler above does .so as extension but macos requires .dylib
+            new_name = str(pathlib.Path(sqlite_lib_filename).with_suffix(".dylib"))
+            os.rename(sqlite_lib_filename, new_name)
+            sqlite_lib_filename = new_name
         strip_and_copy(sqlite_lib_filename, str(output_dir))
 
     except Exception as exc:
@@ -595,6 +624,8 @@ def do_build(verbose: bool, fail_fast: bool = False):
 
     try:
         for extra in extras:
+            if extra.type not in what:
+                continue
             print(f">>> {extra.name:30}({extra.type})")
             missing = []
             for source in extra.sources:
@@ -653,10 +684,10 @@ def do_build(verbose: bool, fail_fast: bool = False):
                     if extra.lib_sqlite:
                         match compiler.compiler_type:
                             case "msvc":
-                                libraries = ["sqlite3_apsw"]
+                                libraries = [SQLITE_LIB_NAME]
                             case "unix":
-                                libraries = ["sqlite3_apsw", "m"]
-                                runtime_library_dirs = ["@loader_path" if sys.platform=="darwin" else "$ORIGIN"]
+                                libraries = [SQLITE_LIB_NAME, "m"]
+                                runtime_library_dirs = ["@loader_path" if sys.platform == "darwin" else "$ORIGIN"]
                             case _:
                                 failed.append((extra, "Don't know how to set runtime directory to same as executable"))
                                 if fail_fast:
@@ -670,7 +701,7 @@ def do_build(verbose: bool, fail_fast: bool = False):
                             libraries=libraries,
                             extra_preargs=link_extra_preargs,
                             library_dirs=[str(build_dir)] if libraries else None,
-                            runtime_library_dirs = runtime_library_dirs
+                            runtime_library_dirs=runtime_library_dirs,
                         )
                     except Exception as exc:
                         failed.append((extra, f"Linking executable {exc_type(exc)}"))
@@ -712,6 +743,7 @@ if __name__ == "__main__":
     p.set_defaults(function="compile")
     p.add_argument("-v", default=False, action="store_true", dest="verbose", help="Show compiler command")
     p.add_argument("-f", default=False, action="store_true", dest="fail_fast", help="Stop on first failure")
+    p.add_argument("--only", choices=["extension", "executable"], help="Only build one type")
 
     p = subparsers.add_parser("json", help="Generate JSON description file")
     p.set_defaults(function="json")
@@ -726,7 +758,8 @@ if __name__ == "__main__":
     match options.function:
         case "compile":
             logging.basicConfig(level=logging.DEBUG if options.verbose else logging.WARNING, format="    %(message)s")
-            do_build(options.verbose, options.fail_fast)
+            what = {"extension", "executable"} if not options.only else {options.only}
+            do_build(what, options.verbose, options.fail_fast)
 
         case "json":
             out = {}

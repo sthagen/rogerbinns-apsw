@@ -19,7 +19,23 @@ class NotAvailable(Exception):
 
 def load(db: apsw.Connection, extension: str):
     """Loads the extension into the provided database"""
-    1/0
+    db.enable_load_extension(True)
+    entry, path = _get_entry(extension)
+    if entry["type"] != "extension":
+        raise ValueError(f"{extension} is a {entry['type']} not a loadable extension")
+    db.load_extension(path)
+
+def has(name: str) -> str | None:
+    "Returns 'executable' or 'extension' if extra name is available else None"
+    try:
+        entry, _ = _get_entry(name)
+        return entry['type']
+    except Exception:
+        return None
+
+def path(name:str):
+    "Filesystem path for named extra including extension"
+    return _get_entry(name)[1]
 
 # we could in theory know what this specific platform used
 # but it is easier just to try everything

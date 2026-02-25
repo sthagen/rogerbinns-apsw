@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+    #!/usr/bin/env python3
 
 from __future__ import annotations
 
@@ -71,7 +71,6 @@ python3 -m apsw.sqlite_extra `name` args...
                 except NotAvailable:
                     pass
 
-
         case "--path":
             if len(sys.argv) != 3:
                 sys.exit("--path takes one name")
@@ -80,4 +79,14 @@ python3 -m apsw.sqlite_extra `name` args...
                 print(path)
                 sys.exit(0)
             except Exception as exc:
+                sys.exit(str(exc))
+
+        case _:
+            try:
+                entry, path = _get_entry(sys.argv[1])
+                if entry["type"] != "executable":
+                    raise Exception(f"'{sys.argv[1]}' is not an executable.  Extensions need to be loaded into SQLite ")
+                os.execl(path, *sys.argv[1:])
+            except Exception as exc:
+                print("Use --help to get help", file=sys.stderr)
                 sys.exit(str(exc))

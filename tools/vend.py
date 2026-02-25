@@ -348,7 +348,7 @@ def c_quote(value: str, quote: str = '"'):
     return quote + value + quote
 
 
-def make_windows_resource(**fields):
+def make_windows_resource(manifest_filename: str | None, **fields):
     assert "FileDescription" in fields
     source = (pathlib.Path() / "sqlite3" / "src" / "sqlite3.rc").read_text()
     out: list[str] = []
@@ -359,6 +359,11 @@ def make_windows_resource(**fields):
             continue
         if line.strip().split() == ["#include", '"sqlite3rc.h"']:
             out.append(f"#define SQLITE_RESOURCE_VERSION {','.join(Version['SQLITE_VERSION'].split('.'))}")
+            if manifest_filename:
+                # inject manifest here
+                out.append(
+                    f"CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST {c_quote(manifest_filename.replace('\\', '\\\\'))}"
+                )
             continue
         if line.strip().startswith("VALUE"):
             seen_value = True
@@ -397,12 +402,27 @@ const char apsw_resource_metadata[] =
     "APSW-Note: Unmodified SQLite project artifact. Packaged by APSW for convenience.\\n"
 """
 
+windows_manifest = """
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <application>
+    <windowsSettings>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+    </windowsSettings>
+  </application>
+</assembly>
+"""
+
 
 def resource_file(build_dir, compiler, extra: Extra):
     if compiler.compiler_type == "msvc":
+        if extra.type == "executable":
+            with open(build_dir / "utf8_manifest", "wt") as mf:
+                mf.write(windows_manifest)
         with open(build_dir / f"{extra.name}.rc", "wt") as f:
             f.write(
                 make_windows_resource(
+                    mf.name if extra.type == "executable" else None,
                     FileDescription=f"SQLite {extra.description}",
                     InternalName=f"sqlite3 - {extra.name}",
                     Comment="Unmodified SQLite project artifact. Packaged by APSW for convenience",
@@ -698,6 +718,9 @@ def do_build(what: set[str], verbose: bool, fail_fast: bool = False):
                             extra_preargs=link_extra_preargs,
                             library_dirs=[str(build_dir)] if libraries else None,
                             runtime_library_dirs=runtime_library_dirs,
+                            # we provide a proper manifest in the resource and distutils
+                            # tells it to automatically create one, so that has to be overridden
+                            extra_postargs=["/MANIFEST:NO"] if compiler.compiler_type == "msvc" else None,
                         )
                     except Exception as exc:
                         failed.append((extra, f"Linking executable {exc_type(exc)}"))

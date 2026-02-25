@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+
+import json
+import importlib.resources
+import pathlib
+import subprocess
+import tempfile
+import os
+import unittest
+
+import apsw
+import apsw.sqlite_extra
+
+
+class Extra(unittest.TestCase):
+    def setUp(self):
+        self.extras = json.loads(importlib.resources.files(apsw).joinpath("sqlite_extra.json").read_text())
+        self.verbose: bool = self._outcome.result.showAll
+
+    def testLoadExtension(self):
+        db = apsw.Connection("")
+        for name, extra in self.extras.items():
+            if extra["type"] == "extension" and apsw.sqlite_extra.has(name):
+                with self.subTest(name=name):
+                    if self.verbose:
+                        print(f"  >> Extension {name}")
+                    fn_before = set(row[0] for row in db.execute("select name from pragma_function_list"))
+                    vfs_before = set(apsw.vfs_names())
+                    mod_before = set(row[0] for row in db.execute("SELECT name FROM pragma_module_list"))
+                    col_before = set(row[0] for row in db.execute("SELECT name FROM pragma_collation_list"))
+                    apsw.sqlite_extra.load(db, name)
+                    fn_after = set(db.execute("select name from pragma_function_list").get)
+                    vfs_after = set(apsw.vfs_names())
+                    mod_after = set(row[0] for row in db.execute("SELECT name FROM pragma_module_list"))
+                    col_after = set(row[0] for row in db.execute("SELECT name FROM pragma_collation_list"))
+                    num_diff = 0
+                    for kind, diff in (
+                        ("col ", col_after - col_before),
+                        ("fn ", fn_after - fn_before),
+                        ("vfs", vfs_after - vfs_before),
+                        ("mod", mod_after - mod_before),
+                    ):
+                        if diff:
+                            if self.verbose:
+                                print("    ", kind, sorted(diff))
+                            num_diff += len(diff)
+                    if name != "anycollseq":
+                        self.assertGreater(num_diff, 0)
+
+    def testExecutable(self):
+        with tempfile.TemporaryDirectory(prefix="apsw-extra-test") as tmpd:
+
+            # https://news.ycombinator.com/item?id=42647101 and why
+            # there is the winmain shenanigans
+            spicy = "√π⁷≤∞"
+
+            with open(pathlib.Path(tmpd) / f"{spicy}.sql", "wt") as sqlf:
+                print(f"CrEaTe       Table {spicy}(one, two);\ninsert into {spicy} values(7,8)", file=sqlf)
+
+
+            dbf = pathlib.Path(tmpd) / f"{spicy}.db"
+            con = apsw.Connection(str(dbf))
+            con.execute("pragma journal_mode='wal'; CREATE TABLE one(two, three); insert into one values(2,3), (4,5), (?,?), (zeroblob(4097), 3.222); ", (spicy, spicy)).get
+            con.close()
+
+            dbf2 = pathlib.Path(tmpd) / "dest.db"
+            con = apsw.Connection(str(dbf2))
+            con.execute("CREATE TABLE one(two, three); insert into one values(1,5), (2,3), (4,5), (2, ?)", (spicy,)).get
+            con.close()
+
+
+
+            for name, extra in self.extras.items():
+                if extra["type"] == "executable" and apsw.sqlite_extra.has(name):
+                    with self.subTest(name=name):
+                        if self.verbose:
+                            print(f"  >> Executable {name}")
+                        cmd = apsw.sqlite_extra.path(name)
+                        match name:
+                            case "sqlite3_dbdump" | "sqlite3_dbhash" | "sqlite3_dbtotxt":
+                                self.run_cmd([cmd, dbf], spicy)
+
+                            case "sqlite3_diff":
+                                p=self.run_cmd([cmd, dbf, dbf2], spicy)
+
+                            case "sqlite3_expert":
+                                self.run_cmd([cmd, "-sql", "SELECT * FROM one ORDER by three", dbf], "ON one(three)")
+
+                            case "sqlite3_getlock":
+                                self.run_cmd([cmd, dbf], "is not locked")
+
+                            case "sqlite3_index_usage":
+                                # we get the usage message
+                                try:
+                                    self.run_cmd([cmd, dbf], "CREATE TABLE")
+                                except subprocess.CalledProcessError:
+                                    pass
+                            case "sqlite3_normalize":
+                                p = self.run_cmd([cmd, sqlf.name], spicy)
+                                self.assertIn("create table", p.stdout)
+
+                            case "sqlite3_offsets":
+                                p =self.run_cmd([cmd, dbf, "one", "two"], "rowid")
+
+                            case "sqlite3_rsync" | "sqlite3_scrub":
+                                victim = pathlib.Path(str(dbf)+"-2")
+                                try:
+                                    os.remove(victim)
+                                except FileNotFoundError:
+                                    pass
+                                p = self.run_cmd([cmd, dbf, victim])
+                                self.assertEqual('', p.stdout)
+                                self.assertTrue(victim.exists())
+                                self.assertGreater(len(victim.read_bytes()), 2048)
+
+                            case "sqlite3_shell":
+                                self.run_cmd([cmd, dbf, "select * from one"], spicy)
+
+                            case "sqlite3_showdb":
+                                self.run_cmd([cmd, dbf], "Page 2:")
+
+                            case "sqlite3_showjournal":
+                                self.run_cmd([cmd, dbf], "page count")
+
+                            case "sqlite3_showlocks":
+                                self.run_cmd([cmd, dbf], "no locks")
+
+                            case "sqlite3_showshm":
+                                self.run_cmd([cmd, dbf], "database in pages")
+
+                            case "sqlite3_showstat4":
+                                # we can't guarantee sqlite was compiled with stat4 support so look for usage
+                                self.run_cmd([cmd, dbf], in_stderr = "no such table")
+
+                            case "sqlite3_showtmlog":
+                                self.run_cmd([cmd, dbf], "invalid-record")
+
+                            case "sqlite3_showwal":
+                                try:
+                                    self.run_cmd([cmd, dbf])
+                                except subprocess.CalledProcessError as exc:
+                                    self.assertIn(spicy, exc.stdout)
+                                    self.assertIn("invalid page size", exc.stdout)
+
+                            case _:
+                                p = self.run_cmd([cmd, dbf])
+                                breakpoint()
+                                1/0
+
+    def run_cmd(self, cmd, in_stdout:str|None=None, in_stderr=''):
+        p = subprocess.run(cmd, capture_output=True, encoding="utf8", text=True)
+        if not in_stderr:
+            self.assertEqual(p.stderr, '')
+        else:
+            self.assertIn(in_stderr, p.stderr)
+        if in_stdout is not None:
+            self.assertIn(in_stdout, p.stdout)
+        if not in_stderr:
+            p.check_returncode()
+        return p
+
+
+__all__ = ("Extra",)
+
+if __name__ == "__main__":
+    unittest.main()

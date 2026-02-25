@@ -5,22 +5,34 @@ In addition to the main library, SQLite has additional programs and
 loadable extensions.  However these need to be separately compiled and
 installed.  Full APSW builds such as those on PyPI include all the
 ones that compile for that platform.  This is for convenience and to
-help promote these great extras.
+help promote these great extras.  They add just over 1MB to the
+download and 3MB of disk space.
 
-Access is provided via an API and via the command line.
+Access is provided via an :ref:`API <extra_api>` and via the
+:ref:`command line <extra_api>`.
 
-Third party libraries such as for compression (:code:`zlib`) or
-command line editing (:code:`readline`), TCL are not used - the only
-dependencies are the platform and SQLite.  That means they can be
-freely copied to other systems.
+Dependencies
+------------
 
-The binaries are all marked as packaged by APSW.  Under Windows this
-is indicated in the detailed properties listing.  On other platforms
-running :code:`strings` should show it, with ELF binaries having a
-:code:`note.apsw` section and MacOS (mach-o) binaries having a
-:code:`apsw` section.
+There are no dependencies for the extensions and programs.  That means
+they can be used on other compatible systems.  Some of the programs
+require the SQLite library which **must** be placed in the same
+directory as the program.
+
+Marking
+-------
+
+The extensions and programs are all marked as packaged by APSW.  Under
+Windows this is indicated in the detailed properties listing.  On
+other platforms running :code:`strings` should show it, with ELF
+binaries having a :code:`note.apsw` section and MacOS (Mach-O)
+binaries having a :code:`apsw` section.
+
+The marking includes the version details.
 
 .. include:: sqlite_extra.rst-inc
+
+.. _extra_cli:
 
 Command line
 ------------
@@ -41,8 +53,9 @@ The :code:`csv` extension::
 
 List what is available::
 
-    python3 -m apsw.sqlite_extra --path csv
+    python3 -m apsw.sqlite_extra --list
 
+.. _extra_api:
 
 API
 ---

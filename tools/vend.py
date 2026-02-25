@@ -549,7 +549,7 @@ def do_build(what: set[str], verbose: bool, fail_fast: bool = False):
     # build sqlite3 library
     print(">>> sqlite3 library")
 
-    SQLITE_LIB_NAME = "sqlite3_apsw"
+    SQLITE_LIB_NAME = "sqlite3_tool"
 
     lib_enables = "CARRAY COLUMN_METADATA DBPAGE_VTAB DBSTAT_VTAB FTS4 FTS5 GEOPOLY MATH_FUNCTIONS PERCENTILE PREUPDATE_HOOK RTREE SESSION STAT4".split()
 

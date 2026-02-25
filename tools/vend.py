@@ -142,9 +142,8 @@ extras = [
         description="SHA1 hash and query results hash",
     ),
     Extra(
-        name="sha3",
+        name="shathree",
         description="SHA3 hash and query results hash",
-        sources=["ext/misc/shathree.c"],
     ),
     Extra(
         name="spellfix",
@@ -328,8 +327,6 @@ extras = [
         description="Shows low level content of a WAL file",
     ),
 ]
-
-# ::TODO:: tool/winmain.c for windows
 
 import os
 import pathlib
@@ -564,7 +561,6 @@ def do_build(what: set[str], verbose: bool, fail_fast: bool = False):
     if compiler.compiler_type == "msvc":
         macros.append(("SQLITE_API", "__declspec(dllexport)"))
     try:
-        # ::TODO:: make a resource file for this too
         lib_resource = resource_file(
             build_dir, compiler, Extra(name="libsqlite3", description="SQLite 3 library", doc="")
         )
@@ -620,6 +616,19 @@ def do_build(what: set[str], verbose: bool, fail_fast: bool = False):
 
     lib_stdio_include = pathlib.Path("sqlite3") / "ext" / "misc"
 
+    # winmain - should be used for all files except shell which has a
+    # slightly different version embedded
+    winmain_objs = []
+    if compiler.compiler_type == "msvc":
+        winmain_c = pathlib.Path("sqlite3") / "tool" / "winmain.c"
+        if winmain_c.exists():
+            print(">>> winmain UTF8 handling for main")
+            winmain_objs = compiler.compile(
+                [str(winmain_c)],
+                output_dir=str(build_dir),
+                extra_preargs=compile_extra_preargs,
+            )
+
     failed: list[tuple[Extra, str]] = []
 
     try:
@@ -640,12 +649,17 @@ def do_build(what: set[str], verbose: bool, fail_fast: bool = False):
             resource = resource_file(build_dir, compiler, extra)
             include_dirs = [str(lib_stdio_include)] if extra.lib_sqlite_stdio else None
 
+            defines = extra.defines
+            if winmain_objs and "shell.c" not in extra.sources:
+                defines = defines or []
+                defines.append(("main", "utf8_main"))
+
             try:
                 objs = compiler.compile(
                     [str(pathlib.Path("sqlite3") / filename) for filename in extra.sources] + [resource],
                     output_dir=str(build_dir),
                     include_dirs=include_dirs,
-                    macros=extra.defines,
+                    macros=defines,
                     extra_preargs=compile_extra_preargs,
                 )
             except Exception as exc:
@@ -695,7 +709,7 @@ def do_build(what: set[str], verbose: bool, fail_fast: bool = False):
                                 continue
                     try:
                         compiler.link_executable(
-                            objs,
+                            (winmain_objs if "shell.c" not in extra.sources else []) + objs,
                             extra.name,
                             output_dir=str(build_dir),
                             libraries=libraries,

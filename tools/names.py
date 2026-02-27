@@ -85,6 +85,8 @@ def run_tests():
         ("from .sessiontests import *", "from apsw.tests.sessiontests import *"),
         ("from .jsonb import *", "from apsw.tests.jsonb import *"),
         ("from .carray import *", "from apsw.tests.carray import *"),
+        ("from .aiotest import *", "from apsw.tests.aiotest import *"),
+        ("from .extratest import *", "from apsw.tests.extratest import *"),
     ):
         old_source = old_source.replace(sub, repl)
 

@@ -2219,7 +2219,7 @@ Enter ".help" for instructions
                 try:
                     apsw.sqlite_extra.load(self.db, cmd[0])
                     return
-                except (apsw.ExtensionLoadingError, LookupError):
+                except (apsw.ExtensionLoadingError, LookupError, apsw.sqlite_extra.NotAvailable):
                     pass
             raise
 

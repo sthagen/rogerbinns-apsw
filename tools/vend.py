@@ -368,8 +368,9 @@ def make_windows_resource(manifest_filename: str | None, **fields):
             out.append(f"#define SQLITE_RESOURCE_VERSION {','.join(Version['SQLITE_VERSION'].split('.'))}")
             if manifest_filename:
                 # inject manifest here
+                location = c_quote(manifest_filename.replace('\\', '\\\\'))
                 out.append(
-                    f"CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST {c_quote(manifest_filename.replace('\\', '\\\\'))}"
+                    f"CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST {location}"
                 )
             continue
         if line.strip().startswith("VALUE"):

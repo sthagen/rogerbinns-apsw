@@ -56,6 +56,10 @@ and right align integers.  That updates the :doc:`shell <shell>` output.
 Update :func:`fork_checker` and :func:`shutdown` for more robustness
 (:issue:`602`)
 
+Take advantage of :code:`SQLITE_UTF8_ZT` encoding and
+`sqlite3_carray_bind_v2
+<https://sqlite.org/draft/c3ref/carray_bind.html>`__ in the C code.
+
 3.51.2.0
 ========
 

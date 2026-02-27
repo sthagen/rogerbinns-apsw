@@ -1050,7 +1050,7 @@ if __name__ == "__main__":
             ),
         ],
         packages=["apsw", "apsw.tests"],
-        package_data={"apsw": ["__init__.pyi", "py.typed", "fts_test_strings"]},
+        package_data={"apsw": ["__init__.pyi", "py.typed", "fts_test_strings"], "apsw.sqlite_extra_binaries": ["*"]},
         cmdclass={
             "test": run_tests,
             "build_test_extension": build_test_extension,

@@ -175,11 +175,12 @@ class Extra(unittest.TestCase):
         if apsw.sqlite_extra.has("shathree"):
             self.assertIn("shathree", out.getvalue())
 
-        s.stdout = io.StringIO()
-        s.stderr = io.StringIO()
-        s.process_command(".load shathree")
-        self.assertEqual("", s.stderr.getvalue())
-        self.assertEqual("", s.stdout.getvalue())
+        if apsw.sqlite_extra.has("shathree"):
+            s.stdout = io.StringIO()
+            s.stderr = io.StringIO()
+            s.process_command(".load shathree")
+            self.assertEqual("", s.stderr.getvalue())
+            self.assertEqual("", s.stdout.getvalue())
 
         # deliberate error that shouldn't show sqlite_extra attempt
         self.assertRaises(apsw.ExtensionLoadingError, s.process_command, ".load thisdoesnotexistandshouldgiveanerror")

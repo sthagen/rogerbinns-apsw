@@ -224,7 +224,7 @@ extras = [
     Extra(
         name="sqlite3_diff",
         type="executable",
-        sources=["tool/sqldiff.c"],
+        sources=["tool/sqldiff.c", "tool/winmain.c"],
         description="Displays content differences between SQLite databases",
         doc="sqldiff.html",
         lib_sqlite_stdio=True,

@@ -249,7 +249,7 @@ class fetch(Command):
         if self.version is None:
             self.version = sqliteversion(version)
 
-    def extract_entry(self, contents: bytes, name: str, modtime: float, perm: int = 0, replace:str = "sqlite3") -> str:
+    def extract_entry(self, contents: bytes, name: str, modtime: float, perm: int = 0, replace: str = "sqlite3") -> str:
         name = os.path.normpath(name)
         if name.startswith(os.pathsep) or ":" in name:
             raise Exception(f"Refusing to deal with archive member {name}")
@@ -308,7 +308,6 @@ class fetch(Command):
                         continue
                     modtime = datetime.datetime(*zi.date_time).timestamp()
                     self.extract_entry(zipf.read(zi), zi.filename, modtime, replace="sqlite3/vec1")
-
 
         ## The amalgamation is a .tar.gz
         if self.sqlite:
@@ -1050,7 +1049,10 @@ if __name__ == "__main__":
             ),
         ],
         packages=["apsw", "apsw.tests"],
-        package_data={"apsw": ["__init__.pyi", "py.typed", "fts_test_strings"], "apsw.sqlite_extra_binaries": ["*"]},
+        package_data={
+            "apsw": ["__init__.pyi", "py.typed", "fts_test_strings", "sqlite_extra.json"],
+            "apsw.sqlite_extra_binaries": ["*"],
+        },
         cmdclass={
             "test": run_tests,
             "build_test_extension": build_test_extension,

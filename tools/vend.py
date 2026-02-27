@@ -665,7 +665,7 @@ def do_build(what: set[str], verbose: bool, fail_fast: bool = False):
 
             more_pre_args = None
 
-            if extra.name == "vec1" :
+            if extra.name == "vec1":
                 more_pre_args = []
                 match platform.machine().lower():
                     case "x86_64" | "amd64" | "i386" | "i686" | "x86":
@@ -856,9 +856,41 @@ Extensions
     * - Name
       - Doc
       - Description
+      - Registers
                 """,
                     file=f,
                 )
+
+                import apsw
+                import apsw.sqlite_extra
+
+                db = apsw.Connection(":memory:")
+                # cause it to be created now
+                db.execute("select * from pragma_collation_list").get
+
+                def details(name):
+                    fn_before = set(row[0] for row in db.execute("select name from pragma_function_list"))
+                    vfs_before = set(apsw.vfs_names())
+                    mod_before = set(row[0] for row in db.execute("SELECT name FROM pragma_module_list"))
+                    col_before = set(row[0] for row in db.execute("SELECT name FROM pragma_collation_list"))
+                    apsw.sqlite_extra.load(db, name)
+                    fn_after = set(db.execute("select name from pragma_function_list").get)
+                    vfs_after = set(apsw.vfs_names())
+                    mod_after = set(row[0] for row in db.execute("SELECT name FROM pragma_module_list"))
+                    col_after = set(row[0] for row in db.execute("SELECT name FROM pragma_collation_list"))
+
+                    if name == "anycollseq":
+                        print("      - Fallback collation", file=f)
+                        return
+                    print("      -", file=f)
+                    for kind, diff in (
+                        ("Collation", col_after - col_before),
+                        ("Function", fn_after - fn_before),
+                        ("VFS", vfs_after - vfs_before),
+                        ("VTable", mod_after - mod_before),
+                    ):
+                        if diff:
+                            print(f"        * {kind}:", " ".join(sorted(diff)), file=f)
 
                 for extra in sorted(extras, key=lambda x: x.name):
                     if extra.type != "extension":
@@ -867,6 +899,7 @@ Extensions
                     print(f"    * - {extra.name}", file=f)
                     print(f"      - `link <{extra.doc}>`__", file=f)
                     print(f"      - {extra.description}", file=f)
+                    details(extra.name)
                     print(file=f)
 
         case _:

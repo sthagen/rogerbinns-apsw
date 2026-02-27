@@ -16,6 +16,7 @@ import zipfile
 import tarfile
 import subprocess
 import shutil
+import types
 import pathlib
 import contextlib
 from dataclasses import dataclass
@@ -248,12 +249,12 @@ class fetch(Command):
         if self.version is None:
             self.version = sqliteversion(version)
 
-    def extract_entry(self, contents: bytes, name: str, modtime: float, perm: int = 0) -> str:
+    def extract_entry(self, contents: bytes, name: str, modtime: float, perm: int = 0, replace:str = "sqlite3") -> str:
         name = os.path.normpath(name)
         if name.startswith(os.pathsep) or ":" in name:
             raise Exception(f"Refusing to deal with archive member {name}")
         # replace top directory with "sqlite3"
-        out_name = pathlib.Path("sqlite3", *pathlib.Path(name).parts[1:])
+        out_name = pathlib.Path(pathlib.Path(replace), *pathlib.Path(name).parts[1:])
 
         out_name.parent.mkdir(parents=True, exist_ok=True)
 
@@ -294,6 +295,18 @@ class fetch(Command):
                         continue
                     modtime = datetime.datetime(*zi.date_time).timestamp()
                     self.extract_entry(zipf.read(zi), zi.filename, modtime)
+
+            AURL = "https://sqlite.org/vec1/zip/vec1.zip"
+
+            data = self.download(AURL, checksum=False)
+
+            with zipfile.ZipFile(data) as zipf:
+                for zi in zipf.infolist():
+                    if zi.is_dir():
+                        continue
+                    modtime = datetime.datetime(*zi.date_time).timestamp()
+                    self.extract_entry(zipf.read(zi), zi.filename, modtime, replace="sqlite3/vec1")
+
 
         ## The amalgamation is a .tar.gz
         if self.sqlite:
@@ -455,6 +468,18 @@ class apsw_build(bparent):
             fc.run()
         return bparent.finalize_options(self)
 
+    def run(self):
+        # this has to be done first ...
+        if all(pathlib.Path(f).exists() for f in ("sqlite3/tool/dbtotxt.c", "sqlite3/ext/misc/scrub.c")):
+            # Call into vend which we can't import so do something similar
+            vend = types.ModuleType("vend")
+            sys.modules["vend"] = vend
+            exec(compile(pathlib.Path("tools/vend.py").read_text("utf8"), "tools/vend.py", "exec"), vend.__dict__)
+            vend.do_build({"extension", "executable"}, True, False)
+
+        # ... because this fills in the manifest
+        super().run()
+
 
 def findamalgamation():
     amalgamation = (
@@ -610,13 +635,13 @@ class apsw_build_ext(beparent):
         # sqlite3config.h used to be generated from configure output - now optional override file
         s3config = os.path.join(ext.include_dirs[0], "sqlite3config.h")
         if os.path.exists(s3config):
-            write(f"SQLite: Using your configuration { s3config }")
+            write(f"SQLite: Using your configuration {s3config}")
             ext.define_macros.append(("APSW_USE_SQLITE_CONFIG", "1"))
 
         # autosetup makes this file
         s3config = os.path.join(ext.include_dirs[0], "sqlite_cfg.h")
         if os.path.exists(s3config):
-            write(f"SQLite: Using configure generated { s3config }")
+            write(f"SQLite: Using configure generated {s3config}")
             ext.define_macros.append(("APSW_USE_SQLITE_CFG_H", "1"))
 
         # enables
@@ -725,7 +750,7 @@ class apsw_sdist(sparent):
 
     def run(self):
         cfg = "pypi" if self.for_pypi else "default"
-        shutil.copy2(f"tools/setup-{ cfg }.cfg", "setup.apsw")
+        shutil.copy2(f"tools/setup-{cfg}.cfg", "setup.apsw")
         v = sparent.run(self)
 
         if self.add_doc:
@@ -734,6 +759,7 @@ class apsw_sdist(sparent):
             for archive in self.get_archive_files():
                 add_doc(archive, self.distribution.get_fullname())
         return v
+
 
 class apsw_patch_amalgamation(Command):
     description = "Patches amalgamation"
@@ -751,11 +777,13 @@ class apsw_patch_amalgamation(Command):
         if not patch_amalgamation():
             raise Exception("Failed to patch amalgamation")
 
+
 def get_amalgamation_version(filename):
     for line in pathlib.Path(filename).read_text(encoding="utf8").splitlines():
-        if mo:= re.match(r"^#define\s+SQLITE_VERSION_NUMBER\s+([0-9]{7})\s*$", line):
+        if mo := re.match(r"^#define\s+SQLITE_VERSION_NUMBER\s+([0-9]{7})\s*$", line):
             return int(mo.group(1))
     raise Exception(f"Unable to find version in {filename=}")
+
 
 # amalgamation patching
 def patch_amalgamation() -> bool:
@@ -904,8 +932,8 @@ def set_config_from_system(outputfilename: str):
     os.makedirs(os.path.dirname(outputfilename), exist_ok=True)
     with open(outputfilename, "wt", encoding="utf8") as f:
         for c, v in sorted(configs.items()):
-            print(f"#undef  { c }", file=f)
-            print(f"#define { c } { v }", file=f)
+            print(f"#undef  {c}", file=f)
+            print(f"#define {c} {v}", file=f)
 
 
 def help_walker(arcdir):
@@ -996,7 +1024,6 @@ if __name__ == "__main__":
             "Framework :: Trio",
             "Framework :: AsyncIO",
             "Framework :: AnyIO",
-            "Framework :: AnyIO"
             "Programming Language :: Python :: Implementation :: CPython",
         ],
         keywords=["database", "sqlite"],

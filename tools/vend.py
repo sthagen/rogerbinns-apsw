@@ -17,6 +17,7 @@ import sysconfig
 from typing import Literal
 import dataclasses
 import sys
+import platform
 import shutil
 
 
@@ -191,6 +192,12 @@ extras = [
     Extra(
         name="zorder",
         description="Functions for z-order (Morton code) transformations",
+    ),
+    Extra(
+        name="vec1",
+        description="Vector search.  !Experimental! !Under development! Loading on before 2013 CPU may crash process",
+        doc="vec1/doc/trunk/doc/vec1intro.md",
+        sources=["vec1/vec1.c"],
     ),
     Extra(
         name="sqlite3_dbdump",
@@ -656,12 +663,39 @@ def do_build(what: set[str], verbose: bool, fail_fast: bool = False):
             resource = resource_file(build_dir, compiler, extra)
             include_dirs = [str(lib_stdio_include)] if extra.lib_sqlite_stdio else None
 
+            more_pre_args = None
+
+            if extra.name == "vec1" :
+                more_pre_args = []
+                match platform.machine().lower():
+                    case "x86_64" | "amd64" | "i386" | "i686" | "x86":
+                        is_x86 = True
+
+                    case _:
+                        is_x86 = False
+
+                match compiler.compiler_type:
+                    case "msvc":
+                        if is_x86:
+                            more_pre_args.append("/arch:AVX2")
+                        more_pre_args.append("/fp:fast")
+
+                    case "unix":
+                        if "clang" in compiler.compiler[0] or "gcc" in compiler.compiler[0]:
+                            more_pre_args.append("-O3")
+                            if is_x86:
+                                more_pre_args.extend(("-mavx2", "-mfma"))
+
             try:
+                actual_pre_args = compile_extra_preargs or []
+                if more_pre_args:
+                    actual_pre_args.extend(more_pre_args)
+
                 objs = compiler.compile(
                     [str(pathlib.Path("sqlite3") / filename) for filename in extra.sources] + [resource],
                     output_dir=str(build_dir),
                     include_dirs=include_dirs,
-                    extra_preargs=compile_extra_preargs,
+                    extra_preargs=actual_pre_args,
                     macros=extra.defines,
                 )
             except Exception as exc:

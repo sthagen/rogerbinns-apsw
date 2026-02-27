@@ -87,7 +87,7 @@
         "description": "SHA1 hash and query results hash",
         "type": "extension"
     },
-    "sha3": {
+    "shathree": {
         "description": "SHA3 hash and query results hash",
         "type": "extension"
     },
@@ -193,6 +193,10 @@
     },
     "uuid": {
         "description": "uuid functions",
+        "type": "extension"
+    },
+    "vec1": {
+        "description": "Vector search.  !Experimental! !Under development! Loading on before 2013 CPU may crash process",
         "type": "extension"
     },
     "vfsstat": {

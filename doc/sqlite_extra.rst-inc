@@ -181,7 +181,7 @@ Extensions
       - `link <https://sqlite.org/src/file?ci=trunk&name=ext%2fmisc%2fsha1.c>`__
       - SHA1 hash and query results hash
 
-    * - sha3
+    * - shathree
       - `link <https://sqlite.org/src/file?ci=trunk&name=ext%2fmisc%2fshathree.c>`__
       - SHA3 hash and query results hash
 
@@ -212,6 +212,10 @@ Extensions
     * - uuid
       - `link <https://sqlite.org/src/file?ci=trunk&name=ext%2fmisc%2fuuid.c>`__
       - uuid functions
+
+    * - vec1
+      - `link <https://sqlite.org/vec1/doc/trunk/doc/vec1intro.md>`__
+      - Vector search.  !Experimental! !Under development! Loading on before 2013 CPU may crash process
 
     * - vfsstat
       - `link <https://sqlite.org/src/file?ci=trunk&name=ext%2fmisc%2fvfsstat.c>`__

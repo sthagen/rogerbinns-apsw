@@ -4,11 +4,13 @@
 
 from __future__ import annotations
 
+import datetime
 import os
 import sys
 import shlex
 import glob
 import re
+import sysconfig
 import time
 import zipfile
 import tarfile
@@ -226,103 +228,105 @@ def fixupcode(code):
     return code
 
 
-fetch_parts = []
-
-
 class fetch(Command):
-    description = "Automatically downloads SQLite and components"
+    description = "Automatically downloads SQLite and components into sqlite3/ directory"
     user_options = [
-        ("version=", None, f"Which version of SQLite/components to get (default { sqliteversion(version) })"),
+        ("version=", None, f"Which version of SQLite/components to get (default {sqliteversion(version)})"),
         ("missing-checksum-ok", None, "Continue on a missing checksum (default abort)"),
-        ("sqlite", None, "Download SQLite amalgamation"),
-        ("all", None, "Download all downloadable components"),
+        ("sqlite", None, "Download SQLite amalgamation (default True)"),
+        ("all", None, "Download all SQLite components (extensions and tools)"),
     ]
-    fetch_options = ["sqlite"]
-    boolean_options = fetch_options + ["all", "missing-checksum-ok"]
+    boolean_options = ["all", "sqlite", "missing-checksum-ok"]
 
     def initialize_options(self):
         self.version = None
-        self.sqlite = False
+        self.sqlite = True
         self.all = False
         self.missing_checksum_ok = False
 
     def finalize_options(self):
-        global fetch_parts
-        if self.version in ("self", None):
+        if self.version is None:
             self.version = sqliteversion(version)
-        if self.all:
-            for i in self.fetch_options:
-                setattr(self, i, True)
-        for i in self.fetch_options:
-            fetch_parts.append(i)
+
+    def extract_entry(self, contents: bytes, name: str, modtime: float, perm: int = 0) -> str:
+        name = os.path.normpath(name)
+        if name.startswith(os.pathsep) or ":" in name:
+            raise Exception(f"Refusing to deal with archive member {name}")
+        # replace top directory with "sqlite3"
+        out_name = pathlib.Path("sqlite3", *pathlib.Path(name).parts[1:])
+
+        out_name.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(out_name, "wb") as f:
+            f.write(contents)
+
+        os.utime(out_name, (modtime, modtime))
+        if perm:
+            os.chmod(out_name, perm)
 
     def run(self):
-        # work out the version
-        if self.version == "latest":
-            write("  Getting download page to work out latest SQLite version")
-            page = self.download("https://sqlite.org/download.html", text=True, checksum=False)
-            match = re.search(r"sqlite-amalgamation-3([0-9][0-9])([0-9][0-9])([0-9][0-9])\.zip", page)
-            if match:
-                self.version = "3.%d.%d.%d" % tuple([int(match.group(n)) for n in range(1, 4)])
-                assert self.version.endswith(".0")  # sqlite doesn't use last component so we do now
-                self.version = sqliteversion(self.version)
-            else:
-                write("Unable to determine latest SQLite version.  Use --version=VERSION", sys.stderr)
-                write("to set version - eg setup.py fetch --version=3.6.18", sys.stderr)
-                sys.exit(17)
-            write("    Version is " + self.version)
-        # now get each selected component
-        downloaded = 0
-
         v = [int(x) for x in self.version.split(".")]
         assert len(v) == 3
         v.append(0)
-        self.webversion = "%d%02d%02d%02d" % tuple(v)
+        # how SQLite does the version number on the web page
+        web_version = "%d%02d%02d%02d" % tuple(v)
 
-        ## The amalgamation
-        if self.sqlite:
-            write("  Getting the SQLite amalgamation")
+        ## clear out existing directory
+        if os.path.exists("sqlite3"):
+            print("Clearing existing sqlite3/ directory")
+            shutil.rmtree("sqlite3")
 
-            AURL = "https://sqlite.org/sqlite-autoconf-%s.tar.gz" % (self.webversion,)
+        ## full source is a zip
+        if self.all:
+            write("  Getting the SQLite complete source")
+
+            AURL = "https://sqlite.org/sqlite-src-%s.zip" % (web_version,)
 
             AURL = fixup_download_url(AURL)
 
             data = self.download(AURL, checksum=True)
 
-            if os.path.exists("sqlite3"):
-                shutil.rmtree("sqlite3")
+            import zipfile
 
-            # if you get an exception here it is likely that you don't have the python zlib module
-            import zlib
+            with zipfile.ZipFile(data) as zipf:
+                for zi in zipf.infolist():
+                    if zi.is_dir():
+                        continue
+                    modtime = datetime.datetime(*zi.date_time).timestamp()
+                    self.extract_entry(zipf.read(zi), zi.filename, modtime)
 
-            tar = tarfile.open("nonexistentname to keep old python happy", "r", data)
-            configmember = None
-            kwargs = {}
-            if sys.version_info >= (3, 11, 4):
-                kwargs["filter"] = "tar"
-            for member in tar.getmembers():
-                tar.extract(member, **kwargs)
-                # find first file named configure
-                if not configmember and member.name.endswith("/configure"):
-                    configmember = member
-            tar.close()
-            # the directory name has changed a bit with each release so try to work out what it is
-            if not configmember:
-                write("Unable to determine directory it extracted to.", dest=sys.stderr)
-                sys.exit(19)
-            dirname = configmember.name.split("/")[0]
-            os.rename(dirname, "sqlite3")
+        ## The amalgamation is a .tar.gz
+        if self.sqlite:
+            write("  Getting the SQLite amalgamation")
+
+            AURL = "https://sqlite.org/sqlite-autoconf-%s.tar.gz" % (web_version,)
+
+            AURL = fixup_download_url(AURL)
+
+            data = self.download(AURL, checksum=True)
+
+            with tarfile.open(mode="r", fileobj=data) as tarf:
+                while (info := tarf.next()) is not None:
+                    match info.type:
+                        case tarfile.DIRTYPE:
+                            continue
+                        case tarfile.REGTYPE:
+                            pass
+                        case _:
+                            raise Exception(f"Unexpected type in {info=}")
+                    assert info.mode & 0o777 == info.mode
+                    self.extract_entry(tarf.extractfile(info).read(), info.name, info.mtime, info.mode)
+
             if sys.platform != "win32":
                 write("    Running configure to work out SQLite compilation flags")
-                subprocess.check_call(["./configure"], cwd="sqlite3")
-            downloaded += 1
-            patch_amalgamation()
+                env = os.environ.copy()
+                for v in "CC", "CFLAGS":
+                    val = sysconfig.get_config_var(v)
+                    if val:
+                        env[v] = val
+                subprocess.check_call(["./configure"], cwd="sqlite3", env=env)
 
-        if not downloaded:
-            write("You didn't specify any components to fetch.  Use")
-            write("   setup.py fetch --help")
-            write("for a list and details")
-            raise ValueError("No components downloaded")
+            patch_amalgamation()
 
     # A function for verifying downloads
     def verifyurl(self, url, data):

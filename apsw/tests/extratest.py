@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 
-import json
 import importlib.resources
+import io
+import json
+import os
 import pathlib
 import subprocess
+import sys
 import tempfile
-import os
 import unittest
 
 import apsw
@@ -49,26 +51,28 @@ class Extra(unittest.TestCase):
 
     def testExecutable(self):
         with tempfile.TemporaryDirectory(prefix="apsw-extra-test") as tmpd:
+            # https://news.ycombinator.com/item?id=42647101 test case
 
-            # https://news.ycombinator.com/item?id=42647101 and why
-            # there is the winmain shenanigans
             spicy = "√π⁷≤∞"
 
             with open(pathlib.Path(tmpd) / f"{spicy}.sql", "wt", encoding="utf8") as sqlf:
                 print(f"CrEaTe       Table {spicy}(one, two);\ninsert into {spicy} values(7,8)", file=sqlf)
 
-
             dbf = pathlib.Path(tmpd) / f"{spicy}.db"
             con = apsw.Connection(str(dbf))
-            con.execute("pragma journal_mode='wal'; CREATE TABLE one(two, three); insert into one values(2,3), (4,5), (?,?), (zeroblob(4097), 3.222); ", (spicy, spicy)).get
+            if not hasattr(con, "load_extension"):
+                return
+
+            con.execute(
+                "pragma journal_mode='wal'; CREATE TABLE one(two, three); insert into one values(2,3), (4,5), (?,?), (zeroblob(4097), 3.222); ",
+                (spicy, spicy),
+            ).get
             con.close()
 
             dbf2 = pathlib.Path(tmpd) / "dest.db"
             con = apsw.Connection(str(dbf2))
             con.execute("CREATE TABLE one(two, three); insert into one values(1,5), (2,3), (4,5), (2, ?)", (spicy,)).get
             con.close()
-
-
 
             for name, extra in self.extras.items():
                 if extra["type"] == "executable" and apsw.sqlite_extra.has(name):
@@ -81,7 +85,7 @@ class Extra(unittest.TestCase):
                                 self.run_cmd([cmd, dbf], spicy)
 
                             case "sqlite3_diff":
-                                p=self.run_cmd([cmd, dbf, dbf2], spicy)
+                                p = self.run_cmd([cmd, dbf, dbf2], spicy)
 
                             case "sqlite3_expert":
                                 self.run_cmd([cmd, "-sql", "SELECT * FROM one ORDER by three", dbf], "ON one(three)")
@@ -100,16 +104,16 @@ class Extra(unittest.TestCase):
                                 self.assertIn("create table", p.stdout)
 
                             case "sqlite3_offsets":
-                                p =self.run_cmd([cmd, dbf, "one", "two"], "rowid")
+                                p = self.run_cmd([cmd, dbf, "one", "two"], "rowid")
 
                             case "sqlite3_rsync" | "sqlite3_scrub":
-                                victim = pathlib.Path(str(dbf)+"-2")
+                                victim = pathlib.Path(str(dbf) + "-2")
                                 try:
                                     os.remove(victim)
                                 except FileNotFoundError:
                                     pass
                                 p = self.run_cmd([cmd, dbf, victim])
-                                self.assertEqual('', p.stdout)
+                                self.assertEqual("", p.stdout)
                                 self.assertTrue(victim.exists())
                                 self.assertGreater(len(victim.read_bytes()), 2048)
 
@@ -130,7 +134,7 @@ class Extra(unittest.TestCase):
 
                             case "sqlite3_showstat4":
                                 # we can't guarantee sqlite was compiled with stat4 support so look for usage
-                                self.run_cmd([cmd, dbf], in_stderr = "no such table")
+                                self.run_cmd([cmd, dbf], in_stderr="no such table")
 
                             case "sqlite3_showtmlog":
                                 self.run_cmd([cmd, dbf], "invalid-record")
@@ -144,20 +148,41 @@ class Extra(unittest.TestCase):
 
                             case _:
                                 p = self.run_cmd([cmd, dbf])
-                                breakpoint()
-                                1/0
+                                print(p)
+                                raise NotImplementedError
 
-    def run_cmd(self, cmd, in_stdout:str|None=None, in_stderr=''):
+    def run_cmd(self, cmd, in_stdout: str | None = None, in_stderr=""):
         p = subprocess.run(cmd, capture_output=True, encoding="utf8", text=True)
         if not in_stderr:
-            self.assertEqual(p.stderr, '')
+            self.assertEqual(p.stderr, "")
         else:
             self.assertIn(in_stderr, p.stderr)
         if in_stdout is not None:
             self.assertIn(in_stdout, p.stdout)
-        if not in_stderr:
+        if not in_stderr and not sys.platform.startswith("openbsd"):
             p.check_returncode()
         return p
+
+    def testShell(self):
+        out, err = io.StringIO(), io.StringIO()
+        db = apsw.Connection(":memory:")
+        if not hasattr(db, "load_extension"):
+            return
+
+        s = apsw.Shell(db=db, stdout=out, stderr=err)
+        s.process_command(".load --list")
+        self.assertEqual("", err.getvalue())
+        if apsw.sqlite_extra.has("shathree"):
+            self.assertIn("shathree", out.getvalue())
+
+        s.stdout = io.StringIO()
+        s.stderr = io.StringIO()
+        s.process_command(".load shathree")
+        self.assertEqual("", s.stderr.getvalue())
+        self.assertEqual("", s.stdout.getvalue())
+
+        # deliberate error that shouldn't show sqlite_extra attempt
+        self.assertRaises(apsw.ExtensionLoadingError, s.process_command, ".load thisdoesnotexistandshouldgiveanerror")
 
 
 __all__ = ("Extra",)

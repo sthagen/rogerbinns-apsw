@@ -8,8 +8,8 @@ ones that compile for that platform.  This is for convenience and to
 help promote these great extras.  They add just over 1MB to the
 download and 3MB of disk space.
 
-Access is provided via an :ref:`API <extra_api>` and via the
-:ref:`command line <extra_api>`.
+Access is provided via an :ref:`API <extra_api>`, :ref:`command line
+<extra_api>`, and :ref:`shell <extra_shell>`
 
 Dependencies
 ------------
@@ -38,7 +38,7 @@ Command line
 ------------
 
 Programs can be run by giving their name and parameters. For example
-code:`sqlite3_scrub` ::
+:code:`sqlite3_scrub` program::
 
     python3 -m apsw.sqlite_extra sqlite3_scrub source.db dest.db
 
@@ -47,13 +47,27 @@ You can also get the filename for any program or extension.  For example the
 
     python3 -m apsw.sqlite_extra --path sqlite3_rsync
 
-The :code:`csv` extension::
+The :code:`csv` extension path.::
 
     python3 -m apsw.sqlite_extra --path csv
 
 List what is available::
 
     python3 -m apsw.sqlite_extra --list
+
+.. _extra_shell:
+
+Shell
+-----
+
+The :doc:`shell <shell>` is also integrated.  Use :ref:`.load
+<shell-cmd-load>` with :code:`--list` to see all available
+extensions, and you can load just giving the name.
+
+.. code-block:: console
+
+    sqlite> .load --list
+    sqlite> .load csv
 
 .. _extra_api:
 

@@ -39,6 +39,12 @@ Regularised str and repr for APSW objects:
 * async and closed are indicated
 * Subclasses name are used instead of the APSW parent class
 
+SQLite has many extra useful extensions and programs that have to be
+compiled.  These can be packaged with APSW for convenient access.  See
+:doc:`extra` documentation.  This is the default for PyPI builds.
+Also included is the experimental under development `vec1 vector
+search extension <https://sqlite.org/vec1>`__.
+
 Fix wrapping, indents. and space for hyphens in
 :func:`apsw.unicode.text_wrap` under various conditions (:issue:`600`)
 

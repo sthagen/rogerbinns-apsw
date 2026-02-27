@@ -4,20 +4,35 @@ SQLite extra
 In addition to the main library, SQLite has additional programs and
 loadable extensions.  However these need to be separately compiled and
 installed.  Full APSW builds such as those on PyPI include all the
-ones that compile for that platform.  This is for convenience and to
-help promote these great extras.  They add just over 1MB to the
-download and 3MB of disk space.
+ones that compile for that platform, without any modifications.  This
+is for convenience and to help promote these great extras.  They add
+just over 1MB to the download and 3MB of disk space.
 
 Access is provided via an :ref:`API <extra_api>`, :ref:`command line
 <extra_api>`, and :ref:`shell <extra_shell>`
+
+vec1
+++++
+
+There is an experimental under development vector search library by
+the SQLite team.  It is also included with the extras if possible.
+**Note** if the extension is loaded on an x86 processor from before
+2013, then an illegal instruction exception will happen
+
+* `Forum post <https://sqlite.org/forum/forumpost/ceba048877>`__ to provide feedback
+* `Site <https://sqlite.org/vec1>`__ with tutorial and
+  reference documentation
 
 Dependencies
 ------------
 
 There are no dependencies for the extensions and programs.  That means
 they can be used on other compatible systems.  Some of the programs
-require the SQLite library which **must** be placed in the same
-directory as the program.
+require the SQLite library alongside the program which **must** be
+placed in the same directory as the program if you copy the program
+elsewhere.  (The SQLite library in that directory deliberately has a
+different name to avoid interactions with the standard system SQLite
+library.)
 
 Marking
 -------

@@ -36,7 +36,11 @@ help: ## Show this help
 	@egrep -h '\s##\s' $(MAKEFILE_LIST) | sort | \
 	awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-all: src/apswversion.h src/apsw.docstrings apsw/__init__.pyi src/constants.c src/stringconstants.c  test docs  checkversion ## Update generated files, build, test, make doc
+GENFILES = src/apswversion.h src/apsw.docstrings apsw/__init__.pyi src/constants.c src/stringconstants.c  \
+	apsw/sqlite_extra.json doc/sqlite_extra.rst-inc \
+	$(GENDOCS) $(GENEXAMPLES)
+
+all: $(GENFILES)  checkversion   ## Update generated files
 
 tagpush: ## Tag with version and push
 	test "`git branch --show-current`" = master
@@ -108,6 +112,12 @@ src/constants.c: Makefile tools/genconstants.py src/apswversion.h tools/tocupdat
 src/stringconstants.c: Makefile tools/genstrings.py src/apswversion.h
 	-rm -f src/stringconstants.c
 	$(PYTHON) tools/genstrings.py > src/stringconstants.c
+
+apsw/sqlite_extra.json: tools/vend.py
+	$(PYTHON) tools/vend.py json $@
+
+doc/sqlite_extra.rst-inc: tools/vend.py
+	env PYTHONPATH=. $(PYTHON) tools/vend.py rst $@
 
 build_ext: src/apswversion.h  apsw/__init__.pyi src/apsw.docstrings ## Fetches SQLite and builds the extension
 	env $(PYTHON) setup.py fetch --version=$(SQLITEVERSION) --all build_ext -DSQLITE_ENABLE_COLUMN_METADATA --inplace --force --enable-all-extensions
@@ -183,6 +193,7 @@ fossil: ## Grabs latest trunk from SQLite source control, extracts and builds in
 	mkdir sqlite3
 	set -e ; cd sqlite3 ; curl --output - $(FOSSIL_URL) | tar xfz - --strip-components=1
 	set -e ; cd sqlite3 ; ./configure --quiet --all --column-metadata --disable-tcl $(CONFIGURE_OPTS) ; $(MAKE) sqlite3.c sqlite3 libsqlite3.so ; ln -s libsqlite3.so libsqlite3.so.0
+	set -e ; cd sqlite3 ; curl --output - https://sqlite.org/vec1/tarball/vec1.tar.gz | tar xfz -
 	$(PYTHON) setup.py patch
 
 # the funky test stuff is to exit successfully when grep has rc==1 since that means no lines found.

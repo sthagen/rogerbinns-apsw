@@ -87,6 +87,7 @@ def run_tests():
         ("from .carray import *", "from apsw.tests.carray import *"),
         ("from .aiotest import *", "from apsw.tests.aiotest import *"),
         ("from .extratest import *", "from apsw.tests.extratest import *"),
+        ("from .fork_checker import *", "from apsw.tests.fork_checker import *"),
     ):
         old_source = old_source.replace(sub, repl)
 

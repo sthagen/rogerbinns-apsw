@@ -2886,6 +2886,15 @@ class APSW(unittest.TestCase):
         new = self.db.data_version()
         self.assertNotEqual(b4, new)
 
+    def testReserveBytes(self):
+        self.assertRaises(TypeError, self.db.reserve_bytes, 3)
+        self.assertRaises(TypeError, self.db.reserve_bytes, "main", "main")
+        # unknown schema
+        self.assertRaises(apsw.SQLError, self.db.data_version, "orange")
+        self.assertEqual(0, self.db.reserve_bytes())
+        self.assertEqual(23, self.db.reserve_bytes(reserve=23))
+        self.assertEqual(23, self.db.reserve_bytes(reserve=9675675))
+
     def testFastcall(self):
         "fastcall argument processing"
         # function that takes one argument
@@ -12197,6 +12206,7 @@ if __name__ == "__main__":
     del apsw.ext
     del apsw.bestpractice
     gc.collect()  # all cursors & connections must be gone
+    assert len(apsw.connections()) == 0
     apsw.shutdown()
     apsw.config(apsw.SQLITE_CONFIG_LOG, None)
     if hasattr(apsw, "_fini"):

@@ -2123,7 +2123,7 @@ def _format_table(
 
     # break headers and cells into lines
     def wrap(text: str, width: int, justify: apsw.unicode.Justify, hyphen: str) -> list[str]:
-        return list(apsw.unicode.text_wrap(text, width, justify=justify, hyphen=hyphen)) or [""]
+        return list(apsw.unicode.text_wrap(text, width, justify=justify, hyphen=hyphen)) or [" " * width]
 
     # special formatting
     formats = {

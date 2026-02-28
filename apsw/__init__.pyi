@@ -405,7 +405,7 @@ def fork_checker() -> None:
 
     One example of how you may end up using fork is if you use the
     :mod:`multiprocessing module <multiprocessing>` which can use
-    fork to make child processes.
+    fork to make child processes in less recent Python versions.
 
     If you do use fork or multiprocessing on a platform that supports fork
     then you **must** ensure database connections and their objects
@@ -427,11 +427,10 @@ def fork_checker() -> None:
     arose.  (Destructors of objects you didn't close also run between
     lines.)
 
-    You should only call this method as the first line after importing
-    APSW, as it has to shutdown and re-initialize SQLite.  If you have
-    any SQLite objects already allocated when calling the method then
-    the program will later crash.  The recommended use is to use the fork
-    checking as part of your test suite."""
+    Calling this method requires doing a :func:`shutdown` which means there
+    can be no active connections.
+
+    The recommended use is to use the fork checking as part of your test suite."""
     ...
 
 def format_sql_value(value: SQLiteValue) -> str:
@@ -656,11 +655,11 @@ def set_default_vfs(name: str) -> None:
     ...
 
 def shutdown() -> None:
-    """It is unlikely you will want to call this method and there is no
-    need to do so.  It is a **really** bad idea to call it unless you
-    are absolutely sure all :class:`connections <Connection>`,
-    :class:`blobs <Blob>`, :class:`cursors <Cursor>`, :class:`vfs <VFS>`
-    etc have been closed, deleted and garbage collected.
+    """It is unlikely you will want to call this method and there is no need
+    to do so.  You will get :exc:`MisuseError` if there are any
+    :func:`connections active <connections>` and need to close them first.
+
+    VFS remain registered across a shutdown and initialise.
 
     Calls: `sqlite3_shutdown <https://sqlite.org/c3ref/initialize.html>`__"""
     ...
@@ -1790,9 +1789,11 @@ class Connection:
 
         :returns: True or False indicating if the VFS understood the op.
 
-        The :ref:`example <example_filecontrol>` shows getting
+        :meth:`reserve_bytes` does :code:`SQLITE_FCNTL_RESERVE_BYTES`.  The
+        :ref:`example <example_filecontrol>` shows getting
         `SQLITE_FCNTL_DATA_VERSION
         <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html#sqlitefcntldataversion>`__.
+        You will find :meth:`data_version` more convenient.
 
         If you want data returned back then the *pointer* needs to point to
         something mutable.  Here is an example using :mod:`ctypes` of
@@ -2097,6 +2098,30 @@ class Connection:
         """Attempts to free as much heap memory as possible used by this connection.
 
         Calls: `sqlite3_db_release_memory <https://sqlite.org/c3ref/db_release_memory.html>`__"""
+        ...
+
+    def reserve_bytes(self, schema: str | None = None, reserve: int = -1) -> int:
+        """Each database page can have `some bytes at the end set aside for other
+        use by the VFS
+        <https://sqlite.org/fileformat.html#reserved_bytes_per_page>`__.  For
+        example encryption will store signature information, and the `checksum
+        VFS <https://sqlite.org/cksumvfs.html>`__ stores a checksum.
+
+        It is recommended to do a :code:`VACUUM` after a change to ensure it
+        takes effect.  You can use :func:`apsw.ext.dbinfo` to get the
+        :class:`~apsw.ext.DatabaseFileInfo` to see what the database file
+        is using right now.
+
+        :param schema: `schema` is `main`, `temp`, the name in `ATTACH
+            <https://sqlite.org/lang_attach.html>`__, defaulting to `main` if not
+            supplied.
+        :param reserve: The new value to apply.  SQLite only supports values
+            between 0 and 255 inclusive.
+
+        The current value is returned.  Note that it may be waiting for a
+        :code:`VACUUM` before it gets applied.
+
+        Calls: `sqlite3_file_control <https://sqlite.org/c3ref/file_control.html>`__"""
         ...
 
     row_trace: RowTracer | None
@@ -4610,7 +4635,7 @@ SQLITE_DBCONFIG_LOOKASIDE: int = 1001
 """For `Database Connection Configuration Options <https://sqlite.org/c3ref/c_dbconfig_defensive.html>'__"""
 SQLITE_DBCONFIG_MAINDBNAME: int = 1000
 """For `Database Connection Configuration Options <https://sqlite.org/c3ref/c_dbconfig_defensive.html>'__"""
-SQLITE_DBCONFIG_MAX: int = 1022
+SQLITE_DBCONFIG_MAX: int = 1023
 """For `Database Connection Configuration Options <https://sqlite.org/c3ref/c_dbconfig_defensive.html>'__"""
 SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE: int = 1006
 """For `Database Connection Configuration Options <https://sqlite.org/c3ref/c_dbconfig_defensive.html>'__"""
@@ -6625,9 +6650,11 @@ class AsyncConnection:
 
         :returns: True or False indicating if the VFS understood the op.
 
-        The :ref:`example <example_filecontrol>` shows getting
+        :meth:`reserve_bytes` does :code:`SQLITE_FCNTL_RESERVE_BYTES`.  The
+        :ref:`example <example_filecontrol>` shows getting
         `SQLITE_FCNTL_DATA_VERSION
         <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html#sqlitefcntldataversion>`__.
+        You will find :meth:`data_version` more convenient.
 
         If you want data returned back then the *pointer* needs to point to
         something mutable.  Here is an example using :mod:`ctypes` of
@@ -6900,6 +6927,30 @@ class AsyncConnection:
         """Attempts to free as much heap memory as possible used by this connection.
 
         Calls: `sqlite3_db_release_memory <https://sqlite.org/c3ref/db_release_memory.html>`__"""
+        ...
+
+    async def reserve_bytes(self, schema: str | None = None, reserve: int = -1) -> int:
+        """Each database page can have `some bytes at the end set aside for other
+        use by the VFS
+        <https://sqlite.org/fileformat.html#reserved_bytes_per_page>`__.  For
+        example encryption will store signature information, and the `checksum
+        VFS <https://sqlite.org/cksumvfs.html>`__ stores a checksum.
+
+        It is recommended to do a :code:`VACUUM` after a change to ensure it
+        takes effect.  You can use :func:`apsw.ext.dbinfo` to get the
+        :class:`~apsw.ext.DatabaseFileInfo` to see what the database file
+        is using right now.
+
+        :param schema: `schema` is `main`, `temp`, the name in `ATTACH
+            <https://sqlite.org/lang_attach.html>`__, defaulting to `main` if not
+            supplied.
+        :param reserve: The new value to apply.  SQLite only supports values
+            between 0 and 255 inclusive.
+
+        The current value is returned.  Note that it may be waiting for a
+        :code:`VACUUM` before it gets applied.
+
+        Calls: `sqlite3_file_control <https://sqlite.org/c3ref/file_control.html>`__"""
         ...
 
     row_trace: ( RowTracer | AsyncRowTracer ) | None

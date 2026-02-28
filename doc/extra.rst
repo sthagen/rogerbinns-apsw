@@ -9,10 +9,10 @@ is for convenience and to help promote these great extras.  They add
 just over 1MB to the download and 3MB of disk space.
 
 Access is provided via an :ref:`API <extra_api>`, :ref:`command line
-<extra_api>`, and :ref:`shell <extra_shell>`
+<extra_cli>`, and :ref:`shell <extra_shell>`
 
 vec1
-++++
+----
 
 There is an experimental under development vector search library by
 the SQLite team.  It is also included with the extras if possible.
@@ -33,6 +33,10 @@ placed in the same directory as the program if you copy the program
 elsewhere.  (The SQLite library in that directory deliberately has a
 different name to avoid interactions with the standard system SQLite
 library.)
+
+Extensions and programs that require third party libraries (eg
+compression), or TCL are not included, and optional third party
+libraries (eg readline) are not used.
 
 Marking
 -------

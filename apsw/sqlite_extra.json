@@ -59,6 +59,10 @@
         "description": "functions for the exact display* and input of IEEE754 Binary64 floating-point numbers",
         "type": "extension"
     },
+    "memstat": {
+        "description": "Provides SQL access to the sqlite3_status64() and sqlite3_db_status() interfaces",
+        "type": "extension"
+    },
     "nextchar": {
         "description": "Finds all valid 'next' characters for a string given a vocabulary",
         "type": "extension"

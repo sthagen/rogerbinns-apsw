@@ -4097,9 +4097,11 @@ Connection_create_collation(PyObject *self_, PyObject *const *fast_args, Py_ssiz
 
   :returns: True or False indicating if the VFS understood the op.
 
-  The :ref:`example <example_filecontrol>` shows getting
+  :meth:`reserve_bytes` does :code:`SQLITE_FCNTL_RESERVE_BYTES`.  The
+  :ref:`example <example_filecontrol>` shows getting
   `SQLITE_FCNTL_DATA_VERSION
   <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html#sqlitefcntldataversion>`__.
+  You will find :meth:`data_version` more convenient.
 
   If you want data returned back then the *pointer* needs to point to
   something mutable.  Here is an example using :mod:`ctypes` of
@@ -6258,6 +6260,75 @@ Connection_data_version(PyObject *self_, PyObject *const *fast_args, Py_ssize_t 
   return PyErr_Occurred() ? NULL : PyLong_FromLong(data_version);
 }
 
+/** .. method:: reserve_bytes(schema: str | None = None, reserve: int = -1) -> int
+
+  Each database page can have `some bytes at the end set aside for other
+  use by the VFS
+  <https://sqlite.org/fileformat.html#reserved_bytes_per_page>`__.  For
+  example encryption will store signature information, and the `checksum
+  VFS <https://sqlite.org/cksumvfs.html>`__ stores a checksum.
+
+  It is recommended to do a :code:`VACUUM` after a change to ensure it
+  takes effect.  You can use :func:`apsw.ext.dbinfo` to get the
+  :class:`~apsw.ext.DatabaseFileInfo` to see what the database file
+  is using right now.
+
+  :param schema: `schema` is `main`, `temp`, the name in `ATTACH
+      <https://sqlite.org/lang_attach.html>`__, defaulting to `main` if not
+      supplied.
+  :param reserve: The new value to apply.  SQLite only supports values
+      between 0 and 255 inclusive.
+
+  The current value is returned.  Note that it may be waiting for a
+  :code:`VACUUM` before it gets applied.
+
+  -* sqlite3_file_control
+*/
+static PyObject *
+Connection_reserve_bytes(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+{
+  Connection *self = (Connection *)self_;
+  int reserve = -1;
+
+  CHECK_CLOSED(self, NULL);
+
+  const char *schema = NULL;
+  {
+    Connection_reserve_bytes_CHECK;
+    ARG_PROLOG(2, Connection_reserve_bytes_KWNAMES);
+    ARG_OPTIONAL ARG_optional_str(schema);
+    ARG_OPTIONAL ARG_int(reserve);
+    ARG_EPILOG(NULL, Connection_reserve_bytes_USAGE, );
+  }
+
+  ASYNC_FASTCALL(self, Connection_reserve_bytes);
+
+  DBMUTEX_ENSURE(self);
+
+  int res, effective = -73;
+
+  if (reserve >= 0)
+  {
+    res = sqlite3_file_control(self->db, schema ? schema : "main", SQLITE_FCNTL_RESERVE_BYTES, &reserve);
+    if (res)
+    {
+      SET_EXC(res, self->db);
+      goto exit;
+    }
+  }
+
+  res = sqlite3_file_control(self->db, schema ? schema : "main", SQLITE_FCNTL_RESERVE_BYTES, &effective);
+  if (res)
+  {
+    SET_EXC(res, self->db);
+  }
+
+exit:
+  sqlite3_mutex_leave(self->dbmutex);
+
+  return PyErr_Occurred() ? NULL : PyLong_FromLong(effective);
+}
+
 /** .. method:: setlk_timeout(ms: int, flags: int) -> None
 
   Sets a VFS level timeout.
@@ -6918,6 +6989,8 @@ static PyMethodDef Connection_methods[] = {
   { "register_fts5_function", (PyCFunction)Connection_register_fts5_function, METH_FASTCALL | METH_KEYWORDS,
     Connection_register_fts5_function_DOC },
   { "data_version", (PyCFunction)Connection_data_version, METH_FASTCALL | METH_KEYWORDS, Connection_data_version_DOC },
+  { "reserve_bytes", (PyCFunction)Connection_reserve_bytes, METH_FASTCALL | METH_KEYWORDS,
+    Connection_reserve_bytes_DOC },
   { "setlk_timeout", (PyCFunction)Connection_setlk_timeout, METH_FASTCALL | METH_KEYWORDS,
     Connection_setlk_timeout_DOC },
 #ifdef SQLITE_ENABLE_PREUPDATE_HOOK

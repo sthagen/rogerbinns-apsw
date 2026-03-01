@@ -516,7 +516,11 @@ If you get an error about the extension not being found you may need to
 explicitly specify the directory.  For example if it is in the current directory
 then use::
 
-  .load ./extension.so
+  .load ./extension
+
+:doc:`sqlite_extra <extra>` will also be searched for extensions if the
+parameter is not found.  Use --list to see a list available in this
+installation.
 
 .. _shell-cmd-log:
 .. index::

@@ -77,9 +77,11 @@ extras = [
         name="btreeinfo",
         description="btreeinfo virtual table that shows information about all btrees in an SQLite database file",
     ),
+    # bytecode: part of library source, can't be separately built
     Extra(
         name="cksumvfs",
         description="A VFS shim that writes a checksum on each page of an SQLite database file",
+        doc="cksumvfs.html",
     ),
     Extra(
         name="closure",
@@ -88,11 +90,14 @@ extras = [
     Extra(
         name="completion",
         description="A virtual table that returns suggested completions for a partial SQL input",
+        doc="completion.html",
     ),
     Extra(
         name="csv",
         description="A virtual table for reading CSV files",
+        doc="csv.html",
     ),
+    # dbstat: part of library source, can't be separately built
     Extra(
         name="decimal",
         description="Routines to implement arbitrary-precision decimal math",
@@ -113,6 +118,11 @@ extras = [
     Extra(
         name="ieee754",
         description="functions for the exact display* and input of IEEE754 Binary64 floating-point numbers",
+    ),
+    Extra(
+        name="memstat",
+        description="Provides SQL access to the sqlite3_status64() and sqlite3_db_status() interfaces",
+        doc="memstat.html",
     ),
     Extra(
         name="nextchar",
@@ -154,6 +164,7 @@ extras = [
     Extra(
         name="stmt",
         description="Virtual table with information about all prepared statements on a connection",
+        doc="stmt.html",
     ),
     Extra(
         name="stmtrand",
@@ -224,7 +235,7 @@ extras = [
     Extra(
         name="sqlite3_diff",
         type="executable",
-        sources=["tool/sqldiff.c", "tool/winmain.c"],
+        sources=["tool/sqldiff.c"] + (["tool/winmain.c"] if sys.platform == "win32" else []),
         description="Displays content differences between SQLite databases",
         doc="sqldiff.html",
         lib_sqlite_stdio=True,
@@ -368,10 +379,8 @@ def make_windows_resource(manifest_filename: str | None, **fields):
             out.append(f"#define SQLITE_RESOURCE_VERSION {','.join(Version['SQLITE_VERSION'].split('.'))}")
             if manifest_filename:
                 # inject manifest here
-                location = c_quote(manifest_filename.replace('\\', '\\\\'))
-                out.append(
-                    f"CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST {location}"
-                )
+                location = c_quote(manifest_filename.replace("\\", "\\\\"))
+                out.append(f"CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST {location}")
             continue
         if line.strip().startswith("VALUE"):
             seen_value = True

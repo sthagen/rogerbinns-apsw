@@ -168,7 +168,7 @@
 "\n" \
 "One example of how you may end up using fork is if you use the\n" \
 ":mod:`multiprocessing module <multiprocessing>` which can use\n" \
-"fork to make child processes.\n" \
+"fork to make child processes in less recent Python versions.\n" \
 "\n" \
 "If you do use fork or multiprocessing on a platform that supports fork\n" \
 "then you **must** ensure database connections and their objects\n" \
@@ -190,11 +190,10 @@
 "arose.  (Destructors of objects you didn't close also run between\n" \
 "lines.)\n" \
 "\n" \
-"You should only call this method as the first line after importing\n" \
-"APSW, as it has to shutdown and re-initialize SQLite.  If you have\n" \
-"any SQLite objects already allocated when calling the method then\n" \
-"the program will later crash.  The recommended use is to use the fork\n" \
-"checking as part of your test suite.\n" 
+"Calling this method requires doing a :func:`shutdown` which means there\n" \
+"can be no active connections.\n" \
+"\n" \
+"The recommended use is to use the fork checking as part of your test suite.\n" 
 
 #define  Apsw_format_sql_value_DOC "apsw.format_sql_value(value: SQLiteValue) -> str\n\n" \
 "Returns a Python string representing the supplied value in SQLite\n" \
@@ -498,11 +497,11 @@
 
 
 #define  Apsw_shutdown_DOC "apsw.shutdown() -> None\n\n" \
-"It is unlikely you will want to call this method and there is no\n" \
-"need to do so.  It is a **really** bad idea to call it unless you\n" \
-"are absolutely sure all :class:`connections <Connection>`,\n" \
-":class:`blobs <Blob>`, :class:`cursors <Cursor>`, :class:`vfs <VFS>`\n" \
-"etc have been closed, deleted and garbage collected.\n" \
+"It is unlikely you will want to call this method and there is no need\n" \
+"to do so.  You will get :exc:`MisuseError` if there are any\n" \
+":func:`connections active <connections>` and need to close them first.\n" \
+"\n" \
+"VFS remain registered across a shutdown and initialise.\n" \
 "\n" \
 "Calls: `sqlite3_shutdown <https://sqlite.org/c3ref/initialize.html>`__\n" 
 
@@ -2103,9 +2102,11 @@
 "\n" \
 ":returns: True or False indicating if the VFS understood the op.\n" \
 "\n" \
-"The :ref:`example <example_filecontrol>` shows getting\n" \
+":meth:`reserve_bytes` does :code:`SQLITE_FCNTL_RESERVE_BYTES`.  The\n" \
+":ref:`example <example_filecontrol>` shows getting\n" \
 "`SQLITE_FCNTL_DATA_VERSION\n" \
 "<https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html#sqlitefcntldataversion>`__.\n" \
+"You will find :meth:`data_version` more convenient.\n" \
 "\n" \
 "If you want data returned back then the *pointer* needs to point to\n" \
 "something mutable.  Here is an example using :mod:`ctypes` of\n" \
@@ -2539,6 +2540,40 @@
 "Attempts to free as much heap memory as possible used by this connection.\n" \
 "\n" \
 "Calls: `sqlite3_db_release_memory <https://sqlite.org/c3ref/db_release_memory.html>`__\n" 
+
+#define  Connection_reserve_bytes_DOC "Connection.reserve_bytes(schema: str | None = None, reserve: int = -1) -> int\n\n" \
+"Each database page can have `some bytes at the end set aside for other\n" \
+"use by the VFS\n" \
+"<https://sqlite.org/fileformat.html#reserved_bytes_per_page>`__.  For\n" \
+"example encryption will store signature information, and the `checksum\n" \
+"VFS <https://sqlite.org/cksumvfs.html>`__ stores a checksum.\n" \
+"\n" \
+"It is recommended to do a :code:`VACUUM` after a change to ensure it\n" \
+"takes effect.  You can use :func:`apsw.ext.dbinfo` to get the\n" \
+":class:`~apsw.ext.DatabaseFileInfo` to see what the database file\n" \
+"is using right now.\n" \
+"\n" \
+":param schema: `schema` is `main`, `temp`, the name in `ATTACH\n" \
+"    <https://sqlite.org/lang_attach.html>`__, defaulting to `main` if not\n" \
+"    supplied.\n" \
+":param reserve: The new value to apply.  SQLite only supports values\n" \
+"    between 0 and 255 inclusive.\n" \
+"\n" \
+"The current value is returned.  Note that it may be waiting for a\n" \
+":code:`VACUUM` before it gets applied.\n" \
+"\n" \
+"Calls: `sqlite3_file_control <https://sqlite.org/c3ref/file_control.html>`__\n" 
+
+#define Connection_reserve_bytes_KWNAMES "schema", "reserve"
+#define Connection_reserve_bytes_USAGE "Connection.reserve_bytes(schema: str | None = None, reserve: int = -1) -> int"
+
+#define Connection_reserve_bytes_CHECK do { \
+  assert(__builtin_types_compatible_p(typeof(schema), const char *)); \
+  assert(schema == 0); \
+  assert(__builtin_types_compatible_p(typeof(reserve), int)); \
+  assert(reserve == (-1)); \
+} while(0)
+
 
 #define  Connection_row_trace_DOC ":type: RowTracer | None\n" \
 "\n" \

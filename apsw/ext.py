@@ -1700,9 +1700,9 @@ class QueryLimitNoException(Exception):
 
 
 class query_limit:
-    """Use as a context manager to limit execution time and rows processed in the block
+    """Use as a context manager to limit execution time and rows produced in the block
 
-    When the total number of rows processed hits the row limit, or
+    When the total number of rows produced hits the row limit, or
     timeout seconds have elapsed an exception is raised to exit the
     block.
 
@@ -1715,7 +1715,7 @@ class query_limit:
             db.execute("...")
 
     :param db: Connection to monitor
-    :param row_limit: Maximum number of rows to process, across all
+    :param row_limit: Maximum number of rows to produce, across all
         queries.  :class:`None` (default) means no limit
     :param timeout: Maximum elapsed time in seconds.  :class:`None`
         (default) means no limit
@@ -2123,7 +2123,7 @@ def _format_table(
 
     # break headers and cells into lines
     def wrap(text: str, width: int, justify: apsw.unicode.Justify, hyphen: str) -> list[str]:
-        return list(apsw.unicode.text_wrap(text, width, justify=justify, hyphen=hyphen)) or [""]
+        return list(apsw.unicode.text_wrap(text, width, justify=justify, hyphen=hyphen)) or [" " * width]
 
     # special formatting
     formats = {

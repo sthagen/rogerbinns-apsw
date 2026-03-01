@@ -130,7 +130,7 @@ Extensions
         * VTable: sqlite_btreeinfo
 
     * - cksumvfs
-      - `link <https://sqlite.org/src/file?ci=trunk&name=ext%2fmisc%2fcksumvfs.c>`__
+      - `link <https://sqlite.org/cksumvfs.html>`__
       - A VFS shim that writes a checksum on each page of an SQLite database file
       -
         * Function: verify_checksum
@@ -143,13 +143,13 @@ Extensions
         * VTable: transitive_closure
 
     * - completion
-      - `link <https://sqlite.org/src/file?ci=trunk&name=ext%2fmisc%2fcompletion.c>`__
+      - `link <https://sqlite.org/completion.html>`__
       - A virtual table that returns suggested completions for a partial SQL input
       -
         * VTable: completion
 
     * - csv
-      - `link <https://sqlite.org/src/file?ci=trunk&name=ext%2fmisc%2fcsv.c>`__
+      - `link <https://sqlite.org/csv.html>`__
       - A virtual table for reading CSV files
       -
         * VTable: csv
@@ -186,6 +186,12 @@ Extensions
       -
         * Function: ieee754 ieee754_exponent ieee754_from_blob ieee754_from_int ieee754_inc ieee754_mantissa ieee754_to_blob ieee754_to_int
 
+    * - memstat
+      - `link <https://sqlite.org/memstat.html>`__
+      - Provides SQL access to the sqlite3_status64() and sqlite3_db_status() interfaces
+      -
+        * VTable: sqlite_memstat
+
     * - nextchar
       - `link <https://sqlite.org/src/file?ci=trunk&name=ext%2fmisc%2fnextchar.c>`__
       - Finds all valid 'next' characters for a string given a vocabulary
@@ -215,7 +221,7 @@ Extensions
       - `link <https://sqlite.org/src/file?ci=trunk&name=ext%2fmisc%2fregexp.c>`__
       - Compact reasonably efficient posix extended regular expression matcher
       -
-        * Function: regexpi
+        * Function: regexp regexpi
 
     * - rot13
       - `link <https://sqlite.org/src/file?ci=trunk&name=ext%2fmisc%2frot13.c>`__
@@ -244,7 +250,7 @@ Extensions
         * VTable: spellfix1
 
     * - stmt
-      - `link <https://sqlite.org/src/file?ci=trunk&name=ext%2fmisc%2fstmt.c>`__
+      - `link <https://sqlite.org/stmt.html>`__
       - Virtual table with information about all prepared statements on a connection
       -
         * VTable: sqlite_stmt
@@ -283,7 +289,7 @@ Extensions
       - `link <https://sqlite.org/vec1/doc/trunk/doc/vec1intro.md>`__
       - Vector search.  !Experimental! !Under development! Loading on before 2013 CPU may crash process
       -
-        * Function: vec1_cos_distance vec1_from_json vec1_info vec1_l2_distance vec1_test_pq_decode vec1_test_pq_distortion vec1_test_pq_encode vec1_to_json vec1_to_json_f vec1_to_json_i vec1_train
+        * Function: vec1_cos_distance vec1_from_json vec1_info vec1_l2_distance vec1_qinstr vec1_test_pq_decode vec1_test_pq_distortion vec1_test_pq_encode vec1_to_json vec1_to_json_f vec1_to_json_i vec1_train
         * VTable: vec1
 
     * - vfsstat

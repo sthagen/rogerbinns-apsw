@@ -548,14 +548,12 @@ Connection_aclose(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast_n
   return async_return_value(Py_None);
 }
 
-static void
-Connection_dealloc(PyObject *self_)
+static int
+Connection_dealloc_mutex(void *self_)
 {
   Connection *self = (Connection *)self_;
-  PyObject_GC_UnTrack(self_);
-  APSW_CLEAR_WEAKREFS;
+  DBMUTEX_RETRY(self, Connection_dealloc_mutex);
 
-  DBMUTEX_FORCE(self->dbmutex);
   Connection_close_internal(self, 2);
 
   /* Our dependents all hold a refcount on us, so they must have all
@@ -564,6 +562,22 @@ Connection_dealloc(PyObject *self_)
   Py_CLEAR(self->dependents);
 
   Py_TpFree(self_);
+
+  return 0;
+}
+
+static void
+Connection_dealloc(PyObject *self_)
+{
+  Connection *self = (Connection *)self_;
+  PyObject_GC_UnTrack(self_);
+  APSW_CLEAR_WEAKREFS;
+
+  PY_ERR_FETCH(exc);
+  Connection_dealloc_mutex(self);
+  if (PyErr_Occurred())
+    apsw_write_unraisable(NULL);
+  PY_ERR_RESTORE(exc);
 }
 
 /** .. method:: __init__(filename: str, flags: int = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, vfs: str | None = None, statementcachesize: int = 100)
@@ -745,22 +759,17 @@ pyexception:
   /* clean up db since it is useless - no need for user to call close */
   assert(PyErr_Occurred());
   res = -1;
-  DBMUTEX_FORCE(self->dbmutex);
-  Connection_close_internal(self, 2);
-  assert(PyErr_Occurred());
 
 finally:
   Py_XDECREF(iterator);
   Py_XDECREF(hook);
   if (res == 0)
-  {
     res = apsw_connection_add(self);
-    if (res)
-    {
-      DBMUTEX_FORCE(self->dbmutex);
-      Connection_close_internal(self, 2);
-    }
-  }
+
+  /* proactively cleanup if possible */
+  if (res != 0 && sqlite3_mutex_try(self->dbmutex) == SQLITE_OK)
+    Connection_close_internal(self, 2);
+
   assert((PyErr_Occurred() && res != 0) || (res == 0 && !PyErr_Occurred()));
   return res;
 }
@@ -2906,11 +2915,11 @@ Connection_enable_load_extension(PyObject *self_, PyObject *const *fast_args, Py
 
   Loads *filename* as an `extension <https://www.sqlite.org/loadext.html>`_
 
-  :param filename: The file to load.
+  :param filename: The file to load, the extension is optional
 
   :param entrypoint: The initialization method to call.  If this
-    parameter is not supplied then the SQLite default of
-    ``sqlite3_extension_init`` is used.
+    parameter is not supplied, then SQLite tries :code:`sqlite3_extension_init`
+    and a name derived from the filename.
 
   :raises ExtensionLoadingError: If the extension could not be
     loaded.  The exception string includes more details.
@@ -2920,6 +2929,7 @@ Connection_enable_load_extension(PyObject *self_, PyObject *const *fast_args, Py
   .. seealso::
 
     * :meth:`~Connection.enable_load_extension`
+    * :func:`apsw.sqlite_extra.load`
 */
 static PyObject *
 Connection_load_extension(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
@@ -6095,8 +6105,7 @@ Connection_set_row_trace_attr(PyObject *self_, PyObject *value, void *Py_UNUSED(
   particular action is ok to be part of the statement.
 
   Typical usage would be if you are running user supplied SQL and want
-  to prevent harmful operations.  You should also
-  set the :class:`statementcachesize <Connection>` to zero.
+  to prevent harmful operations.
 
   The authorizer callback has 5 parameters:
 
@@ -6111,10 +6120,14 @@ Connection_set_row_trace_attr(PyObject *self_, PyObject *value, void *Py_UNUSED(
   (*SQLITE_DENY* is returned if there is an error in your
   Python code).
 
+  Changing the authorizer (including setting to :code:`None`) will not
+  affect currently executing statements.  Any cached statements
+  or currently executing ones will be prepared again on their
+  next use.
+
   .. seealso::
 
     * :ref:`Example <example_authorizer>`
-    * :ref:`statementcache`
 
   -* sqlite3_set_authorizer
 */
@@ -6470,7 +6483,7 @@ Connection_fts5_tokenizer(PyObject *self_, PyObject *const *fast_args, Py_ssize_
     SET_EXC(rc, self->db);
     AddTraceBackHere(__FILE__, __LINE__, "Connection.fts5_tokenizer_v2.xCreate", "{s:s,s:i,s:O}", "name", name,
                      "len(args)", argc, "args", args_as_tuple);
-    APSWFTS5TokenizerType.tp_dealloc((PyObject *)pytok);
+    Py_DECREF(pytok);
     goto error;
   }
   Py_XDECREF(tmptuple);

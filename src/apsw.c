@@ -1102,6 +1102,9 @@ apsw_fini(PyObject *Py_UNUSED(self), PyObject *Py_UNUSED(unused))
   Py_CLEAR(coro_for_value);
   Py_CLEAR(coro_for_exception);
   Py_CLEAR(coro_for_stopasynciteration);
+  PyMem_Free(pending_call_slots);
+  pending_call_slots = 0;
+  pending_call_slots_count = 0;
   Py_RETURN_NONE;
 }
 #endif
@@ -1201,10 +1204,10 @@ apsw_check_mutex(apsw_mutex *am)
   {
     PyGILState_STATE gilstate;
     gilstate = PyGILState_Ensure();
-    PyErr_Format(ExcForkingViolation,
+    PyErr_SetString(ExcForkingViolation,
                  "SQLite object allocated in one process is being used in another (across a fork)");
     apsw_write_unraisable(NULL);
-    PyErr_Format(ExcForkingViolation,
+    PyErr_SetString(ExcForkingViolation,
                  "SQLite object allocated in one process is being used in another (across a fork)");
     PyGILState_Release(gilstate);
     return SQLITE_MISUSE;

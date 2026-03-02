@@ -47,27 +47,138 @@
     }                                                                                                                  \
   } while (0)
 
-/* use this when we have to get the dbmutex - eg in dealloc functions
-   - where we busy wait releasing gil until dbmutex is acquired.
-
-  a different thread could be running a sqlite3_step with the GIL
-  released and holding the mutex.  when it finishes it will want
-  the GIL so it can copy error messages etc, but we are holding the
-  GIL.  only after it has copied data into python will it then
-  release the db mutex.
-
-   if the fork checker is in use and this object was allocated in one
-   process and then freed in the next, it will busy loop forever
-   on SQLITE_MISUSE and spamming the unraisable exception hook with
-   forking violation */
-#define DBMUTEX_FORCE(mutex)                                                                                           \
+#define DBMUTEX_RETRY_2(conn1, conn2, func)                                                                            \
   do                                                                                                                   \
   {                                                                                                                    \
-    while (sqlite3_mutex_try(mutex) != SQLITE_OK)                                                                      \
+    sqlite3_mutex *mutex_one = NULL;                                                                                   \
+    if (conn1)                                                                                                         \
     {                                                                                                                  \
-      Py_BEGIN_ALLOW_THREADS Py_END_ALLOW_THREADS;                                                                     \
+      mutex_one = (conn1)->dbmutex;                                                                                    \
+      switch (sqlite3_mutex_try(mutex_one))                                                                            \
+      {                                                                                                                \
+      case SQLITE_MISUSE:                                                                                              \
+        PyErr_SetString(ExcForkingViolation,                                                                           \
+                        "SQLite object allocated in one process is being used in another (across a fork)");            \
+        return -1;                                                                                                     \
+      case SQLITE_BUSY:                                                                                                \
+        return apsw_AddPendingCall(func, self);                                                                        \
+      case SQLITE_OK:                                                                                                  \
+        break;                                                                                                         \
+      default:                                                                                                         \
+        Py_UNREACHABLE();                                                                                              \
+      }                                                                                                                \
+    }                                                                                                                  \
+    if (conn2)                                                                                                         \
+    {                                                                                                                  \
+      switch (sqlite3_mutex_try((conn2)->dbmutex))                                                                     \
+      {                                                                                                                \
+      case SQLITE_MISUSE:                                                                                              \
+        PyErr_SetString(ExcForkingViolation,                                                                           \
+                        "SQLite object allocated in one process is being used in another (across a fork)");            \
+        sqlite3_mutex_leave(mutex_one);                                                                                \
+        return -1;                                                                                                     \
+      case SQLITE_BUSY:                                                                                                \
+        sqlite3_mutex_leave(mutex_one);                                                                                \
+        return apsw_AddPendingCall(func, self);                                                                        \
+      case SQLITE_OK:                                                                                                  \
+        break;                                                                                                         \
+      default:                                                                                                         \
+        Py_UNREACHABLE();                                                                                              \
+      }                                                                                                                \
     }                                                                                                                  \
   } while (0)
+
+#define DBMUTEX_RETRY(connection, func) DBMUTEX_RETRY_2(connection, (Connection *)0, func)
+
+/* Py_AddPendingCall only has 32 slots so if we end up with more than
+   that many objects waiting mutex to destruct it returns errors.
+   Annoyingly this means having to manage our own list of pending calls.
+*/
+
+static size_t pending_call_slots_count = 0;
+typedef struct
+{
+  int (*func)(void *);
+  void *arg;
+} pending_call_entry;
+static pending_call_entry *pending_call_slots = 0;
+
+static int pending_call_registered = 0;
+
+static int
+pending_call_callback(void *ignored)
+{
+  assert(!PyErr_Occurred());
+
+  pending_call_registered = 0;
+
+  size_t ran = 0;
+
+  size_t i;
+  for (i = 0; i < pending_call_slots_count; i++)
+  {
+    if (pending_call_slots[i].func)
+    {
+      int (*func)(void *) = pending_call_slots[i].func;
+      void *arg = pending_call_slots[i].arg;
+      pending_call_slots[i].func = 0;
+      pending_call_slots[i].arg = 0;
+      ran++;
+      int res = func(arg);
+      assert((res == 0 && !PyErr_Occurred()) || (res != 0 && PyErr_Occurred()));
+      if (PyErr_Occurred())
+        apsw_write_unraisable(NULL);
+    }
+    else
+    {
+      assert(pending_call_slots[i].func == 0);
+      assert(pending_call_slots[i].arg == 0);
+    }
+  }
+
+  assert(!PyErr_Occurred());
+  return 0;
+}
+
+static int
+apsw_AddPendingCall(int (*func)(void *), void *arg)
+{
+  assert(func);
+  assert(arg);
+
+  int res = 0;
+
+  size_t i;
+  for (i = 0; i < pending_call_slots_count; i++)
+    if (!pending_call_slots[i].func)
+      break;
+  if (i == pending_call_slots_count)
+  {
+    pending_call_entry *pending_call_slots_new
+        = PyMem_Resize(pending_call_slots, pending_call_entry, pending_call_slots_count + 1);
+    if (!pending_call_slots_new)
+    {
+      res = -1;
+      goto exit;
+    }
+    pending_call_slots_count++;
+  }
+  pending_call_slots[i].func = func;
+  pending_call_slots[i].arg = arg;
+
+  if (!pending_call_registered)
+  {
+    res = Py_AddPendingCall(pending_call_callback, NULL);
+    if (res != 0)
+      PyErr_SetString(PyExc_RuntimeError,
+                      "APSW: Py_AddPendingCall failed which means destructors will not be able to complete");
+    else
+      pending_call_registered = 1;
+  }
+exit:
+  assert((res == 0 && !PyErr_Occurred()) || (res != 0 && PyErr_Occurred()));
+  return res;
+}
 
 /*
    The default Python PyErr_WriteUnraisable is almost useless, and barely used

@@ -17,8 +17,7 @@ import sysconfig
 from typing import Literal
 import dataclasses
 import sys
-import platform
-import shutil
+import pathlib
 
 
 @dataclasses.dataclass
@@ -206,7 +205,7 @@ extras = [
     ),
     Extra(
         name="vec1",
-        description="Vector search.  !Experimental! !Under development! Loading on before 2013 CPU may crash process",
+        description="Vector search.  !Experimental! !Under development!",
         doc="vec1",
         sources=["vec1/vec1.c"],
     ),
@@ -235,7 +234,8 @@ extras = [
     Extra(
         name="sqlite3_diff",
         type="executable",
-        sources=["tool/sqldiff.c"] + (["tool/winmain.c"] if sys.platform == "win32" else []),
+        sources=["tool/sqldiff.c"]
+        + (["tool/winmain.c"] if (sys.platform == "win32" and pathlib.Path("sqlite3/tool/winmain.c").exists()) else []),
         description="Displays content differences between SQLite databases",
         doc="sqldiff.html",
         lib_sqlite_stdio=True,
@@ -347,13 +347,14 @@ extras = [
 ]
 
 import os
-import pathlib
 import re
 import setuptools._distutils.ccompiler as ccompiler
 from setuptools._distutils.compilers.C.errors import CompileError, LinkError
 from setuptools._distutils.sysconfig import customize_compiler
 import subprocess
 import pprint
+import shutil
+import platform
 
 import logging
 
@@ -673,10 +674,10 @@ def do_build(what: set[str], verbose: bool, fail_fast: bool = False):
             resource = resource_file(build_dir, compiler, extra)
             include_dirs = [str(lib_stdio_include)] if extra.lib_sqlite_stdio else None
 
-            more_pre_args = None
+            avx_pre_args = None
 
             if extra.name == "vec1":
-                more_pre_args = []
+                avx_pre_args = []
                 match platform.machine().lower():
                     case "x86_64" | "amd64" | "i386" | "i686" | "x86":
                         is_x86 = True
@@ -687,27 +688,60 @@ def do_build(what: set[str], verbose: bool, fail_fast: bool = False):
                 match compiler.compiler_type:
                     case "msvc":
                         if is_x86:
-                            more_pre_args.append("/arch:AVX2")
-                        more_pre_args.append("/fp:fast")
+                            avx_pre_args.append("/arch:AVX2")
+                        avx_pre_args.append("/fp:fast")
 
                     case "unix":
                         if "clang" in compiler.compiler[0] or "gcc" in compiler.compiler[0]:
-                            more_pre_args.append("-O3")
+                            avx_pre_args.append("-O3")
                             if is_x86:
-                                more_pre_args.extend(("-mavx2", "-mfma"))
+                                avx_pre_args.extend(("-mavx2", "-mfma"))
 
             try:
-                actual_pre_args = compile_extra_preargs or []
-                if more_pre_args:
-                    actual_pre_args.extend(more_pre_args)
+                if avx_pre_args:
+                    # we have to compile the file twice with different defines and compiler flags
+                    # first scalar and then avx2
+                    macros1 = extra.defines or []
+                    macros1.append(("VEC1SIMD", "SCALAR"))
 
-                objs = compiler.compile(
-                    [str(pathlib.Path("sqlite3") / filename) for filename in extra.sources] + [resource],
-                    output_dir=str(build_dir),
-                    include_dirs=include_dirs,
-                    extra_preargs=actual_pre_args,
-                    macros=extra.defines,
-                )
+                    macros2 = extra.defines or []
+                    macros2.append(("VEC1SIMD", "AVX2"))
+                    preargs_2 = compile_extra_preargs or []
+                    preargs_2.extend(avx_pre_args)
+
+                    # we have to copy the source file
+                    assert len(extra.sources) == 1
+
+                    avx_c = build_dir / "vec1_avx.c"
+                    shutil.copy2(pathlib.Path("sqlite3") / extra.sources[0], avx_c)
+
+                    objs = compiler.compile(
+                        [str(pathlib.Path("sqlite3") / filename) for filename in extra.sources] + [resource],
+                        output_dir=str(build_dir),
+                        include_dirs=include_dirs,
+                        extra_preargs=compile_extra_preargs,
+                        macros=macros1,
+                    )
+
+                    objs.extend(
+                        compiler.compile(
+                            [avx_c],
+                            output_dir=str(build_dir),
+                            include_dirs=include_dirs,
+                            extra_preargs=preargs_2,
+                            macros=macros2,
+                        )
+                    )
+
+                else:
+                    objs = compiler.compile(
+                        [str(pathlib.Path("sqlite3") / filename) for filename in extra.sources] + [resource],
+                        output_dir=str(build_dir),
+                        include_dirs=include_dirs,
+                        extra_preargs=compile_extra_preargs,
+                        macros=extra.defines,
+                    )
+
             except Exception as exc:
                 failed.append((extra, exc_type(exc)))
                 if fail_fast:
@@ -900,7 +934,7 @@ Extensions
                         ("VTable", mod_after - mod_before),
                     ):
                         if diff:
-                            print(f"        * {kind}:", " ".join(sorted(diff)), file=f)
+                            print(f"        * {kind}:", " ".join(f":code:`{v}`" for v in sorted(diff)), file=f)
 
                 for extra in sorted(extras, key=lambda x: x.name):
                     if extra.type != "extension":

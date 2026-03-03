@@ -86,6 +86,18 @@ API Reference
 #define SQLITE_ENABLE_SETLK_TIMEOUT 1
 #endif
 
+#ifndef SQLITE_OMIT_AUTOINIT
+#define SQLITE_OMIT_AUTOINIT 1
+#endif
+
+#ifndef SQLITE_STRICT_SUBTYPE
+#define SQLITE_STRICT_SUBTYPE 1
+#endif
+
+#ifndef SQLITE_LIKE_DOESNT_MATCH_BLOBS
+#define SQLITE_LIKE_DOESNT_MATCH_BLOBS 1
+#endif
+
 #ifndef SQLITE_DEBUG
 #define SQLITE_API static
 #define SQLITE_EXTERN static
@@ -543,7 +555,7 @@ sqliteshutdown(PyObject *Py_UNUSED(unused1), PyObject *Py_UNUSED(unused2))
 
 /** .. method:: config(op: int, *args: Any) -> None
 
-  :param op: A `configuration operation <https://sqlite.org/c3ref/c_config_chunkalloc.html>`_
+  :param op: A `configuration operation <https://sqlite.org/c3ref/c_config_covering_index_scan.html>`_
   :param args: Zero or more arguments as appropriate for *op*
 
   Some operations don't make sense from a Python program.  All the
@@ -851,7 +863,7 @@ release_memory(PyObject *Py_UNUSED(self), PyObject *const *fast_args, Py_ssize_t
 
   Returns current and highwater measurements.
 
-  :param op: A `status parameter <https://sqlite.org/c3ref/c_status_malloc_size.html>`_
+  :param op: A `status parameter <https://sqlite.org/c3ref/c_status_malloc_count.html>`_
   :param reset: If *True* then the highwater is set to the current value
   :returns: A tuple of current value and highwater value
 
@@ -1006,9 +1018,9 @@ vfs_details(PyObject *Py_UNUSED(self), PyObject *Py_UNUSED(unused))
   particular SQLite `error code
   <https://sqlite.org/c3ref/c_abort.html>`_ then call this function.
   It also understands `extended error codes
-  <https://sqlite.org/c3ref/c_ioerr_access.html>`_.
+  <https://sqlite.org/c3ref/c_abort_rollback.html>`_.
 
-  For example to raise `SQLITE_IOERR_ACCESS <https://sqlite.org/c3ref/c_ioerr_access.html>`_::
+  For example to raise `SQLITE_IOERR_ACCESS <https://sqlite.org/rescode.html#ioerr_access>`_::
 
     raise apsw.exception_for(apsw.SQLITE_IOERR_ACCESS)
 
@@ -2012,6 +2024,18 @@ PyInit_apsw(void)
     PyErr_Format(PyExc_EnvironmentError, "SQLite was compiled without thread safety and cannot be used.");
     goto fail;
   }
+
+#ifdef APSW_USE_SQLITE_AMALGAMATION
+  {
+    int rc = sqlite3_initialize();
+    if (rc != SQLITE_OK)
+    {
+      PyErr_Format(PyExc_RuntimeError, "SQLite failed to initialize with code %d", rc);
+      goto fail;
+    }
+  }
+#endif
+
   module_is_initialized = 0;
   if (ApswModuleType.tp_base == NULL)
   {

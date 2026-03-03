@@ -344,7 +344,7 @@ def complete(statement: str) -> bool:
     ...
 
 def config(op: int, *args: Any) -> None:
-    """:param op: A `configuration operation <https://sqlite.org/c3ref/c_config_chunkalloc.html>`_
+    """:param op: A `configuration operation <https://sqlite.org/c3ref/c_config_covering_index_scan.html>`_
     :param args: Zero or more arguments as appropriate for *op*
 
     Some operations don't make sense from a Python program.  All the
@@ -381,9 +381,9 @@ def exception_for(code: int) -> Exception:
     particular SQLite `error code
     <https://sqlite.org/c3ref/c_abort.html>`_ then call this function.
     It also understands `extended error codes
-    <https://sqlite.org/c3ref/c_ioerr_access.html>`_.
+    <https://sqlite.org/c3ref/c_abort_rollback.html>`_.
 
-    For example to raise `SQLITE_IOERR_ACCESS <https://sqlite.org/c3ref/c_ioerr_access.html>`_::
+    For example to raise `SQLITE_IOERR_ACCESS <https://sqlite.org/rescode.html#ioerr_access>`_::
 
       raise apsw.exception_for(apsw.SQLITE_IOERR_ACCESS)"""
     ...
@@ -704,7 +704,7 @@ sqlitelibversion = sqlite_lib_version ## OLD-NAME
 def status(op: int, reset: bool = False) -> tuple[int, int]:
     """Returns current and highwater measurements.
 
-    :param op: A `status parameter <https://sqlite.org/c3ref/c_status_malloc_size.html>`_
+    :param op: A `status parameter <https://sqlite.org/c3ref/c_status_malloc_count.html>`_
     :param reset: If *True* then the highwater is set to the current value
     :returns: A tuple of current value and highwater value
 
@@ -1205,8 +1205,7 @@ class Connection:
     particular action is ok to be part of the statement.
 
     Typical usage would be if you are running user supplied SQL and want
-    to prevent harmful operations.  You should also
-    set the :class:`statementcachesize <Connection>` to zero.
+    to prevent harmful operations.
 
     The authorizer callback has 5 parameters:
 
@@ -1221,10 +1220,14 @@ class Connection:
     (*SQLITE_DENY* is returned if there is an error in your
     Python code).
 
+    Changing the authorizer (including setting to :code:`None`) will not
+    affect currently executing statements.  Any cached statements
+    or currently executing ones will be prepared again on their
+    next use.
+
     .. seealso::
 
       * :ref:`Example <example_authorizer>`
-      * :ref:`statementcache`
 
     Calls: `sqlite3_set_authorizer <https://sqlite.org/c3ref/set_authorizer.html>`__"""
 
@@ -1436,7 +1439,7 @@ class Connection:
 
     def config(self, op: int, *args: int) -> int:
         """:param op: A `configuration operation
-          <https://sqlite.org/c3ref/c_dbconfig_enable_fkey.html>`__
+          <https://sqlite.org/c3ref/c_dbconfig_defensive.html>`__
         :param args: Zero or more arguments as appropriate for *op*
 
         This is how to get the fkey setting::
@@ -1783,7 +1786,7 @@ class Connection:
 
         :param dbname: The name of the database to affect.  `main`, `temp`, the name in `ATTACH <https://sqlite.org/lang_attach.html>`__
         :param op: A `numeric code
-          <https://sqlite.org/c3ref/c_fcntl_lockstate.html>`_ with values less
+          <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>`__ with values less
           than 100 reserved for SQLite internal use.
         :param pointer: A number which is treated as a ``void pointer`` at the C level.
 
@@ -2666,7 +2669,7 @@ class Cursor:
           :class:`zeroblob`, or a wrapped :ref:`Python object <pyobject>`
         :param can_cache: If False then the statement cache will not be used to find an already prepared query, nor will it be
           placed in the cache after execution
-        :param prepare_flags: `flags <https://sqlite.org/c3ref/c_prepare_normalize.html>`__ passed to
+        :param prepare_flags: `flags <https://sqlite.org/c3ref/c_prepare_dont_log.html>`__ passed to
           `sqlite_prepare_v3 <https://sqlite.org/c3ref/prepare.html>`__
         :param explain: If 0 or greater then the statement is passed to `sqlite3_stmt_explain <https://sqlite.org/c3ref/stmt_explain.html>`__
            where you can force it to not be an explain, or force explain or explain query plan.
@@ -3395,7 +3398,11 @@ class TableChange:
     after your filter or conflict handler returns, or the iterator moves to the next
     entry.  You will get :exc:`~apsw.InvalidContextError` if you try to
     access fields when out of scope.  This means you can't save
-    TableChanges for later, and need to copy out any information you need."""
+    TableChanges for later, and need to copy out any information you need.
+
+    When a conflict handler is :code:`SQLITE_CHANGESET_FOREIGN_KEY` then
+    only the :attr:`fk_conflicts` field has information, and all the rest
+    will be :code:`None`."""
 
     column_count: int
     """ Number of columns in the affected table"""
@@ -6114,8 +6121,7 @@ class AsyncConnection:
     particular action is ok to be part of the statement.
 
     Typical usage would be if you are running user supplied SQL and want
-    to prevent harmful operations.  You should also
-    set the :class:`statementcachesize <Connection>` to zero.
+    to prevent harmful operations.
 
     The authorizer callback has 5 parameters:
 
@@ -6130,10 +6136,14 @@ class AsyncConnection:
     (*SQLITE_DENY* is returned if there is an error in your
     Python code).
 
+    Changing the authorizer (including setting to :code:`None`) will not
+    affect currently executing statements.  Any cached statements
+    or currently executing ones will be prepared again on their
+    next use.
+
     .. seealso::
 
       * :ref:`Example <example_authorizer>`
-      * :ref:`statementcache`
 
     Calls: `sqlite3_set_authorizer <https://sqlite.org/c3ref/set_authorizer.html>`__"""
 
@@ -6339,7 +6349,7 @@ class AsyncConnection:
 
     async def config(self, op: int, *args: int) -> int:
         """:param op: A `configuration operation
-          <https://sqlite.org/c3ref/c_dbconfig_enable_fkey.html>`__
+          <https://sqlite.org/c3ref/c_dbconfig_defensive.html>`__
         :param args: Zero or more arguments as appropriate for *op*
 
         This is how to get the fkey setting::
@@ -6645,7 +6655,7 @@ class AsyncConnection:
 
         :param dbname: The name of the database to affect.  `main`, `temp`, the name in `ATTACH <https://sqlite.org/lang_attach.html>`__
         :param op: A `numeric code
-          <https://sqlite.org/c3ref/c_fcntl_lockstate.html>`_ with values less
+          <https://sqlite.org/c3ref/c_fcntl_begin_atomic_write.html>`__ with values less
           than 100 reserved for SQLite internal use.
         :param pointer: A number which is treated as a ``void pointer`` at the C level.
 
@@ -7464,7 +7474,7 @@ class AsyncCursor:
           :class:`zeroblob`, or a wrapped :ref:`Python object <pyobject>`
         :param can_cache: If False then the statement cache will not be used to find an already prepared query, nor will it be
           placed in the cache after execution
-        :param prepare_flags: `flags <https://sqlite.org/c3ref/c_prepare_normalize.html>`__ passed to
+        :param prepare_flags: `flags <https://sqlite.org/c3ref/c_prepare_dont_log.html>`__ passed to
           `sqlite_prepare_v3 <https://sqlite.org/c3ref/prepare.html>`__
         :param explain: If 0 or greater then the statement is passed to `sqlite3_stmt_explain <https://sqlite.org/c3ref/stmt_explain.html>`__
            where you can force it to not be an explain, or force explain or explain query plan.

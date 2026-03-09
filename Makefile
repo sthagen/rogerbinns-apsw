@@ -96,7 +96,7 @@ doc-depends: ## pip installs packages needed to build doc
 
 dev-depends: ## pip installs packages useful for development (none are necessary except setuptools)
 	$(PYTHON) -m pip install -U --upgrade-strategy eager build wheel setuptools pip
-	$(PYTHON) -m pip install -U --upgrade-strategy eager pdbp coverage ruff anyio trio
+	$(PYTHON) -m pip install -U --upgrade-strategy eager coverage anyio trio
 
 # This is probably gnu make specific but only developers use this makefile
 $(GENDOCS): doc/%.rst: src/%.c tools/code2rst.py  tools/tocupdate.sql
@@ -186,6 +186,9 @@ venv: ## Removes current venv and makes a new one
 	$(PYTHON) -m venv .venv
 	$(MAKE) dev-depends doc-depends PYTHON=.venv/bin/python
 
+pypi_build: ## Does a build in the same manner as for pypi
+	env APSW_FOR_PYPI=t $(PYTHON) -m build -o dist
+
 # set this to a commit id to grab that instead
 FOSSIL_URL="https://sqlite.org/src/tarball/sqlite.tar.gz"
 fossil: ## Grabs latest trunk from SQLite source control, extracts and builds in sqlite3 directory
@@ -199,7 +202,7 @@ fossil: ## Grabs latest trunk from SQLite source control, extracts and builds in
 # the funky test stuff is to exit successfully when grep has rc==1 since that means no lines found.
 showsymbols:  ## Finds any C symbols that aren't static(private)
 	rm -f apsw/__init__`$(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))"`
-	$(PYTHON) setup.py fetch --all --version=$(SQLITEVERSION) build_ext --inplace --force --enable-all-extensions
+	$(PYTHON) setup.py fetch --all --version=$(SQLITEVERSION) build_ext --inplace --force --enable-all-extensions --enable=column_metadata
 	test -f apsw/__init__`$(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))"`
 	set +e; nm --extern-only --defined-only apsw/__init__`$(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))"` | egrep -v ' (__bss_start|_edata|_end|_fini|_init|initapsw|PyInit_apsw)$$' ; test $$? -eq 1 || false
 	test -f apsw/_unicode`$(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))"`
@@ -249,6 +252,7 @@ source_nocheck: src/apswversion.h checkversion
 	env APSW_NO_GA=t $(MAKE) doc
 	rm -rf doc/build/html/_static/fonts/ doc/build/html/_static/css/fonts/ doc/build/apsw.1
 	rst2man doc/cli.rst doc/build/apsw.1
+	git clean -fdx apsw/sqlite_extra_binaries
 	$(PYTHON) setup.py sdist --formats zip,gztar --add-doc
 
 source: source_nocheck # Make the source and then check it builds and tests correctly.  This will catch missing files etc

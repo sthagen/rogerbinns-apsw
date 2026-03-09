@@ -108,6 +108,7 @@ extras = [
     Extra(
         name="fileio",
         description="Implements SQL functions readfile() and writefile(), and eponymous virtual type 'fsdir'",
+        sources=["ext/misc/fileio.c", "../src/fileio_win32.c"],
     ),
     # ::TODO:: fossildelta once RBU extension is wrapped
     Extra(
@@ -299,6 +300,9 @@ extras = [
         description="Command line shell",
         doc="cli.html",
         lib_sqlite=True,
+        # work around sqlite's mistaken handling of utf8 on windows.  it should be
+        # using manifest but instead only has a hacky main thing going on
+        defines = [("main", "main")]
     ),
     Extra(
         name="sqlite3_showdb",
@@ -504,6 +508,7 @@ class CompilerImplementation:
 def do_build(what: set[str], verbose: bool, fail_fast: bool = False):
     get_version()
     compiler = ccompiler.new_compiler(verbose=True)
+    # this configures compiler to have the same flags as python was built with
     customize_compiler(compiler)
 
     compile_extra_preargs = None
@@ -523,8 +528,10 @@ def do_build(what: set[str], verbose: bool, fail_fast: bool = False):
 
     # where the final binaries go
     output_dir = pathlib.Path() / "apsw" / "sqlite_extra_binaries"
-    shutil.rmtree(output_dir, ignore_errors=True)
-    compiler.mkpath(str(output_dir))
+    for p in output_dir.glob("*"):
+        if p.name.lower() == "readme.md":
+            continue
+        p.unlink()
 
     print("Checking if compiler works")
     compile_check_name = get_compile_check(build_dir)
@@ -712,7 +719,8 @@ def do_build(what: set[str], verbose: bool, fail_fast: bool = False):
                     # we have to compile the file twice with different defines and compiler flags
                     # first scalar and then avx2
                     macros1 = extra.defines or []
-                    macros1.append(("VEC1SIMD", "SCALAR"))
+                    if is_x86:
+                        macros1.append(("VEC1SIMD", "SCALAR"))
 
                     macros2 = extra.defines or []
                     macros2.append(("VEC1SIMD", "AVX2"))
@@ -733,15 +741,16 @@ def do_build(what: set[str], verbose: bool, fail_fast: bool = False):
                         macros=macros1,
                     )
 
-                    objs.extend(
-                        compiler.compile(
-                            [avx_c],
-                            output_dir=str(build_dir),
-                            include_dirs=include_dirs,
-                            extra_preargs=preargs_2,
-                            macros=macros2,
+                    if is_x86:
+                        objs.extend(
+                            compiler.compile(
+                                [avx_c],
+                                output_dir=str(build_dir),
+                                include_dirs=include_dirs,
+                                extra_preargs=preargs_2,
+                                macros=macros2,
+                            )
                         )
-                    )
 
                 else:
                     objs = compiler.compile(

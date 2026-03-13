@@ -298,18 +298,32 @@ class fetch(Command):
                     modtime = datetime.datetime(*zi.date_time).timestamp()
                     self.extract_entry(zipf.read(zi), zi.filename, modtime)
 
-            write("  Getting the experiment vec1 extension")
+            for desc, url, replace in (
+                (
+                    "experimental vec1 extension source",
+                    "https://sqlite.org/vec1/zip/vec1-20260306155250-d070184523.zip",
+                    "sqlite3/vec1",
+                ),
+                (
+                    "sqlar tool source",
+                    "https://sqlite.org/sqlar/zip/sqlar-src-20180107193712-4824e73896.zip",
+                    "sqlite3/sqlar",
+                ),
+                (
+                    "zlib source",
+                    "https://www.zlib.net/zlib132.zip",
+                    "sqlite3/zlib",
+                ),
+            ):
+                write(f"  Getting the {desc}")
+                data = self.download(url, checksum=True)
 
-            AURL = "https://sqlite.org/vec1/zip/vec1-20260306155250-d070184523.zip"
-
-            data = self.download(AURL, checksum=True)
-
-            with zipfile.ZipFile(data) as zipf:
-                for zi in zipf.infolist():
-                    if zi.is_dir():
-                        continue
-                    modtime = datetime.datetime(*zi.date_time).timestamp()
-                    self.extract_entry(zipf.read(zi), zi.filename, modtime, replace="sqlite3/vec1")
+                with zipfile.ZipFile(data) as zipf:
+                    for zi in zipf.infolist():
+                        if zi.is_dir():
+                            continue
+                        modtime = datetime.datetime(*zi.date_time).timestamp()
+                        self.extract_entry(zipf.read(zi), zi.filename, modtime, replace=replace)
 
         ## The amalgamation is a .tar.gz
         if self.sqlite:
@@ -375,8 +389,8 @@ class fetch(Command):
                 write(
                     "The download does not match the checksums distributed with APSW.\n"
                     "The download should not have changed since the checksums were\n"
-                    "generated.  The cause could be anything from network corruption\n"
-                    "to a malicious attack."
+                    "generated.  The causes could be anything from network corruption,\n"
+                    "overloaded server error message, to a malicious attack."
                 )
                 raise ValueError("Checksums do not match")
         # no matching line
@@ -645,7 +659,7 @@ class apsw_build_ext(beparent):
         s3config = os.path.join(ext.include_dirs[0], "sqlite_cfg.h")
         if os.path.exists(s3config):
             write(f"SQLite: Using configure generated {s3config}")
-            ext.define_macros.append(("APSW_USE_SQLITE_CFG_H", "1"))
+            ext.define_macros.append(("_HAVE_SQLITE_CONFIG_H", "1"))
 
         # enables
         addicuinclib = False

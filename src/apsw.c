@@ -433,6 +433,8 @@ apsw_connections(PyObject *Py_UNUSED(self), PyObject *Py_UNUSED(unused))
 {
   Py_ssize_t i;
   PyObject *res = PyList_New(0), *item = NULL;
+  if (!res)
+    goto fail;
   for (i = 0; i < PyList_GET_SIZE(the_connections); i++)
   {
     if (PyWeakref_GetRef(PyList_GET_ITEM(the_connections, i), &item) < 0)
@@ -1833,7 +1835,10 @@ apsw_sleep(PyObject *Py_UNUSED(module), PyObject *const *fast_args, Py_ssize_t f
   if (milliseconds < 0)
     milliseconds = 0;
 
-  res = sqlite3_sleep(milliseconds);
+  Py_BEGIN_ALLOW_THREADS
+    res = sqlite3_sleep(milliseconds);
+  Py_END_ALLOW_THREADS;
+
   return PyLong_FromLong(res);
 }
 
@@ -2305,22 +2310,32 @@ modules etc. For example::
   if (add_apsw_constants(m))
     goto fail;
 
-  PyModule_AddObject(m, "compile_options", get_compile_options());
-  PyModule_AddObject(m, "keywords", get_keywords());
-
-  if (!PyErr_Occurred())
+  PyObject *tmp = get_compile_options();
+  if (!tmp)
+    goto fail;
+  if (PyModule_AddObject(m, "compile_options", tmp))
   {
-    collections_abc_Mapping = PyImport_ImportModuleAttr(apst.collections_abc, apst.Mapping);
-
-    if (!collections_abc_Mapping)
-      goto fail;
+    Py_DECREF(tmp);
+    goto fail;
+  }
+  tmp = get_keywords();
+  if (!tmp)
+    goto fail;
+  if (PyModule_AddObject(m, "keywords", tmp))
+  {
+    Py_DECREF(tmp);
+    goto fail;
   }
 
-  if (!PyErr_Occurred())
-  {
-    module_is_initialized = 1;
-    return m;
-  }
+  assert(!PyErr_Occurred());
+  collections_abc_Mapping = PyImport_ImportModuleAttr(apst.collections_abc, apst.Mapping);
+
+  if (!collections_abc_Mapping)
+    goto fail;
+
+  assert(!PyErr_Occurred());
+  module_is_initialized = 1;
+  return m;
 
 fail:
   assert(PyErr_Occurred());

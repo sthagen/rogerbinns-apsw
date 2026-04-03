@@ -275,6 +275,8 @@ Connection_internal_cleanup(Connection *self)
     async_shutdown_controller(self->async_controller);
     Py_CLEAR(self->async_controller);
   }
+  Py_CLEAR(self->convert_binding);
+  Py_CLEAR(self->convert_jsonb);
   Py_CLEAR(self->cursor_factory);
   Py_CLEAR(self->busyhandler);
   Py_CLEAR(self->updatehook);
@@ -2060,6 +2062,8 @@ walhookcb(void *context, sqlite3 *db, const char *dbname, int npages)
   gilstate = PyGILState_Ensure();
 
   MakeExistingException();
+  if (PyErr_Occurred())
+    apsw_write_unraisable(NULL);
 
   PyObject *vargs[] = { NULL, (PyObject *)self, PyUnicode_FromString(dbname), PyLong_FromLong(npages) };
   if (vargs[2] && vargs[3])
@@ -2650,6 +2654,8 @@ busyhandlercb(void *context, int ncall)
   gilstate = PyGILState_Ensure();
 
   MakeExistingException();
+  CHAIN_EXC_BEGIN
+
   PyObject *vargs[] = { NULL, PyLong_FromLong(ncall) };
   if (vargs[1])
     retval = PyObject_Vectorcall(self->busyhandler, vargs + 1, 1 | PY_VECTORCALL_ARGUMENTS_OFFSET, NULL);
@@ -2668,6 +2674,7 @@ busyhandlercb(void *context, int ncall)
   }
 
 finally:
+  CHAIN_EXC_END;
   PyGILState_Release(gilstate);
   return result;
 }
@@ -4331,7 +4338,11 @@ Connection_wal_checkpoint(PyObject *self_, PyObject *const *fast_args, Py_ssize_
   ASYNC_FASTCALL(self, Connection_wal_checkpoint);
 
   DBMUTEX_ENSURE(self);
-  res = sqlite3_wal_checkpoint_v2(self->db, dbname, mode, &nLog, &nCkpt);
+
+  Py_BEGIN_ALLOW_THREADS
+    res = sqlite3_wal_checkpoint_v2(self->db, dbname, mode, &nLog, &nCkpt);
+  Py_END_ALLOW_THREADS;
+
   SET_EXC(res, self->db);
   sqlite3_mutex_leave(self->dbmutex);
 

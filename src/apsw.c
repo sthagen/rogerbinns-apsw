@@ -431,7 +431,7 @@ apsw_connections(PyObject *Py_UNUSED(self), PyObject *Py_UNUSED(unused))
   PyObject *res = PyList_New(0), *item = NULL;
   if (!res)
     goto fail;
-  for (i = 0; i < PyList_GET_SIZE(the_connections); i++)
+  for (i = 0; the_connections && i < PyList_GET_SIZE(the_connections); i++)
   {
     if (PyWeakref_GetRef(PyList_GET_ITEM(the_connections, i), &item) < 0)
       goto fail;
@@ -453,7 +453,7 @@ static void
 apsw_connection_remove(Connection *con)
 {
   Py_ssize_t i;
-  for (i = 0; i < PyList_GET_SIZE(the_connections);)
+  for (i = 0; the_connections && i < PyList_GET_SIZE(the_connections);)
   {
     PyObject *wr = PyList_GET_ITEM(the_connections, i);
     PyObject *wo = NULL;
@@ -479,6 +479,8 @@ apsw_connection_remove(Connection *con)
 static int
 apsw_connection_add(Connection *con)
 {
+  if (!the_connections)
+    return 0;
   PyObject *weakref = PyWeakref_NewRef((PyObject *)con, NULL);
   if (!weakref)
     return -1;
@@ -1100,21 +1102,6 @@ apswcomplete(PyObject *Py_UNUSED(self), PyObject *const *fast_args, Py_ssize_t f
   Py_RETURN_FALSE;
 }
 
-#if defined(APSW_DEBUG) || defined(APSW_FAULT_INJECT)
-static PyObject *
-apsw_fini(PyObject *Py_UNUSED(self), PyObject *Py_UNUSED(unused))
-{
-  fini_apsw_strings();
-  Py_CLEAR(coro_for_value);
-  Py_CLEAR(coro_for_exception);
-  Py_CLEAR(coro_for_stopasynciteration);
-  PyMem_Free(pending_call_slots);
-  pending_call_slots = 0;
-  pending_call_slots_count = 0;
-  Py_RETURN_NONE;
-}
-#endif
-
 #ifdef __SANITIZE_ADDRESS__
 #include <sanitizer/lsan_interface.h>
 
@@ -1208,6 +1195,10 @@ apsw_check_mutex(apsw_mutex *am)
 {
   if (am->pid && am->pid != getpid())
   {
+    /* see #620 for why this check exists */
+    if (!Py_IsInitialized())
+      return SQLITE_OK;
+
     PyGILState_STATE gilstate;
     gilstate = PyGILState_Ensure();
     PyErr_SetString(ExcForkingViolation,
@@ -1905,9 +1896,6 @@ static PyMethodDef module_methods[] = {
   { "unregister_vfs", (PyCFunction)apsw_unregister_vfs, METH_FASTCALL | METH_KEYWORDS, Apsw_unregister_vfs_DOC },
   { "allow_missing_dict_bindings", (PyCFunction)apsw_allow_missing_dict_bindings, METH_FASTCALL | METH_KEYWORDS,
     Apsw_allow_missing_dict_bindings_DOC },
-#if defined(APSW_FAULT_INJECT) || defined(APSW_DEBUG)
-  { "_fini", (PyCFunction)apsw_fini, METH_NOARGS, "Frees all caches and recycle lists" },
-#endif
 #ifdef __SANITIZE_ADDRESS__
   { "leak_check", (PyCFunction)apsw_leak_check, METH_NOARGS, "Runs sanitizer leak check now" },
 #endif
@@ -1998,11 +1986,78 @@ apsw_module_getattr(PyObject *module, PyObject *name)
   return PyErr_Occurred() ? NULL : PyObject_GenericGetAttr(module, name);
 }
 
+static int
+apsw_module_traverse(PyObject *self, visitproc visit, void *arg)
+{
+  Py_VISIT(coro_for_value);
+  Py_VISIT(coro_for_exception);
+  Py_VISIT(coro_for_stopasynciteration);
+
+  Py_VISIT(collections_abc_Mapping);
+
+  Py_VISIT(the_connections);
+
+  Py_VISIT(logger_cb);
+
+  if (Py_TYPE(self)->tp_base->tp_traverse)
+    return Py_TYPE(self)->tp_base->tp_traverse(self, visit, arg);
+  return 0;
+}
+
+static int
+apsw_module_clear(PyObject *self)
+{
+  Py_CLEAR(coro_for_value);
+  Py_CLEAR(coro_for_exception);
+  Py_CLEAR(coro_for_stopasynciteration);
+
+  Py_CLEAR(collections_abc_Mapping);
+
+  if(logger_cb)
+  {
+    sqlite3_config(SQLITE_CONFIG_LOG, NULL);
+    Py_CLEAR(logger_cb);
+  }
+
+  if (Py_TYPE(self)->tp_base->tp_clear)
+    return Py_TYPE(self)->tp_base->tp_clear(self);
+  return 0;
+}
+
+static void
+apsw_module_finalize(PyObject *self)
+{
+  apsw_module_clear(self);
+  if (Py_TYPE(self)->tp_base->tp_finalize)
+    Py_TYPE(self)->tp_base->tp_finalize(self);
+}
+
+static void
+apsw_module_dealloc(PyObject *self)
+{
+  PyObject_GC_UnTrack(self);
+  apsw_module_clear(self);
+
+  PyMem_Free(pending_call_slots);
+  pending_call_slots = 0;
+  pending_call_slots_count = 0;
+
+  Py_CLEAR(the_connections);
+
+  fini_apsw_strings();
+
+  Py_TYPE(self)->tp_base->tp_dealloc(self);
+}
+
 static PyTypeObject ApswModuleType = {
   PyVarObject_HEAD_INIT(NULL, 0).tp_name = "APSWModule",
-  .tp_flags = Py_TPFLAGS_DEFAULT,
+  .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
   .tp_setattro = apsw_module_setattr,
   .tp_getattro = apsw_module_getattr,
+  .tp_traverse = apsw_module_traverse,
+  .tp_clear = apsw_module_clear,
+  .tp_finalize = apsw_module_finalize,
+  .tp_dealloc = apsw_module_dealloc,
 };
 
 static struct PyModuleDef apswmoduledef = { PyModuleDef_HEAD_INIT, "apsw", NULL, -1, module_methods, 0, 0, 0, 0 };

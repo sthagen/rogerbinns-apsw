@@ -50,21 +50,17 @@ static int
 ZeroBlobBind_init(PyObject *self_, PyObject *args, PyObject *kwargs)
 {
   ZeroBlobBind *self = (ZeroBlobBind *)self_;
-  long long size;
+  sqlite3_uint64 size;
 
   {
     Zeroblob_init_CHECK;
     PREVENT_INIT_MULTIPLE_CALLS;
-    ARG_CONVERT_VARARGS_TO_FASTCALL;
+    ARG_CONVERT_VARARGS_TO_FASTCALL(1, Zeroblob_init_USAGE);
     ARG_PROLOG(1, Zeroblob_init_KWNAMES);
-    ARG_MANDATORY ARG_int64(size);
+    ARG_MANDATORY ARG_unsigned_long_long(size);
     ARG_EPILOG(-1, Zeroblob_init_USAGE, Py_XDECREF(fast_kwnames));
   }
-  if (size < 0)
-  {
-    PyErr_Format(PyExc_TypeError, "zeroblob size must be >= 0");
-    return -1;
-  }
+
   self->blobsize = size;
 
   return 0;
@@ -78,14 +74,14 @@ static PyObject *
 ZeroBlobBind_len(PyObject *self_, PyObject *Py_UNUSED(unused))
 {
   ZeroBlobBind *self = (ZeroBlobBind *)self_;
-  return PyLong_FromLong(self->blobsize);
+  return PyLong_FromUnsignedLongLong(self->blobsize);
 }
 
 static PyObject *
 ZeroBlobBind_tp_repr(PyObject *self_)
 {
   ZeroBlobBind *self = (ZeroBlobBind *)self_;
-  return PyUnicode_FromFormat("<%s size %lld at %p>", Py_TypeName(self_), self->blobsize, self);
+  return PyUnicode_FromFormat("<%s size %llu at %p>", Py_TypeName(self_), self->blobsize, self);
 }
 
 static PyMethodDef ZeroBlobBind_methods[]
@@ -111,6 +107,7 @@ struct APSWBlob
   sqlite3_blob *pBlob;
   int curoffset;         /* SQLite only supports 32 bit signed int offsets */
   int writeable;
+  int busy;  /* prevent close while in read/write */
   PyObject *weakreflist; /* weak reference tracking */
 };
 
@@ -145,12 +142,19 @@ APSWBlob_init(APSWBlob *self, Connection *connection, sqlite3_blob *blob, int wr
   self->curoffset = 0;
   self->weakreflist = NULL;
   self->writeable = writeable;
+  self->busy = 0;
 }
 
 static int
 APSWBlob_close_internal(APSWBlob *self, int force)
 {
   int setexc = 0;
+
+  if(self->busy)
+  {
+    PyErr_Format(ExcThreadingViolation, "The blob is busy in a read/write operation");
+    return 1;
+  }
 
   PY_ERR_FETCH_IF(force == 2, exc_save);
 
@@ -177,6 +181,7 @@ APSWBlob_close_internal(APSWBlob *self, int force)
       }
     }
     self->pBlob = 0;
+    self->busy = 0;
   }
 
   if (self->connection)
@@ -299,7 +304,7 @@ APSWBlob_read(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast_nargs
   }
 
   if (length < 0)
-    length = sqlite3_blob_bytes(self->pBlob) - self->curoffset;
+    length = blob_length - self->curoffset;
 
   /* trying to read more than is in the blob? */
   if ((sqlite3_int64)self->curoffset + (sqlite3_int64)length > blob_length)
@@ -311,7 +316,11 @@ APSWBlob_read(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast_nargs
     goto finally;
 
   thebuffer = PyBytes_AS_STRING(buffy);
-  res = sqlite3_blob_read(self->pBlob, thebuffer, length, self->curoffset);
+  self->busy++;
+  Py_BEGIN_ALLOW_THREADS
+    res = sqlite3_blob_read(self->pBlob, thebuffer, length, self->curoffset);
+  Py_END_ALLOW_THREADS;
+  self->busy--;
   SET_EXC(res, self->connection->db);
 
   MakeExistingException(); /* this could happen if there were issues in the vfs */
@@ -375,7 +384,6 @@ APSWBlob_read_into(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast_
   long long offset = 0, length = -1;
   PyObject *buffer = NULL;
 
-  int bloblen;
   Py_buffer py3buffer = { 0 };
 
   CHECK_BLOB_CLOSED;
@@ -390,12 +398,15 @@ APSWBlob_read_into(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast_
 
   ASYNC_FASTCALL(self->connection, APSWBlob_read_into);
 
-  if (PyObject_GetBufferContiguous(buffer, &py3buffer, PyBUF_WRITABLE | PyBUF_SIMPLE))
-    return NULL;
-
   DBMUTEX_ENSURE(self->connection);
 
-  bloblen = sqlite3_blob_bytes(self->pBlob);
+  if (PyObject_GetBufferContiguous(buffer, &py3buffer, PyBUF_WRITABLE | PyBUF_SIMPLE))
+  {
+    sqlite3_mutex_leave(self->connection->dbmutex);
+    return NULL;
+  }
+
+  int bloblen = sqlite3_blob_bytes(self->pBlob);
 
   if (self->curoffset > bloblen)
   {
@@ -404,7 +415,14 @@ APSWBlob_read_into(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast_
   }
 
   if (length < 0)
+  {
     length = py3buffer.len - offset;
+    if (length < 0)
+    {
+      PyErr_Format(PyExc_ValueError, "negative effective length");
+      goto finally;
+    }
+  }
 
   if (offset < 0 || offset > py3buffer.len)
   {
@@ -412,7 +430,7 @@ APSWBlob_read_into(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast_
     goto finally;
   }
 
-  if (offset + length > py3buffer.len)
+  if (length > py3buffer.len - offset)
   {
     PyErr_Format(PyExc_ValueError, "Data would go beyond end of buffer");
     goto finally;
@@ -424,7 +442,11 @@ APSWBlob_read_into(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast_
     goto finally;
   }
 
-  res = sqlite3_blob_read(self->pBlob, (char *)(py3buffer.buf) + offset, length, self->curoffset);
+  self->busy++;
+  Py_BEGIN_ALLOW_THREADS
+    res = sqlite3_blob_read(self->pBlob, (char *)(py3buffer.buf) + offset, length, self->curoffset);
+  Py_END_ALLOW_THREADS;
+  self->busy--;
 
   MakeExistingException(); /* vfs errors could cause this */
 
@@ -468,25 +490,28 @@ APSWBlob_seek(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast_nargs
     ARG_OPTIONAL ARG_int(whence);
     ARG_EPILOG(NULL, Blob_seek_USAGE, );
   }
+
+  int64_t blob_length = sqlite3_blob_bytes(self->pBlob);
+
   switch (whence)
   {
   default:
     return PyErr_Format(PyExc_ValueError, "whence parameter should be 0, 1 or 2");
   case 0: /* relative to beginning of file */
-    if (offset < 0 || offset > sqlite3_blob_bytes(self->pBlob))
+    if (offset < 0 || offset > blob_length)
       goto out_of_range;
     self->curoffset = offset;
     break;
   case 1: /* relative to current position */
-    if (self->curoffset + offset < 0 || self->curoffset + offset > sqlite3_blob_bytes(self->pBlob))
+    if (self->curoffset + (int64_t)offset < 0 || self->curoffset + (int64_t)offset > blob_length)
       goto out_of_range;
     self->curoffset += offset;
     break;
   case 2: /* relative to end of file */
-    if (sqlite3_blob_bytes(self->pBlob) + offset < 0
-        || sqlite3_blob_bytes(self->pBlob) + offset > sqlite3_blob_bytes(self->pBlob))
+    if (blob_length + offset < 0
+        || blob_length + offset > blob_length)
       goto out_of_range;
-    self->curoffset = sqlite3_blob_bytes(self->pBlob) + offset;
+    self->curoffset = blob_length + offset;
     break;
   }
   Py_RETURN_NONE;
@@ -569,7 +594,12 @@ APSWBlob_write(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast_narg
     goto finally;
   }
 
-  res = sqlite3_blob_write(self->pBlob, data_buffer.buf, data_buffer.len, self->curoffset);
+  self->busy++;
+  Py_BEGIN_ALLOW_THREADS
+   res = sqlite3_blob_write(self->pBlob, data_buffer.buf, data_buffer.len, self->curoffset);
+  Py_END_ALLOW_THREADS;
+  self->busy--;
+
   SET_EXC(res, self->connection->db);
   PyBuffer_Release(&data_buffer);
 
@@ -655,9 +685,14 @@ APSWBlob_aclose(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast_nar
     ARG_EPILOG(NULL, Blob_aclose_USAGE, );
   }
 
+  PyObject *retval = Py_None;
+
   if (self->connection)
+  {
     ASYNC_FASTCALL(self->connection, APSWBlob_close);
-  return async_return_value(Py_None);
+    return error_async_in_sync_context();
+  }
+  return async_return_value(retval);
 }
 
 /** .. method:: __enter__() -> Blob
@@ -722,10 +757,15 @@ APSWBlob_exit(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast_nargs
     return error_sync_in_async_context();
 
   DBMUTEX_ENSURE(self->connection);
-  /* note: this releases the mutex */
-  setexc = APSWBlob_close_internal(self, 0);
-  if (setexc)
-    return NULL;
+  CHAIN_EXC_BEGIN
+    /* note: this releases the mutex */
+    setexc = APSWBlob_close_internal(self, 0);
+  CHAIN_EXC_END;
+    if (setexc)
+    {
+      assert(PyErr_Occurred());
+      return NULL;
+    }
 
   Py_RETURN_FALSE;
 }

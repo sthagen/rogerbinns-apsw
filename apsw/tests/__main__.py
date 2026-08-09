@@ -538,6 +538,33 @@ class APSW(unittest.TestCase):
         finally:
             sys.excepthook, sys.unraisablehook = orig
 
+    def testArgparse(self):
+        "function argument parsing"
+        # mainly from #624
+        apsw.soft_heap_limit(3)
+        apsw.soft_heap_limit(limit=3)
+        # the \0 is swallowed but we dont care
+        with self.assertRaisesRegex(TypeError, "'limit\\\\x00foo' is an invalid keyword argument.*"):
+            apsw.soft_heap_limit(**{"limit\0foo": 3})
+        self.assertRaisesRegex(TypeError, "argument 'limit' given by name and position.*", apsw.soft_heap_limit, 3, limit=3)
+        self.assertRaisesRegex(TypeError, r"Too many positional arguments 2 \(max 1\) provided.*", apsw.soft_heap_limit, 3, 4)
+        with self.assertRaisesRegex(TypeError, r"Too many arguments 100 \(max 4\) provided to.*"):
+            apsw.Connection(*range(100))
+        with self.assertRaisesRegex(TypeError, r"Too many arguments 99 \(max 4\) provided to.*"):
+            apsw.Connection(**{str(x): x for x in range(99)})
+        with self.assertRaisesRegex(TypeError, "'x\\\\x00y' is an invalid keyword argument for.*"):
+            apsw.Connection("", 1, "", **{"x\0y": 3})
+        with self.assertRaisesRegex(TypeError, r"\(3\+4j\) is an invalid keyword argument for.*"):
+            apsw.Connection("", 1, **{3 + 4j: 6})
+        if hasattr(self.db, "fts5_tokenizer"):
+            self.assertRaisesRegex(
+                TypeError,
+                "Expected list item 1 to be str, not complex",
+                self.db.fts5_tokenizer,
+                "hello",
+                ["a", 3 + 4j, "b"],
+            )
+
     def testSanity(self):
         "Check all parts compiled and are present"
         # check some error codes etc are present - picked first middle and last from lists in code
@@ -4867,6 +4894,8 @@ class APSW(unittest.TestCase):
 
     def testClosingChecks(self):
         "Check closed connection/blob/cursor is correctly detected"
+        if sys.platform == "emscripten":
+            self.skipTest("pyodide crashes")
         cur = self.db.cursor()
         rowid = curnext(
             cur.execute("create table foo(x blob); insert into foo values(zeroblob(98765)); select rowid from foo")
@@ -6342,6 +6371,10 @@ class APSW(unittest.TestCase):
             self.assertTrue(apsw.config(apsw.SQLITE_CONFIG_PCACHE_HDRSZ) >= 0)
             self.assertRaises(TypeError, apsw.config, apsw.SQLITE_CONFIG_PCACHE_HDRSZ, "extra")
             apsw.config(apsw.SQLITE_CONFIG_PMASZ, -1)
+            self.assertRaises(TypeError, apsw.config, apsw.SQLITE_CONFIG_PMASZ, "hello")
+            self.assertRaises(TypeError, apsw.config, apsw.SQLITE_CONFIG_LOOKASIDE, 1234)
+            # SQLite doesn't reject these values
+            apsw.config(apsw.SQLITE_CONFIG_LOOKASIDE, -1200, -100)
             self.assertRaises(TypeError, apsw.config, apsw.SQLITE_CONFIG_MMAP_SIZE, "3")
             self.assertRaises(TypeError, apsw.config, apsw.SQLITE_CONFIG_MMAP_SIZE, 3, "3")
             self.assertRaises(OverflowError, apsw.config, apsw.SQLITE_CONFIG_MMAP_SIZE, 2**65, 2**65)
@@ -6895,7 +6928,7 @@ class APSW(unittest.TestCase):
         "Verify handling of zero blobs"
         self.assertRaises(TypeError, apsw.zeroblob)
         self.assertRaises(TypeError, apsw.zeroblob, "foo")
-        self.assertRaises(TypeError, apsw.zeroblob, -7)
+        self.assertRaises(OverflowError, apsw.zeroblob, -7)
         self.assertRaises(apsw.TooBigError, self.db.execute, "select ?", (apsw.zeroblob(4000000000),))
         cur = self.db.cursor()
         cur.execute("create table foo(x)")
@@ -6952,6 +6985,9 @@ class APSW(unittest.TestCase):
         blobro.seek(0)
         self.assertEqual(blobro.tell(), 0)
         self.assertEqual(len(blobro.read(11119999)), 98765)
+        self.assertRaises(ValueError, blobro.seek, 0x7fff_fff, 1)
+        self.assertRaises(ValueError, blobro.seek, 0x7fff_fff, 2)
+        self.assertRaisesRegex(ValueError, "negative effective length", blobro.read_into, bytearray(10), 15, -1)
         blobro.seek(2222)
         self.assertEqual(blobro.tell(), 2222)
         blobro.seek(0, 0)
@@ -7151,6 +7187,9 @@ class APSW(unittest.TestCase):
                     self.assertTrue(blobro.seekable())
                     self.assertTrue(blobrw.seekable())
                 case "readline" | "readlines" | "writelines" | "truncate":
+                    # pyodide gets a fatal internal error on these
+                    if sys.platform == "emscripten":
+                        self.skipTest("pyodide crashes")
                     self.assertRaises(io.UnsupportedOperation, blobro.readline)
                     self.assertRaises(io.UnsupportedOperation, blobrw.readline)
                     self.assertRaises(io.UnsupportedOperation, blobro.readlines)
@@ -9032,6 +9071,38 @@ class APSW(unittest.TestCase):
         self.assertRaises(TypeError, b.__exit__, 3)
         self.assertRaises(apsw.BusyError, b.__exit__, None, None, None)
         b.__exit__(None, None, None)
+
+        # prevent re-entrant
+        dest_blocker = apsw.Connection(self.db.filename)
+        source = apsw.Connection("")
+        source.execute("create table foo(x); insert into foo values(randomblob(78901))")
+
+        results = set()
+        def bh(_):
+            nonlocal results, backup
+            try:
+                backup.finish()
+            except apsw.ThreadingViolationError:
+                results.add("finish")
+            try:
+                backup.step(1)
+            except apsw.ThreadingViolationError:
+                results.add("step")
+            try:
+                backup.close()
+            except apsw.ThreadingViolationError:
+                results.add("close")
+
+            return False
+
+        self.db.set_busy_handler(bh)
+        backup = self.db.backup("main", source, "main")
+        dest_blocker.execute("BEGIN EXCLUSIVE")
+
+        self.assertRaises(apsw.BusyError, backup.step, 1)
+        self.assertEqual(results, {"finish", "step", "close"})
+
+        dest_blocker.close()
 
     def testLog(self):
         "Verifies logging functions"

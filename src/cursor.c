@@ -331,7 +331,7 @@ APSWCursor_init(PyObject *self_, PyObject *args, PyObject *kwargs)
   {
     Cursor_init_CHECK;
     PREVENT_INIT_MULTIPLE_CALLS;
-    ARG_CONVERT_VARARGS_TO_FASTCALL;
+    ARG_CONVERT_VARARGS_TO_FASTCALL(1, Cursor_init_USAGE);
     ARG_PROLOG(1, Cursor_init_KWNAMES);
     ARG_MANDATORY ARG_Connection(connection);
     ARG_EPILOG(-1, Cursor_init_USAGE, Py_XDECREF(fast_kwnames));
@@ -590,9 +590,11 @@ APSWCursor_get_description_full(PyObject *self_, void *unused)
 #endif
 
 /* returns 0 on success, -1 on failure with exception set */
+#undef cursor_mutex_get
 static int
 cursor_mutex_get(APSWCursor *self)
 {
+#include "faultinject.h"
   /* this should be used by execute, executemany, and next which
      release the GIL internally (prepare and step).  We want any thread to
      be able to execute on the same database without having to add their
@@ -1283,7 +1285,10 @@ APSWCursor_execute(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast_
   ASYNC_FASTCALL(self->connection, APSWCursor_execute);
 
   if (0 != cursor_mutex_get(self))
+  {
+    assert(PyErr_Occurred());
     return NULL;
+  }
 
   res = resetcursor(self, /* force= */ 0);
   if (res != SQLITE_OK)
@@ -1566,7 +1571,10 @@ APSWCursor_aclose(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast_n
   }
 
   if (self->connection)
+  {
     ASYNC_FASTCALL(self->connection, APSWCursor_close);
+    return error_async_in_sync_context();
+  }
   return async_return_value(Py_None);
 }
 

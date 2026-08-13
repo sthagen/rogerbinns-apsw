@@ -11,6 +11,18 @@ struct iovec
 #endif
 #endif
 
+/* dance to get alignment requirement for a type */
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+#include <stdalign.h>
+#define APSW_ALIGNOF(type) alignof(type)
+#elif defined(_MSC_VER)
+#define APSW_ALIGNOF(type) __alignof(type)
+#elif defined(__GNUC__) || defined(__clang__)
+#define APSW_ALIGNOF(type) __alignof__(type)
+#else
+#define APSW_ALIGNOF(type) offsetof(struct { char c; type m; }, m)
+#endif
+
 typedef struct
 {
   PyObject_HEAD
@@ -210,11 +222,36 @@ CArrayBind_init(PyObject *self_, PyObject *args, PyObject *kwargs)
       }
     }
 
+    unsigned sz = 0;
+    const char *flag_name = 0;
     switch (flags)
     {
     case SQLITE_CARRAY_INT32:
+      sz = APSW_ALIGNOF(int);
+      flag_name = "SQLITE_CARRAY_INT32";
+      /* FALLTHRU */
     case SQLITE_CARRAY_INT64:
+      if (!sz)
+      {
+        sz = APSW_ALIGNOF(sqlite3_int64);
+        flag_name = "SQLITE_CARRAY_INT64";
+      }
+      /* FALLTHRU */
     case SQLITE_CARRAY_DOUBLE:
+      if (!sz)
+      {
+        sz = APSW_ALIGNOF(double);
+        flag_name = "SQLITE_CARRAY_DOUBLE";
+      }
+      /* most popular processors don't care about unaligned data (other
+       than performance) but some will cause a fault so check here */
+      unsigned align = ((uintptr_t)self->view.buf) % sz;
+      if (align)
+      {
+        PyErr_Format(PyExc_ValueError, "The data is at %p which is not %u aligned as required for %s, misaligned at %u",
+                     self->view.buf, sz, flag_name, align);
+        goto error;
+      }
       break;
     default:
       PyErr_Format(PyExc_ValueError, "Unsupported flags value %d for numbers", flags);

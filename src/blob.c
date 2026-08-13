@@ -190,7 +190,7 @@ APSWBlob_close_internal(APSWBlob *self, int force)
 
     /* Remove from connection dependents list.  Has to be done before we
        decref self->connection otherwise connection could dealloc and
-      we'd still be in list */
+       we'd still be in list */
     Connection_remove_dependent(self->connection, (PyObject *)self);
 
     Py_CLEAR(self->connection);
@@ -851,6 +851,16 @@ APSWBlob_reopen(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast_nar
   MakeExistingException(); /* a vfs error could cause this */
 
   SET_EXC(res, self->connection->db);
+  if(res != SQLITE_OK)
+  {
+    /* make error result in a closed state since sqlite won't allow
+       it to be used again just returning the same error.
+
+       sqlite3_blob_close return deliberately ignored since there
+       is nothing we could do, nor any reason why it would fail */
+    sqlite3_blob_close(self->pBlob);
+    self->pBlob = NULL;
+  }
   sqlite3_mutex_leave(self->connection->dbmutex);
 
   if (PyErr_Occurred())
@@ -950,7 +960,8 @@ APSWBlob_seekable(PyObject *self_, PyObject *Py_UNUSED(unused))
   You can wrap with :class:`io.BufferedReader`.
 */
 static PyObject *
-APSWBlob_readline(PyObject *self_, PyObject *Py_UNUSED(unused))
+APSWBlob_readline(PyObject *self_, PyObject *const *Py_UNUSED(args), Py_ssize_t Py_UNUSED(nargs),
+                  PyObject *Py_UNUSED(kwnames))
 {
   APSWBlob *self = (APSWBlob *)self_;
   CHECK_BLOB_CLOSED;
@@ -965,7 +976,8 @@ APSWBlob_readline(PyObject *self_, PyObject *Py_UNUSED(unused))
   You can wrap with :class:`io.BufferedReader`.
 */
 static PyObject *
-APSWBlob_readlines(PyObject *self_, PyObject *Py_UNUSED(unused))
+APSWBlob_readlines(PyObject *self_, PyObject *const *Py_UNUSED(args), Py_ssize_t Py_UNUSED(nargs),
+                   PyObject *Py_UNUSED(kwnames))
 {
   APSWBlob *self = (APSWBlob *)self_;
   CHECK_BLOB_CLOSED;
@@ -980,7 +992,8 @@ APSWBlob_readlines(PyObject *self_, PyObject *Py_UNUSED(unused))
   You can wrap with :class:`io.BufferedWriter`.
 */
 static PyObject *
-APSWBlob_writelines(PyObject *self_, PyObject *Py_UNUSED(unused))
+APSWBlob_writelines(PyObject *self_, PyObject *const *Py_UNUSED(args), Py_ssize_t Py_UNUSED(nargs),
+                    PyObject *Py_UNUSED(kwnames))
 {
   APSWBlob *self = (APSWBlob *)self_;
   CHECK_BLOB_CLOSED;
@@ -995,7 +1008,8 @@ APSWBlob_writelines(PyObject *self_, PyObject *Py_UNUSED(unused))
   You cannot change the size of a blob.
 */
 static PyObject *
-APSWBlob_truncate(PyObject *self_, PyObject *Py_UNUSED(unused))
+APSWBlob_truncate(PyObject *self_, PyObject *const *Py_UNUSED(args), Py_ssize_t Py_UNUSED(nargs),
+                  PyObject *Py_UNUSED(kwnames))
 {
   APSWBlob *self = (APSWBlob *)self_;
   CHECK_BLOB_CLOSED;

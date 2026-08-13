@@ -223,6 +223,24 @@ class CArray(unittest.TestCase):
         # 0 length limitation
         self.assertRaises(ValueError, apsw.carray, arr, start=20, stop=20)
 
+    def testAlignment(self):
+        "verified passed in data is aligned"
+        # this will end up aligned in practise, but is not guaranteed
+        # in theory.
+        data = memoryview(b"0" * 17)
+        for flag in (
+            apsw.SQLITE_CARRAY_INT32,
+            apsw.SQLITE_CARRAY_INT64,
+            apsw.SQLITE_CARRAY_DOUBLE,
+        ):
+            # truncating by one byte is fine when only accessing one
+            # member at the beginning
+            apsw.carray(data[:-1], stop=2, flags=flag)
+            regex = f".*is at.*which is not \\d+ aligned as required for {apsw.mapping_carray[flag]}, misaligned at \\d+"
+            with self.assertRaisesRegex(ValueError, regex):
+                # this will be off alignment by one byte
+                apsw.carray(data[1:], stop=2, flags=flag)
+
 
 has_carray = hasattr(apsw, "carray")
 

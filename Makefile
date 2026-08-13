@@ -164,7 +164,7 @@ fulltest: test test_debug
 linkcheck:  ## Checks links from doc
 	env PYTHONPATH="`pwd`" $(MAKE) RELEASEDATE=$(RELEASEDATE) VERSION=$(VERSION) -C doc linkcheck
 
-unwrapped:  ## Find SQLite APIs that are not wrapped by APSW
+unwrapped src/sqlite_debug.h:  ## Find SQLite APIs that are not wrapped by APSW, and updates sqlite api debug header
 	env PYTHONPATH=. $(PYTHON) tools/gensqlitedebug.py
 
 publish:  checkversion docs
@@ -283,7 +283,7 @@ src/_unicodedb.c: tools/ucdprops2code.py ## Update generated Unicode database lo
 	$(PYTHON) tools/ucdprops2code.py $@
 
 # building a python debug interpreter
-PYDEBUG_VER=3.15.0b4
+PYDEBUG_VER=3.15.0rc1
 PYDEBUG_DIR=/space/pydebug
 PYTHREAD_VER=$(PYDEBUG_VER)
 PYTHREAD_DIR=/space/pythread

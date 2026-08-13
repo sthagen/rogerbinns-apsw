@@ -850,7 +850,7 @@ class Tester:
                 "sqlite3_backup_finish",
                 # runs the destructor on failure
                 "sqlite3_create_function_v2",
-                "sqlite3_window_function",
+                "sqlite3_create_window_function",
                 "sqlite3_carray_bind_apsw",
                 "sqlite3_carray_bind_v2",
                 "sqlite3_create_module_v2",
@@ -1097,7 +1097,7 @@ class Tester:
                 # exceptions are swallowed if doing a validity check
                 ok = True
             elif tested[-1][0] == "sqlite3_mutex_try":
-                if tested[-1][2] in { "APSWCursor_dealloc_mutex", "APSWSession_dealloc_mutex", "Connection_dealloc_mutex"}:
+                if tested[-1][2].endswith("_dealloc_mutex"):
                     # does a background retry so we won't see
                     # exceptions immediately but bugs will result in
                     # leaks etc
@@ -1121,6 +1121,14 @@ class Tester:
                 for line in tbe.format():
                     print(line)
             sys.exit(1)
+
+    def prune_multifault(self):
+        # we need to filter out the mutex_try -> addPendingCall ->
+        # realloc sequence because it results in the object being
+        # leaked.  code has to manually verified
+        self.to_fault = {
+            k: v for k, v in self.to_fault.items() if (k[0], k[2]) != ("PyMem_Realloc", "apsw_AddPendingCall")
+        }
 
     def run(self):
         self.abort = 0
@@ -1169,7 +1177,8 @@ class Tester:
                         self.abort = 0
                         if not use_runplan and not self.faulted_this_round:
                             use_runplan = True
-                            print("\nExercising locations that require multiple failures\n")
+                            self.prune_multifault()
+                            print(f"\nExercising {len(self.to_fault)} locations that require multiple failures\n")
                             global examples_completed
                             examples_completed = None
                             continue

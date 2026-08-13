@@ -178,9 +178,9 @@ static PyTypeObject APSWCursorType;
 struct ZeroBlobBind;
 static PyTypeObject ZeroBlobBindType;
 
-static void apsw_connection_remove(Connection *con);
+static void apsw_connection_remove(PyObject *con);
 
-static int apsw_connection_add(Connection *con);
+static int apsw_connection_add(PyObject *con);
 
 static void
 FunctionCBInfo_dealloc(PyObject *self_)
@@ -432,9 +432,10 @@ Connection_close_internal(Connection *self, int force)
     statementcache_free(self->stmtcache);
   self->stmtcache = 0;
 
-  apsw_connection_remove(self);
+  apsw_connection_remove((PyObject *)self);
 
   /* caller should have acquired */
+  assert(sqlite3_mutex_held(self->dbmutex));
   sqlite3_mutex_leave(self->dbmutex);
 
   for (;;)
@@ -669,35 +670,30 @@ Connection_init(PyObject *self_, PyObject *args, PyObject *kwargs)
   {
     /* Real SQLite always creates a self->db so you can get the error
        code etc.  Fault injection leaves it NULL hence the checks for
-       self->db */
+       self->db in later code */
     res = sqlite3_open_v2(filename, &self->db, flags, vfs);
-    /* get detailed error codes */
-    if (self->db)
-      sqlite3_extended_result_codes(self->db, 1);
   }
   Py_END_ALLOW_THREADS;
 
-  if (res != SQLITE_OK && !PyErr_Occurred())
+  /* normally sqlite will have an error code but some internal vfs
+     error codes aren't propagated so PyErr_Occurred can be set*/
+  if (PyErr_Occurred())
+    res = SQLITE_ERROR;
+
+  /* mutex needs to be held for errmsg, close on error, while doing async,
+     connection hooks etc */
+  if (self->db)
   {
-    if (self->db)
-    {
-      /* we have to hold the dbmutex around this */
-      int acquired = sqlite3_mutex_try(sqlite3_db_mutex(self->db));
-      /* there is no reason it could fail */
-      assert(acquired == SQLITE_OK);
-      (void)acquired;
-    }
-    make_exception(res, self->db);
-    if (self->db)
-      sqlite3_mutex_leave(sqlite3_db_mutex(self->db));
+    self->dbmutex = sqlite3_db_mutex(self->db);
+    sqlite3_mutex_enter(self->dbmutex);
   }
 
-  /* normally sqlite will have an error code but some internal vfs
-     error codes aren't propagated so PyErr_Occurred will be set*/
-  if (res != SQLITE_OK || PyErr_Occurred())
-    goto pyexception;
+  SET_EXC(res, self->db);
 
-  self->dbmutex = sqlite3_db_mutex(self->db);
+  assert((res == SQLITE_OK && !PyErr_Occurred()) || (res != SQLITE_OK && PyErr_Occurred()));
+
+  if (res != SQLITE_OK)
+    goto pyexception;
 
   if (vfsused && is_apsw_vfs(vfsused))
     self->vfs = Py_NewRef((PyObject *)(vfsused->pAppData));
@@ -706,6 +702,7 @@ Connection_init(PyObject *self_, PyObject *args, PyObject *kwargs)
   self->open_flags = PyLong_FromLong(flags);
   if (!self->open_flags)
     goto pyexception;
+
   if (vfsused)
   {
     self->open_vfs = convertutf8string(vfsused->zName);
@@ -753,6 +750,7 @@ Connection_init(PyObject *self_, PyObject *args, PyObject *kwargs)
       Py_DECREF(hookresult);
     }
   }
+
   if (!PyErr_Occurred())
   {
     res = 0;
@@ -768,11 +766,13 @@ finally:
   Py_XDECREF(iterator);
   Py_XDECREF(hook);
   if (res == 0)
-    res = apsw_connection_add(self);
+    res = apsw_connection_add(self_);
 
   /* proactively cleanup if possible */
-  if (res != 0 && sqlite3_mutex_try(self->dbmutex) == SQLITE_OK)
+  if (res != 0)
     Connection_close_internal(self, 2);
+  else
+    sqlite3_mutex_leave(self->dbmutex);
 
   assert((PyErr_Occurred() && res != 0) || (res == 0 && !PyErr_Occurred()));
   return res;
@@ -3794,11 +3794,15 @@ Connection_create_window_function(PyObject *self_, PyObject *const *fast_args, P
   {
     cbinfo = allocfunccbinfo(name);
     if (!cbinfo)
+    {
+      assert(PyErr_Occurred());
       goto finally;
+    }
     cbinfo->windowfactory = Py_NewRef(factory);
   }
 
   DBMUTEX_ENSURE(self);
+  /* note: frees on error too */
   res = sqlite3_create_window_function(self->db, name, numargs, SQLITE_UTF8 | flags, cbinfo, cbinfo ? cbw_step : NULL,
                                        cbinfo ? cbw_final : NULL, cbinfo ? cbw_value : NULL,
                                        cbinfo ? cbw_inverse : NULL, apsw_free_func);
@@ -3806,10 +3810,7 @@ Connection_create_window_function(PyObject *self_, PyObject *const *fast_args, P
   sqlite3_mutex_leave(self->dbmutex);
 finally:
   if (PyErr_Occurred())
-  {
-    apsw_free_func(cbinfo);
     return NULL;
-  }
   Py_RETURN_NONE;
 }
 

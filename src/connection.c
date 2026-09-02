@@ -248,7 +248,7 @@ generic_hooks_update(struct generichook_entry **hooks, unsigned *hooks_count, Py
   struct generichook_entry *new_hooks = PyMem_Realloc(*hooks, sizeof(struct generichook_entry) * (*hooks_count + 1));
   if (!new_hooks)
   {
-    assert(PyErr_Occurred());
+    PyErr_NoMemory();
     return;
   }
 
@@ -346,14 +346,40 @@ Connection_internal_cleanup(Connection *self)
 
 }
 
+#undef Connection_add_dependent
+/* adds a weakref to object, 0 on success */
+static int
+Connection_add_dependent(Connection *self, PyObject *object)
+{
+#include "faultinject.h"
+  assert(self);
+
+  if (!self->dependents)
+  {
+    self->dependents = PyList_New(0);
+    if (!self->dependents)
+      return -1;
+  }
+  PyObject *weakref = PyWeakref_NewRef(object, NULL);
+  if (!weakref)
+  {
+    assert(PyErr_Occurred());
+    return -1;
+  }
+  int res = PyList_Append(self->dependents, weakref);
+  Py_DECREF(weakref);
+  return res;
+}
+
 static void
 Connection_remove_dependent(Connection *self, PyObject *o)
 {
+  assert(self);
   /* in addition to removing the dependent, we also remove any dead
      weakrefs */
   Py_ssize_t i;
 
-  for (i = 0; i < PyList_GET_SIZE(self->dependents);)
+  for (i = 0; self->dependents && i < PyList_GET_SIZE(self->dependents);)
   {
     PyObject *wr = PyList_GET_ITEM(self->dependents, i);
     PyObject *wo = NULL;
@@ -643,7 +669,10 @@ Connection_init(PyObject *self_, PyObject *args, PyObject *kwargs)
   self->cursor_factory = Py_NewRef((PyObject *)&APSWCursorType);
   self->tracehooks = PyMem_Malloc(sizeof(struct tracehook_entry) * 1);
   if (!self->tracehooks)
+  {
+    PyErr_NoMemory();
     return -1;
+  }
   self->tracehooks[0].callback = 0;
   self->tracehooks[0].id = 0;
   self->tracehooks[0].mask = 0;
@@ -932,16 +961,14 @@ Connection_blob_open(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fas
   if (PyErr_Occurred())
     return NULL;
 
-  apswblob = (struct APSWBlob *)_PyObject_New(&APSWBlobType);
+  apswblob = (struct APSWBlob *)_PyObject_GC_New(&APSWBlobType);
   if (!apswblob)
     goto error;
 
   APSWBlob_init(apswblob, self, blob, writeable);
+  PyObject_GC_Track((PyObject *)apswblob);
   blob = NULL;
-  weakref = PyWeakref_NewRef((PyObject *)apswblob, NULL);
-  if (!weakref)
-    goto error;
-  if (0 == PyList_Append(self->dependents, weakref))
+  if (0 == Connection_add_dependent(self, (PyObject *)apswblob))
     return (PyObject *)apswblob;
 error:
   if (blob)
@@ -1016,31 +1043,22 @@ Connection_backup(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast_n
   if (res != SQLITE_OK)
     goto finally;
 
-  apswbackup = (struct APSWBackup *)_PyObject_New(&APSWBackupType);
+  apswbackup = (struct APSWBackup *)_PyObject_GC_New(&APSWBackupType);
   if (!apswbackup)
     goto finally;
 
   APSWBackup_init(apswbackup, (Connection *)Py_NewRef((PyObject *)self),
                   (Connection *)Py_NewRef((PyObject *)sourceconnection), backup);
+  PyObject_GC_Track((PyObject *)apswbackup);
   backup = NULL;
 
   /* add to dependent lists */
-  weakref = PyWeakref_NewRef((PyObject *)apswbackup, NULL);
-  if (!weakref)
-    goto finally;
-  res = PyList_Append(self->dependents, weakref);
-  if (res)
-    goto finally;
-  Py_SETREF(weakref, PyWeakref_NewRef((PyObject *)apswbackup, NULL));
-  if (!weakref)
-    goto finally;
-  res = PyList_Append(sourceconnection->dependents, weakref);
-  if (res)
-    goto finally;
-  Py_CLEAR(weakref);
-
-  result = (PyObject *)apswbackup;
-  apswbackup = NULL;
+  if (0 == Connection_add_dependent(self, (PyObject *)apswbackup)
+      && 0 == Connection_add_dependent(sourceconnection, (PyObject *)apswbackup))
+  {
+    result = (PyObject *)apswbackup;
+    apswbackup = NULL;
+  }
 
 finally:
   /* check errors occurred vs result */
@@ -1069,7 +1087,6 @@ Connection_cursor(PyObject *self_, PyObject *Py_UNUSED(unused))
 {
   Connection *self = (Connection *)self_;
   PyObject *cursor = NULL;
-  PyObject *weakref;
 
   CHECK_CLOSED(self, NULL);
 
@@ -1081,19 +1098,12 @@ Connection_cursor(PyObject *self_, PyObject *Py_UNUSED(unused))
     return NULL;
   }
 
-  weakref = PyWeakref_NewRef(cursor, NULL);
-  if (!weakref)
-  {
-    assert(PyErr_Occurred());
-    AddTraceBackHere(__FILE__, __LINE__, "Connection.cursor", "{s: O}", "cursor", OBJ(cursor));
-    Py_DECREF(cursor);
-    return NULL;
-  }
-  if (PyList_Append(self->dependents, weakref))
-    cursor = NULL;
-  Py_DECREF(weakref);
+  if (0 == Connection_add_dependent(self, cursor))
+    return cursor;
 
-  return cursor;
+  Py_DECREF(cursor);
+
+  return NULL;
 }
 
 /** .. method:: set_busy_timeout(milliseconds: int) -> None
@@ -2229,7 +2239,7 @@ finally:
 
 /** .. method:: set_progress_handler(callable: Callable[[], bool] | None, nsteps: int = 100, *, id: Any = None) -> None
 
-  Sets a callable which is invoked every *nsteps* SQLite inststructions.
+  Sets a callable which is invoked every *nsteps* SQLite instructions.
   The callable should return True to abort or False to continue. (If
   there is an error in your Python *callable* then True/abort will be
   returned).  SQLite raises :exc:`InterruptError` for aborts.
@@ -2237,6 +2247,8 @@ finally:
   Use :class:`None` to cancel the progress handler.  Multiple handlers
   can be present at once (implemented by APSW). Registered callbacks are
   distinguished by their ``id`` - an equality test is done to match ids.
+  When multiple handlers are registered, the callbacks can be more
+  frequent than the steps used for each one.
 
   You can use :class:`apsw.ext.Trace` to see how many steps are used for
   a representative statement, or :class:`apsw.ext.ShowResourceUsage` to
@@ -2819,7 +2831,10 @@ Connection_serialize(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fas
   history for prior attempt */
 
   DBMUTEX_ENSURE(self);
-  serialization = sqlite3_serialize(self->db, name, &size, 0);
+  Py_BEGIN_ALLOW_THREADS
+    serialization = sqlite3_serialize(self->db, name, &size, 0);
+  Py_END_ALLOW_THREADS;
+  MakeExistingException();
   sqlite3_mutex_leave(self->dbmutex);
 
   /* pyerror could have been raised in a vfs */
@@ -3190,7 +3205,7 @@ finally:
   {
     char *errmsg = NULL;
     char *funname = NULL;
-    CHAIN_EXC(funname = sqlite3_mprintf("user-defined-scalar-%s", cbinfo->name); if (!funname) PyErr_NoMemory(););
+    CHAIN_EXC(funname = sqlite3_mprintf("user-defined-scalar-%s", cbinfo->name); if (!funname) SET_EXC(SQLITE_NOMEM, NULL););
     sqlite3_result_error_code(context, MakeSqliteMsgFromPyException(&errmsg));
     sqlite3_result_error(context, errmsg, -1);
     AddTraceBackHere(__FILE__, __LINE__, funname ? funname : "sqlite3_mprintf ran out of memory", "{s: i, s: s}",
@@ -3788,6 +3803,8 @@ Connection_create_window_function(PyObject *self_, PyObject *const *fast_args, P
 
   ASYNC_FASTCALL(self, Connection_create_window_function);
 
+  DBMUTEX_ENSURE(self);
+
   if (!factory)
     cbinfo = NULL;
   else
@@ -3801,14 +3818,13 @@ Connection_create_window_function(PyObject *self_, PyObject *const *fast_args, P
     cbinfo->windowfactory = Py_NewRef(factory);
   }
 
-  DBMUTEX_ENSURE(self);
   /* note: frees on error too */
   res = sqlite3_create_window_function(self->db, name, numargs, SQLITE_UTF8 | flags, cbinfo, cbinfo ? cbw_step : NULL,
                                        cbinfo ? cbw_final : NULL, cbinfo ? cbw_value : NULL,
                                        cbinfo ? cbw_inverse : NULL, apsw_free_func);
   SET_EXC(res, self->db);
-  sqlite3_mutex_leave(self->dbmutex);
 finally:
+  sqlite3_mutex_leave(self->dbmutex);
   if (PyErr_Occurred())
     return NULL;
   Py_RETURN_NONE;
@@ -4446,7 +4462,10 @@ Connection_create_module(PyObject *self_, PyObject *const *fast_args, Py_ssize_t
     Py_INCREF(datasource);
     vti = PyMem_Calloc(1, sizeof(vtableinfo));
     if (!vti)
+    {
+      PyErr_NoMemory();
       goto finally;
+    }
     vti->sqlite3_module_def = apswvtabSetupModuleDef(datasource, iVersion, eponymous, eponymous_only, read_only);
     if (!vti->sqlite3_module_def)
     {
@@ -4796,7 +4815,7 @@ Connection_enter(PyObject *self_, PyObject *Py_UNUSED(unused))
       sql = sqlite3_mprintf("BEGIN %s", self->transaction_mode);
       if (!sql)
       {
-        PyErr_NoMemory();
+        SET_EXC(SQLITE_NOMEM, NULL);
         goto error;
       }
       res = connection_context_manager_exec(self, sql, 0, 1);
@@ -4817,7 +4836,7 @@ Connection_enter(PyObject *self_, PyObject *Py_UNUSED(unused))
   sql = sqlite3_mprintf("SAVEPOINT \"_apsw-%ld\"", self->savepointlevel);
   if (!sql)
   {
-    PyErr_NoMemory();
+    SET_EXC(SQLITE_NOMEM, NULL);
     goto error;
   };
 
@@ -4885,7 +4904,7 @@ Connection_exit(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast_nar
       if (!sql)
       {
         CHAIN_EXC_BEGIN
-        PyErr_NoMemory();
+          SET_EXC(SQLITE_NOMEM, NULL);
         CHAIN_EXC_END;
         goto exit;
       }
@@ -4896,7 +4915,7 @@ Connection_exit(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast_nar
     if (!sql)
     {
       CHAIN_EXC_BEGIN
-      PyErr_NoMemory();
+        SET_EXC(SQLITE_NOMEM, NULL);
       CHAIN_EXC_END;
       goto exit;
     }
@@ -5365,7 +5384,7 @@ Connection_pragma(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast_n
 
   if (!query)
   {
-    PyErr_NoMemory();
+    SET_EXC(SQLITE_NOMEM, NULL);
     goto error;
   }
 
@@ -5669,7 +5688,10 @@ Connection_drop_modules(PyObject *self_, PyObject *const *fast_args, Py_ssize_t 
       goto finally;
     array = PyMem_Calloc(nitems + 1, sizeof(char *));
     if (!array)
+    {
+      PyErr_NoMemory();
       goto finally;
+    }
     for (i = 0; i < nitems; i++)
     {
       const char *sc;
@@ -5687,7 +5709,10 @@ Connection_drop_modules(PyObject *self_, PyObject *const *fast_args, Py_ssize_t 
       slen = strlen(sc);
       stringstmp = PyMem_Realloc(strings, strings_size + slen + 1);
       if (!stringstmp)
+      {
+        PyErr_NoMemory();
         goto finally;
+      }
       strings = stringstmp;
       strncpy(strings + strings_size, sc, slen + 1);
       strings_size += slen + 1;
@@ -5744,7 +5769,7 @@ Connection_read(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast_nar
   const char *schema = NULL;
   int amount, which, opcode;
   sqlite3_int64 offset;
-  int res;
+  int res = SQLITE_OK;
   sqlite3_file *fp = NULL;
   PyObject *bytes = NULL;
 
@@ -5780,11 +5805,15 @@ Connection_read(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast_nar
 
   ASYNC_FASTCALL(self, Connection_read);
 
+  DBMUTEX_ENSURE(self);
+
   bytes = PyBytes_FromStringAndSize(NULL, amount);
   if (!bytes)
-    return NULL;
+  {
+    assert(PyErr_Occurred());
+    goto exit;
+  }
 
-  DBMUTEX_ENSURE(self);
   res = sqlite3_file_control(self->db, schema, opcode, &fp);
   if (res != SQLITE_OK || !fp || !fp->pMethods || !fp->pMethods->xRead)
   {
@@ -5799,6 +5828,7 @@ Connection_read(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast_nar
   if (res != SQLITE_OK && res != SQLITE_IOERR_SHORT_READ)
     SET_EXC(res, NULL);
 
+exit:
   sqlite3_mutex_leave(self->dbmutex);
 
   PyObject *retval = NULL;
@@ -5809,7 +5839,7 @@ Connection_read(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast_nar
   if (retval)
     return retval;
 
-  Py_DECREF(bytes);
+  Py_XDECREF(bytes);
 
   return NULL;
 }
@@ -6593,7 +6623,10 @@ Connection_register_fts5_tokenizer(PyObject *self_, PyObject *const *fast_args, 
 
   TokenizerFactoryData *tfd = PyMem_Calloc(1, sizeof(TokenizerFactoryData));
   if (!tfd)
+  {
+    PyErr_NoMemory();
     goto finally;
+  }
   tfd->factory_func = Py_NewRef(tokenizer_factory);
   tfd->connection = Py_NewRef((PyObject *)self);
 
@@ -6695,7 +6728,10 @@ Connection_register_fts5_function(PyObject *self_, PyObject *const *fast_args, P
   {
     struct fts5aux_cbinfo *cbinfo = PyMem_Calloc(1, sizeof(struct fts5aux_cbinfo));
     if (!cbinfo)
+    {
+      PyErr_NoMemory();
       goto finally;
+    }
     cbinfo->callback = Py_NewRef(function);
     cbinfo->name = apsw_strdup(name);
 
@@ -7335,7 +7371,7 @@ PreUpdate_rowid(PyObject *self_, void *Py_UNUSED(unused))
   APSWPreUpdate *self = (APSWPreUpdate *)self_;
   CHECK_PREUPDATE_SCOPE;
 
-  return PyLong_FromLong(self->iKey1);
+  return PyLong_FromLongLong(self->iKey1);
 }
 
 /** .. attribute:: rowid_new
@@ -7349,7 +7385,7 @@ PreUpdate_rowid_new(PyObject *self_, void *Py_UNUSED(unused))
   APSWPreUpdate *self = (APSWPreUpdate *)self_;
   CHECK_PREUPDATE_SCOPE;
 
-  return PyLong_FromLong(self->iKey2);
+  return PyLong_FromLongLong(self->iKey2);
 }
 
 /** .. attribute:: depth
@@ -7548,13 +7584,13 @@ PreUpdate_update(PyObject *self_, void *Py_UNUSED(unused))
             SET_EXC(SQLITE_NOMEM, self->db->db);
             goto error;
           }
-          if (eq)
+          if (eq && sqlite3_value_bytes(value_new))
             eq = !memcmp(text_old, text_new, sqlite3_value_bytes(value_new));
           break;
         case SQLITE_BLOB:
           /* compare length first */
           eq = (sqlite3_value_bytes(value_old) == sqlite3_value_bytes(value_new));
-          if (eq)
+          if (eq && sqlite3_value_bytes(value_new))
             /* no failure mode getting blob value */
             eq = !memcmp(sqlite3_value_blob(value_old), sqlite3_value_blob(value_new), sqlite3_value_bytes(value_new));
           break;

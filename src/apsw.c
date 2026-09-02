@@ -10,6 +10,28 @@
   See the accompanying LICENSE file.
 */
 
+/*
+  A note about garbage collection
+
+  The various types implement the garbage collection flag and the tp_traverse
+  slot so that references can be traced.  It allows tools to figure out cycles
+  and ownership.  However only the module implements tp_clear.
+
+  To break a cycle, one member of the cycle must implement tp_clear.  Implementing
+  tp_clear is treacherous because our objects need to acquire SQLite mutexes
+  and drop the GIL.
+
+  For the moment we rely on whatever the non-apsw members of the cycle are to
+  have the tp_clear.  This is reasonable because they would be the ones creating
+  a cycle: apsw object strong references all flow towards the connection and weakrefs
+  fo the other way.
+
+  A future consideration is adding tp_clear to Connection, but will wait for
+  a real world example first to understand the nuances.
+
+*/
+
+
 /**
 
 .. module:: apsw
@@ -140,6 +162,9 @@ MakeExistingException(void)
 
 #ifdef APSW_FAULT_INJECT
 
+#define APSW_FAULT_CLEAR
+#include "faultinject.h"
+#undef APSW_FAULT_CLEAR
 #include "faultinject.h"
 
 /* Fault injection */
@@ -241,14 +266,14 @@ static void apsw_write_unraisable(PyObject *hookobject);
 /* aio/async stuff */
 #include "async.c"
 
+/* Exceptions we can raise */
+#include "exceptions.c"
+
 /* various utility functions and macros */
 #include "util.c"
 
 /* Argument parsing helpers */
 #include "argparse.c"
-
-/* Exceptions we can raise */
-#include "exceptions.c"
 
 /* The statement cache */
 #include "statementcache.c"
@@ -648,7 +673,8 @@ apsw_config(PyObject *Py_UNUSED(self), PyObject *args)
   case SQLITE_CONFIG_COVERING_INDEX_SCAN:
   case SQLITE_CONFIG_STMTJRNL_SPILL:
   case SQLITE_CONFIG_SORTERREF_SIZE:
-  case SQLITE_CONFIG_SMALL_MALLOC: {
+  case SQLITE_CONFIG_SMALL_MALLOC:
+  case SQLITE_CONFIG_ROWID_IN_VIEW: {
     int intval;
     if (!PyArg_ParseTuple(args, "ii", &optdup, &intval))
       return NULL;
@@ -2052,7 +2078,7 @@ apsw_module_clear_internal(PyObject *self, int deep)
     for (Py_ssize_t i = 0; i < PyList_GET_SIZE(conns); i++)
     {
       PyObject *item;
-      if (PyWeakref_GetRef(PyList_GET_ITEM(the_connections, i), &item) < 0)
+      if (PyWeakref_GetRef(PyList_GET_ITEM(conns, i), &item) < 0)
         apsw_write_unraisable(NULL);
       else if (item)
       {
@@ -2180,27 +2206,6 @@ PyInit_apsw(void)
     }
   }
 
-  if (PyType_Ready(&ConnectionType) < 0 || PyType_Ready(&APSWCursorType) < 0 || PyType_Ready(&ZeroBlobBindType) < 0
-      || PyType_Ready(&APSWBlobType) < 0 || PyType_Ready(&APSWVFSType) < 0 || PyType_Ready(&APSWVFSFileType) < 0
-      || PyType_Ready(&apswfcntl_pragma_Type) < 0 || PyType_Ready(&APSWURIFilenameType) < 0
-      || PyType_Ready(&FunctionCBInfoType) < 0 || PyType_Ready(&APSWBackupType) < 0
-      || PyType_Ready(&SqliteIndexInfoType) < 0 || PyType_Ready(&apsw_no_change_type) < 0
-      || PyType_Ready(&APSWFTS5TokenizerType) < 0 || PyType_Ready(&APSWFTS5ExtensionAPIType) < 0
-      || PyType_Ready(&PyObjectBindType) < 0 || PyType_Ready(&BoxedCallType) < 0
-#ifdef SQLITE_ENABLE_CARRAY
-      || PyType_Ready(&CArrayBindType) < 0
-#endif
-#ifdef SQLITE_ENABLE_SESSION
-      || PyType_Ready(&APSWSessionType) < 0 || PyType_Ready(&APSWTableChangeType) < 0
-      || PyType_Ready(&APSWChangesetType) < 0 || PyType_Ready(&APSWChangesetBuilderType) < 0
-      || PyType_Ready(&APSWChangesetIteratorType) < 0 || PyType_Ready(&APSWRebaserType) < 0
-#endif
-#ifdef SQLITE_ENABLE_PREUPDATE_HOOK
-      || PyType_Ready(&PreUpdateType) < 0
-#endif
-  )
-    goto fail;
-
   /* PyStructSequence_NewType is broken in some Pythons
       https://github.com/python/cpython/issues/72895
     You also can't call InitType2 more than once otherwise
@@ -2227,8 +2232,16 @@ PyInit_apsw(void)
   if (init_apsw_strings())
     goto fail;
 
-  if (PyModule_AddType(m, &ConnectionType) || PyModule_AddType(m, &ConnectionType)
-      || PyModule_AddType(m, &APSWCursorType) || PyModule_AddType(m, &APSWBlobType)
+  /* these types aren't exposed to the module */
+  if (PyType_Ready(&FunctionCBInfoType) < 0 || PyType_Ready(&apsw_no_change_type) < 0 || PyType_Ready(&BoxedCallType)
+#ifdef SQLITE_ENABLE_SESSION
+      || PyType_Ready(&APSWChangesetIteratorType) < 0
+#endif
+  )
+    goto fail;
+
+  /* these are and automatically readied */
+  if (PyModule_AddType(m, &ConnectionType) || PyModule_AddType(m, &APSWCursorType) || PyModule_AddType(m, &APSWBlobType)
       || PyModule_AddType(m, &APSWBackupType) || PyModule_AddType(m, &ZeroBlobBindType)
       || PyModule_AddType(m, &APSWVFSType) || PyModule_AddType(m, &APSWVFSFileType)
       || PyModule_AddType(m, &apswfcntl_pragma_Type) || PyModule_AddType(m, &APSWURIFilenameType)

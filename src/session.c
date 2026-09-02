@@ -342,23 +342,10 @@ APSWSession_init(PyObject *self_, PyObject *args, PyObject *kwargs)
   self->connection = db;
   Py_INCREF(self->connection);
 
-  PyObject *weakref = NULL;
+  if (0 == Connection_add_dependent(db, self_))
+    return 0;
 
-  weakref = PyWeakref_NewRef((PyObject *)self, NULL);
-  if (!weakref)
-    goto error;
-  if (PyList_Append(db->dependents, weakref))
-    goto error;
-
-  Py_DECREF(weakref);
-
-  assert(!PyErr_Occurred());
-
-  return 0;
-
-error:
   assert(PyErr_Occurred());
-  Py_XDECREF(weakref);
   return -1;
 }
 
@@ -401,6 +388,7 @@ static void
 APSWSession_dealloc(PyObject *self_)
 {
   APSWSession *self = (APSWSession *)self_;
+  PyObject_GC_UnTrack(self_);
 
   APSW_CLEAR_WEAKREFS;
 
@@ -1503,7 +1491,11 @@ APSWChangeset_invert(PyObject *Py_UNUSED(static_method), PyObject *const *fast_a
   int nOut;
   void *pOut = NULL;
 
-  int rc = sqlite3changeset_invert(changeset_buffer.len, changeset_buffer.buf, &nOut, &pOut);
+  int rc;
+  Py_BEGIN_ALLOW_THREADS
+    rc = sqlite3changeset_invert(changeset_buffer.len, changeset_buffer.buf, &nOut, &pOut);
+  Py_END_ALLOW_THREADS;
+
   if (rc == SQLITE_OK)
     result = PyBytes_FromStringAndSize((char *)pOut, nOut);
   else
@@ -1586,7 +1578,10 @@ APSWChangeset_concat(PyObject *Py_UNUSED(static_method), PyObject *const *fast_a
   int nOut;
   void *pOut = NULL;
 
-  int rc = sqlite3changeset_concat(A_buffer.len, A_buffer.buf, B_buffer.len, B_buffer.buf, &nOut, &pOut);
+  int rc;
+  Py_BEGIN_ALLOW_THREADS
+    rc = sqlite3changeset_concat(A_buffer.len, A_buffer.buf, B_buffer.len, B_buffer.buf, &nOut, &pOut);
+  Py_END_ALLOW_THREADS;
 
   if (rc == SQLITE_OK)
     result = PyBytes_FromStringAndSize((char *)pOut, nOut);
@@ -1998,7 +1993,7 @@ APSWChangesetIterator_next(PyObject *self_)
   if (self->last_table_change)
   {
     self->last_table_change->iter = NULL;
-    self->last_table_change = NULL;
+    Py_CLEAR(self->last_table_change);
   }
 
   int rc = sqlite3changeset_next(self->iter);
@@ -2015,7 +2010,7 @@ APSWChangesetIterator_next(PyObject *self_)
 
   assert((self->last_table_change == NULL && PyErr_Occurred())
          || (self->last_table_change != NULL && !PyErr_Occurred()));
-  return self->last_table_change ? (PyObject *)self->last_table_change : NULL;
+  return self->last_table_change ? Py_NewRef((PyObject *)self->last_table_change) : NULL;
 }
 
 static PyObject *
@@ -2032,6 +2027,11 @@ APSWChangesetIterator_dealloc(PyObject *self_)
   {
     sqlite3changeset_finalize(self->iter);
     self->iter = NULL;
+  }
+  if (self->last_table_change)
+  {
+    self->last_table_change->iter = NULL;
+    Py_CLEAR(self->last_table_change);
   }
   Py_CLEAR(self->xInput);
   if (self->buffer_source)
@@ -2124,6 +2124,8 @@ static void
 APSWChangesetBuilder_dealloc(PyObject *self_)
 {
   APSWChangesetBuilder *self = (APSWChangesetBuilder *)self_;
+  PyObject_GC_UnTrack(self_);
+
   APSW_CLEAR_WEAKREFS;
 
   PY_ERR_FETCH(exc);
@@ -2345,6 +2347,7 @@ APSWChangesetBuilder_row(APSWChangesetBuilder *self, int new, PyObject *row)
       if (py3buffer.len >= INT32_MAX)
       {
         res = SQLITE_TOOBIG;
+        PyBuffer_Release(&py3buffer);
         goto change_failed;
       }
       assert(((int)py3buffer.len) >= (int)0);
@@ -2574,31 +2577,22 @@ APSWChangesetBuilder_schema(PyObject *self_, PyObject *const *fast_args, Py_ssiz
 
   CHECK_CLOSED(db, NULL);
 
-  int rc = sqlite3changegroup_schema(self->group, db->db, schema);
-  SET_EXC(rc, NULL);
-  if (PyErr_Occurred())
-    return NULL;
+  if (0 == Connection_add_dependent(db, self_))
+  {
+    int rc = sqlite3changegroup_schema(self->group, db->db, schema);
+    if (rc != SQLITE_OK)
+    {
+      SET_EXC(rc, NULL);
+      Connection_remove_dependent(db, self_);
+      return NULL;
+    }
 
-  /* from this point on, the schema has been set, but we could
-     fail at the Python level.  There is nothing we can do about
-     that, and it is unlikely in practise. */
+    self->connection = db;
+    Py_INCREF(self->connection);
 
-  self->connection = db;
-  Py_INCREF(self->connection);
-
-  PyObject *weakref = NULL;
-
-  weakref = PyWeakref_NewRef((PyObject *)self, NULL);
-  if (!weakref)
-    return NULL;
-  int append = PyList_Append(db->dependents, weakref);
-  Py_DECREF(weakref);
-  if (append)
-    return NULL;
-
-  assert(!PyErr_Occurred());
-
-  Py_RETURN_NONE;
+    Py_RETURN_NONE;
+  }
+  return NULL;
 }
 
 /** .. method:: output() -> bytes
@@ -2904,7 +2898,7 @@ static PyTypeObject APSWSessionType = {
   .tp_dealloc = APSWSession_dealloc,
   .tp_methods = APSWSession_methods,
   .tp_getset = APSWSession_getset,
-  .tp_flags = Py_TPFLAGS_BASETYPE | Py_TPFLAGS_DEFAULT,
+  .tp_flags = Py_TPFLAGS_BASETYPE | Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
   .tp_as_number = &APSWSession_as_number,
   .tp_weaklistoffset = offsetof(APSWSession, weakreflist),
   .tp_traverse = APSWSession_tp_traverse,
@@ -2971,6 +2965,7 @@ static PyTypeObject APSWChangesetBuilderType = {
   .tp_weaklistoffset = offsetof(APSWChangesetBuilder, weakreflist),
   .tp_as_number = &APSWChangesetBuilder_as_number,
   .tp_traverse = APSWChangesetBuilder_tp_traverse,
+  .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
 };
 
 static PyGetSetDef APSWTableChange_getset[] = {

@@ -529,7 +529,7 @@ SqliteIndexInfo_set_idxStr(PyObject *self_, PyObject *value, void *Py_UNUSED(unu
     const char *isvalue = sqlite3_mprintf("%s", svalue);
     if (!isvalue)
     {
-      PyErr_NoMemory();
+      SET_EXC(SQLITE_NOMEM, NULL);
       return -1;
     }
     self->index_info->idxStr = (char *)isvalue;
@@ -903,7 +903,10 @@ apswvtabCreateOrConnect(sqlite3 *db, void *pAux, int argc, const char *const *ar
   assert(res == SQLITE_OK);
   avi = PyMem_Calloc(1, sizeof(apsw_vtable));
   if (!avi)
+  {
+    PyErr_NoMemory();
     goto pyexception;
+  }
   assert((void *)avi == (void *)&(avi->used_by_sqlite)); /* detect if weird padding happens */
   avi->bestindex_object = vti->bestindex_object;
   avi->use_no_change = vti->use_no_change;
@@ -1495,8 +1498,13 @@ apswvtabBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *indexinfo)
       /* or an integer */
       if (PyLong_Check(constraint))
       {
-        indexinfo->aConstraintUsage[i].argvIndex = PyLong_AsInt(constraint) + 1;
+        int val = PyLong_AsInt(constraint);
         Py_DECREF(constraint);
+        if (!PyErr_Occurred() && (val < 0 || val >= INT32_MAX))
+          PyErr_Format(PyExc_ValueError, "constraint value is out of integer range");
+        if (PyErr_Occurred())
+          goto pyexception;
+        indexinfo->aConstraintUsage[i].argvIndex = val + 1;
         continue;
       }
       /* or a sequence two items long */
@@ -1591,7 +1599,7 @@ apswvtabBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *indexinfo)
       const char *isvalue = sqlite3_mprintf("%s", svalue);
       if (!isvalue)
       {
-        PyErr_NoMemory();
+        SET_EXC(SQLITE_NOMEM, NULL);
         Py_DECREF(idxstr);
         goto pyexception;
       }
@@ -1774,7 +1782,10 @@ apswvtabOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor)
     goto pyexception;
   avc = PyMem_Calloc(1, sizeof(apsw_vtable_cursor));
   if (!avc)
+  {
+    PyErr_NoMemory();
     goto pyexception;
+  }
   assert((void *)avc == (void *)&(avc->used_by_sqlite)); /* detect if weird padding happens */
   avc->cursor = res;
   avc->use_no_change = ((apsw_vtable *)pVtab)->use_no_change;
@@ -2398,8 +2409,7 @@ apswvtabEof(sqlite3_vtab_cursor *pCursor)
 
 pyexception: /* we had an exception in python code */
   assert(PyErr_Occurred());
-  sqliteres = MakeSqliteMsgFromPyException(
-      &(pCursor->pVtab->zErrMsg)); /* SQLite flaw: errMsg should be on the cursor not the table! */
+  sqliteres = MakeSqliteMsgFromPyException(NULL);
   AddTraceBackHere(__FILE__, __LINE__, "VirtualTable.xEof", "{s: O}", "self", cursor);
 
 finally:
@@ -2787,7 +2797,10 @@ apswvtabSetupModuleDef(PyObject *datasource, int iVersion, int eponymous, int ep
 
   mod = PyMem_Calloc(1, sizeof(*mod));
   if (!mod)
+  {
+    PyErr_NoMemory();
     return NULL;
+  }
 
   mod->iVersion = iVersion;
   if (eponymous_only)

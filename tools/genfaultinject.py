@@ -1,7 +1,8 @@
-#!/usr/bin/python
+#!/usr/bin/env python3
 
-import sys
+import pathlib
 import subprocess
+import sys
 
 proto = """
 static long long
@@ -110,13 +111,10 @@ returns = {
             PyUnicode_AsUTF8AndSize PyUnicode_AsUTF8String PyUnicode_DecodeUTF8
             PyUnicode_FromFormat PyUnicode_FromKindAndData PyUnicode_FromString
             PyUnicode_FromStringAndSize  PyUnicode_New PyWeakref_GetObject PyWeakref_NewRef Py_BuildValue
-            Py_VaBuildValue _PyObject_New PyContextVar_New PyImport_ImportModuleAttr
+            Py_VaBuildValue _PyObject_New _PyObject_GC_New PyContextVar_New PyImport_ImportModuleAttr
             PyImport_Import PyContext_CopyCurrent PyDict_GetItemWithError
             PyLong_FromUnicodeObject PyLong_FromUnsignedLong PyMapping_Items
-            PyObject_CallNoArgs  PyObject_GenericGetAttr
-
-
-            realloc
+            PyObject_CallNoArgs  PyObject_GenericGetAttr PyThreadState_GetDict
 
             Connection_fts5_api get_token_value fts5extensionapi_acquire
             make_boxed_call APSWCursor_internal_get_description
@@ -162,7 +160,7 @@ returns = {
             sqlite3_table_column_metadata sqlite3_threadsafe
             sqlite3_trace_v2 sqlite3_vfs_register
             sqlite3_vfs_unregister sqlite3_vtab_config
-            sqlite3_vtab_in_next sqlite3_vtab_rhs_value
+            sqlite3_vtab_in_first sqlite3_vtab_in_next sqlite3_vtab_rhs_value
             sqlite3_wal_autocheckpoint sqlite3_wal_checkpoint_v2
 
             sqlite3_preupdate_old sqlite3_preupdate_new
@@ -205,7 +203,8 @@ returns = {
         PyObject_GetBufferContiguous PyObject_GetBuffer PyObject_GetBufferContiguousBounded
         _PyTuple_Resize
 
-        getfunctionargs cursor_mutex_get
+        getfunctionargs cursor_mutex_get APSWCursor_is_dict_binding
+        Connection_add_dependent
 
         jsonb_grow_buffer jsonb_add_tag jsonb_update_tag jsonb_append_data
         jsonb_add_tag_and_data jsonb_encode_internal jsonb_encode_object_key
@@ -256,7 +255,7 @@ no_error.update(
     PyErr_SetString PyStructSequence_SetItem PyObject_Print
     Py_GetRecursionLimit Py_LeaveRecursiveCall Py_SetRecursionLimit _PyErr_ChainExceptions
     PyBuffer_IsContiguous PyContext_Exit PyList_SetSlice
-    PyObject_GetAttrString PyThreadState_GetDict PyType_GetQualName PyUnicode_FromFormatV
+    PyObject_GetAttrString PyType_GetQualName PyUnicode_FromFormatV
 """.split()
 )
 
@@ -300,6 +299,6 @@ if __name__ == "__main__":
         all.update(v)
     if sys.argv[1].endswith(".h"):
         r = genfile(all)
-        open(sys.argv[1], "wt").write(r)
+        pathlib.Path(sys.argv[1]).write_text(r)
     else:
         check_dll(sys.argv[1], all)

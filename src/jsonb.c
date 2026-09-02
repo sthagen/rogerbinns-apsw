@@ -519,10 +519,10 @@ jsonb_grow_buffer(struct JSONBuffer *buf, size_t count)
 #endif
   assert(alloc_size >= new_size);
 
-  void *new_data = realloc(buf->data, alloc_size);
+  void *new_data = PyMem_Realloc(buf->data, alloc_size);
   if (!new_data)
   {
-    assert(PyErr_Occurred());
+    PyErr_NoMemory();
     return -1;
   }
   buf->data = new_data;
@@ -1070,6 +1070,11 @@ error:
         is ``True`` then only the exact types are directly converted
         and subclasses will be passed to ``default`` or ``default_key``.
 
+        If ``False`` and subclassed numeric types are provided, then their :meth:`~object.__str__`
+        method **must** produce JSON compatible corresponding text representations,
+        otherwise non-decodable JSONB will be produced.  Typically subclasses
+        produce more digits, and a greater range of values.
+
     You will get a :exc:`~apsw.TooBigError` if the resulting JSONB
     will exceed 2GB because SQLite can't handle it.
 */
@@ -1124,7 +1129,7 @@ JSONB_encode(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast_nargs,
   Py_CLEAR(buf.default_);
   Py_CLEAR(buf.default_key);
   PyObject *retval = (0 == res) ? PyBytes_FromStringAndSize((const char *)buf.data, buf.size) : NULL;
-  free(buf.data);
+  PyMem_Free(buf.data);
   return retval;
 }
 
@@ -1242,7 +1247,7 @@ jsonb_decode_one_actual(struct JSONBDecodeBuffer *buf)
   }
 
   /* value_offset is now start of value, after tag + length bytes */
-  if (value_offset + tag_len > buf->end_offset)
+  if (tag_len > buf->end_offset - value_offset)
     return malformed(buf, "insufficent space for value");
 
   /* set offset to start of next value */
@@ -1304,8 +1309,8 @@ jsonb_decode_one_actual(struct JSONBDecodeBuffer *buf)
       PyObject *result = NULL;
       if (buf->parse_int)
       {
-        /* we need to pass zero as the base so leading sign and 0x are processed as expected */
-        PyObject *vargs[] = { NULL, text, PyLong_FromLong(0) };
+        /* At this point we know the number is hex with leading optional sign and 0x. */
+        PyObject *vargs[] = { NULL, text, PyLong_FromLong(16) };
         if (vargs[2])
           result = PyObject_Vectorcall(buf->parse_int, vargs + 1, 2 | PY_VECTORCALL_ARGUMENTS_OFFSET, NULL);
         Py_XDECREF(vargs[2]);
@@ -1473,7 +1478,10 @@ jsonb_decode_one_actual(struct JSONBDecodeBuffer *buf)
         Py_DECREF(key);
         Py_DECREF(value);
         if (added < 0)
+        {
+          Py_DECREF(builder);
           return NULL;
+        }
       }
       else
         assert(key == DecodeSuccess && value == DecodeSuccess);
@@ -2264,7 +2272,8 @@ jsonb_detect_internal(const void *data, size_t length)
     :param parse_int: Called with a :class:`str` of the integer, and
         should return a value to use.  The default is :class:`int`.
         If the integer is hexadecimal then it will be called with a
-        second parameter of 16.
+        second parameter (base) of 16, with the string including
+        leading optional sign, and ``0x``.
     :param parse_float: Called with a :class:`str` of the float, and
         should return a value to use.  The default is :class:`float`.
 

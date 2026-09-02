@@ -219,6 +219,8 @@ compile-win:  ## Builds and tests against all the Python versions on Windows
 	-cmd /c del /s /q build
 	-cmd /c del /s /q .venv
 	-cmd /c md dist
+	$(MAKE) compile-win-one PYTHON=c:/python315/python
+	$(MAKE) compile-win-one PYTHON=c:/python315-32/python
 	$(MAKE) compile-win-one PYTHON=c:/python314/python
 	$(MAKE) compile-win-one PYTHON=c:/python314-32/python
 	$(MAKE) compile-win-one PYTHON=c:/python313/python
@@ -297,8 +299,7 @@ pydebug: ## Build a debug python including address sanitizer.  Extensions it bui
 	curl https://www.python.org/ftp/python/`echo $(PYDEBUG_VER) | sed 's/[abr].*//'`/Python-$(PYDEBUG_VER).tar.xz | tar xfJ - && \
 	cd Python-$(PYDEBUG_VER) && \
 	./configure --enable-slower-safety --with-address-sanitizer --with-undefined-behavior-sanitizer --with-strict-overflow \
-    --without-pymalloc --with-pydebug --with-strict-overflow --prefix="$(PYDEBUG_DIR)" \
-	--with-assertions --with-trace-refs && \
+    --without-pymalloc --with-pydebug -prefix="$(PYDEBUG_DIR)" && \
 	env ASAN_OPTIONS=detect_leaks=false $(MAKE) -j install
 	$(MAKE) dev-depends PYTHON=$(PYDEBUG_DIR)/bin/python3
 

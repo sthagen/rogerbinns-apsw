@@ -484,7 +484,7 @@ def exercise(example_code, expect_exception):
     apsw.connections()
 
     # has to be done on a real file not memory db
-    con2 = apsw.Connection("/tmp/fitesting")
+    con2 = apsw.Connection(f"{tmpdir.name}/fitesting")
     con2.pragma("user_version", 77)
     con2.read("main", 0, 0, 0x1FFFF)  # larger fires sanity check assertion
 
@@ -762,7 +762,12 @@ class Tester:
         self.returns = genfaultinject.returns
         self.call_remap = {v: k for k, v in genfaultinject.call_map.items()}
 
+
+        # keys that have ever faulted across all loops
+        self.has_faulted_ever = set()
+
         sys.apsw_fault_inject_control = self.fault_inject_control
+        sys.apsw_fault_inject_control_proceed = self.has_faulted_ever
         sys.apsw_should_fault = self.should_fault
 
         lines, start = inspect.getsourcelines(exercise)
@@ -835,6 +840,19 @@ class Tester:
                 return True
 
             if fname in self.returns["pointer"]:
+                # these do not set the no memory exception
+                if fname.startswith("PyMem_"):
+                    self.expect_exception.append(MemoryError)
+                    return 0
+                if fname.startswith("sqlite3_"):
+                    self.expect_exception.append(apsw_attr("NoMemError"))
+                    return 0
+                if fname == "PyThreadState_GetDict":
+                    # returns null, doesn't raise an exception.  we use it
+                    # in one place and return RuntimeError
+                    self.expect_exception.append(RuntimeError)
+                    return 0
+                # all other APIs are Python and do set exception
                 self.expect_exception.append(MemoryError)
                 return 0, MemoryError, self.FAULTS
 
@@ -882,6 +900,14 @@ class Tester:
 
             # internal routine
             if fname == "connection_trace_and_exec":
+                self.expect_exception.append(MemoryError)
+                return (-1, MemoryError, self.FAULTS)
+
+            if fname == "APSWCursor_is_dict_binding":
+                self.expect_exception.append(MemoryError)
+                return (0, MemoryError, self.FAULTS)
+
+            if fname == "Connection_add_dependent":
                 self.expect_exception.append(MemoryError)
                 return (-1, MemoryError, self.FAULTS)
 
@@ -947,7 +973,7 @@ class Tester:
         sys.exit(1)
 
     def should_fault(self, name, pending_exception):
-        if pending_exception != (None, None, None):
+        if any(pending_exception):
             return False
         key = ("APSW_FAULT", "", name, 0, "")
         res = self.fault_inject_control(key)
@@ -957,6 +983,9 @@ class Tester:
     def fault_inject_control(self, key):
         # key is (api, file, calling func, lineno, str(args)) eg
         # ('PyUnicode_AsUTF8AndSize', 'src/apsw.c', 'apsw_unregister_vfs', 1796, 'useargs[argp_optindex], &sz')
+        if key in self.has_faulted_ever:
+                return self.Proceed
+
         if testing_recursion and key[2] in {"apsw_write_unraisable", "apswvfs_excepthook"}:
             return self.Proceed
         # failing module get/setattr leads to claims the module isn't
@@ -990,6 +1019,8 @@ class Tester:
                     return self.Proceed
             elif key == self.runplan[0]:
                 self.runplan.pop(0)
+                if self.runplan:
+                    self.has_faulted_ever.discard(self.runplan[0])
             else:
                 return self.Proceed
         else:
@@ -997,8 +1028,6 @@ class Tester:
                 # already have faulted this round
                 if key not in self.has_faulted_ever and key not in self.to_fault:
                     self.to_fault[key] = self.faulted_this_round[:]
-                return self.Proceed
-            if key in self.has_faulted_ever:
                 return self.Proceed
 
         tid, fname, line = self.get_progress()
@@ -1078,7 +1107,7 @@ class Tester:
         if len(self.expect_exception) == 1 and self.expect_exception[0] is Exception:
             return
         if len(self.exc_happened) < len(tested):
-            if len(tested) >= 2 and (tested[0][0], tested[1][0]) == ("_PyObject_New", "sqlite3_backup_finish"):
+            if len(tested) >= 2 and (tested[0][0], tested[1][0]) == ("_PyObject_GC_New", "sqlite3_backup_finish"):
                 # backup finish error is ignored because we are handling the
                 # object_new error
                 pass
@@ -1137,7 +1166,7 @@ class Tester:
         # to see this one.  value is list of those previous faults
         self.to_fault = {}
         # keys that have ever faulted across all loops
-        self.has_faulted_ever = set()
+        self.has_faulted_ever.clear()
 
         self.last_key = None
         use_runplan = False
@@ -1159,6 +1188,7 @@ class Tester:
                 else:
                     for k, v in self.to_fault.items():
                         self.runplan = v + [k]
+                        self.has_faulted_ever.remove(self.runplan[0])
                         break
             else:
                 self.runplan = None
@@ -1196,7 +1226,8 @@ class Tester:
                     if "apsw" in sys.modules and hasattr(sys.modules["apsw"], "leak_check"):
                         res = getattr(sys.modules["apsw"], "leak_check")()
                         if res:
-                            input("Leaks found, return to continue> ")
+                            print("Leaks found.  Waiting.")
+                            input("return to continue> ")
 
             self.verify_exception(self.faulted_this_round)
             if any(thread is not main_thread and not thread.daemon for thread in threading.enumerate()):

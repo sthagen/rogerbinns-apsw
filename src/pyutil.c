@@ -281,7 +281,7 @@ PyErr_AddExceptionNoteV(const char *format, ...)
   va_start(fmt_args, format);
 
   PyObject *message;
-  message = PyUnicode_FromFormatV(format, fmt_args);
+  CHAIN_EXC(message = PyUnicode_FromFormatV(format, fmt_args));
 
   if (message)
   {
@@ -317,7 +317,11 @@ apsw_run_in_event_loop(PyObject *coro)
 {
   assert(coro);
 
-  PyObject *runner = PyDict_GetItemWithError(PyThreadState_GetDict(), async_run_coro_sentinel);
+  PyObject *tstate_dict = PyThreadState_GetDict();
+  if (!tstate_dict)
+    return PyErr_Format(PyExc_RuntimeError, "threadstate dict is not available");
+
+  PyObject *runner = PyDict_GetItemWithError(tstate_dict, async_run_coro_sentinel);
 
   if (!runner || Py_IsNone(runner))
   {

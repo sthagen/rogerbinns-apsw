@@ -409,6 +409,8 @@ class APSW(unittest.TestCase):
     def tearDown(self):
         apsw.config(apsw.SQLITE_CONFIG_LOG, None)
         for c in apsw.connections():
+            # tracers firing cause false mutex checks
+            c.trace_v2(0)
             self.check_db_mutex(c)
             c.close(True)
         del self.db
@@ -900,6 +902,172 @@ class APSW(unittest.TestCase):
             del c2
             db.close()
 
+    def get_cursor_entrants(self, cursor, res):
+        for n in dir(cursor):
+            if n.startswith("_") and n.strip("_") not in {"next"}:
+                continue
+            # old names skipped
+            if n in {
+                "getconnection",
+                "getdescription",
+                "getexectrace",
+                "getrowtrace",
+                "rowtrace",
+                "exectrace",
+                "setexectrace",
+                "setrowtrace",
+            }:
+                continue
+            try:
+                match n:
+                    # no arg methods
+                    case (
+                        "aclose"
+                        | "close"
+                        | "__next__"
+                        | "fetchone"
+                        | "get_connection"
+                        | "get_description"
+                        | "get_row_trace"
+                        | "get_exec_trace"
+                        | "fetchall"
+                    ):
+                        getattr(cursor, n)()
+                    # read attributes
+                    case (
+                        "bindings_count"
+                        | "bindings_names"
+                        | "connection"
+                        | "convert_binding"
+                        | "convert_jsonb"
+                        | "description"
+                        | "description_full"
+                        | "exec_trace"
+                        | "expanded_sql"
+                        | "get"
+                        | "has_vdbe"
+                        | "is_explain"
+                        | "is_readonly"
+                        | "row_trace"
+                        | "sql"
+                    ):
+                        getattr(cursor, n)
+                    case "execute":
+                        cursor.execute("select 1,2,3")
+                    case "executemany":
+                        cursor.executemany("select ?", ((1,), (2,)))
+                    case "setexectrace" | "set_exec_trace" | "setrowtrace" | "set_row_trace":
+                        # set it to get results which should have no effect
+                        getattr(cursor, n)(getattr(cursor, "g" + n[1:])())
+                    case _:
+                        self.fail(f"{n} not handled")
+                res[n] = True
+            except Exception as exc:
+                res[n] = exc
+
+    def testCursorReentrant(self):
+        "Calling back into cursor while cursor is executing"
+
+        cursor = self.db.cursor()
+
+        # the first time through we get correct values for
+        # description, but after that we get the cached ones which differ
+        desc_first = {}
+
+        def check():
+            this = {}
+            thread = {}
+            t = threading.Thread(target=self.get_cursor_entrants, args=(cursor, thread))
+            t.start()
+            t.join()
+            # other thread must be done first otherwise this thread caches values
+            self.get_cursor_entrants(cursor, this)
+            self.assertEqual(set(this.keys()), set(thread.keys()))
+            for k in this:
+                if "description" in k:
+                    if k not in desc_first:
+                        desc_first[k] = (this[k], thread[k])
+                    else:
+                        this[k], thread[k] = desc_first[k]
+                match k:
+                    case (
+                        "bindings_count"
+                        | "connection"
+                        | "convert_binding"
+                        | "convert_jsonb"
+                        | "exec_trace"
+                        | "get_connection"
+                        | "get_exec_trace"
+                        | "get_row_trace"
+                        | "has_vdbe"
+                        | "is_explain"
+                        | "is_readonly"
+                        | "row_trace"
+                        | "set_exec_trace"
+                        | "set_row_trace"
+                    ):
+                        # full access ok
+                        self.assertIs(this[k], True)
+                        self.assertIs(thread[k], True)
+                    case (
+                        "bindings_names"
+                        | "description"
+                        | "description_full"
+                        | "expanded_sql"
+                        | "get_description"
+                        | "sql"
+                    ):
+                        # ok in this thread, other thread requires a mutex which must be held
+                        self.assertIs(this[k], True)
+                        self.assertIsInstance(thread[k], apsw.ThreadingViolationError)
+                    case "aclose":
+                        # async in sync context
+                        self.assertIsInstance(this[k], TypeError)
+                        self.assertIsInstance(thread[k], TypeError)
+                    case "__next__" | "close" | "execute" | "executemany" | "fetchall" | "fetchone" | "get":
+                        # re-entrant use not allowed
+                        self.assertIsInstance(this[k], apsw.ThreadingViolationError)
+                        self.assertIsInstance(thread[k], apsw.ThreadingViolationError)
+                    case _:
+                        self.fail(f"\nunhandled {k=} {this[k]=} {thread[k]=}")
+
+        def conv_binding(c, n, val):
+            self.assertIs(c, cursor)
+            check()
+            return f"converted {val!r}"
+
+        def conv_jsonb(c, n, b):
+            self.assertIs(c, cursor)
+            check()
+            return f"jsonb converted {b!r}"
+
+        def exec_trace(c, *args):
+            self.assertIs(c, cursor)
+            check()
+            return True
+
+        def row_trace(c, row):
+            self.assertIs(c, cursor)
+            check()
+            return row
+
+        def foo(*args):
+            check()
+            return 3
+
+        def tracer(*args):
+            check()
+
+        cursor.convert_binding = conv_binding
+        cursor.convert_jsonb = conv_jsonb
+        cursor.exec_trace = exec_trace
+        cursor.row_trace = row_trace
+        self.db.create_scalar_function("foo", foo)
+        self.db.trace_v2(apsw.SQLITE_TRACE_PROFILE | apsw.SQLITE_TRACE_ROW | apsw.SQLITE_TRACE_STMT, tracer)
+
+        for row in cursor.execute("SELECT foo(?), ?", (3 + 4j, b"\xec\x00\x00\x00\x0cZhelloZworld")):
+            pass
+
     def testBindings(self):
         "Check bindings work correctly"
         c = self.db.cursor()
@@ -1233,7 +1401,7 @@ class APSW(unittest.TestCase):
             ran = True
             self.assertEqual(f"select '{biggy}','{biggy}'", c.expanded_sql)
             existing = self.db.limit(apsw.SQLITE_LIMIT_LENGTH, 25 * 1024)
-            self.assertRaises(MemoryError, getattr, c, "expanded_sql")
+            self.assertRaises(apsw.NoMemError, getattr, c, "expanded_sql")
             self.db.limit(apsw.SQLITE_LIMIT_LENGTH, existing)
         self.assertTrue(ran)
         # keyword args
@@ -1244,6 +1412,19 @@ class APSW(unittest.TestCase):
 
         # non-contiguous buffers
         self.assertRaises(BufferError, c.execute, "select ?", (memoryview(b"234567890")[::2],))
+
+        # explain
+        self.assertEqual(self.db.execute("select 3").get, 3)
+        self.assertEqual(self.db.execute("explain select 3", explain=0).get, 3)
+        self.assertEqual(self.db.execute("explain query plan select 3", explain=0).get, 3)
+        self.assertIsInstance(self.db.execute("select 3", explain=1).get, list)
+        self.assertIsInstance(self.db.execute("select 3", explain=2).get[3], str)
+        self.assertIsNone(self.db.execute("/* */", explain=0).get)
+        self.assertIsNone(self.db.execute("/* */", explain=1).get)
+        self.assertIsNone(self.db.execute("/* */", explain=2).get)
+
+        self.assertRaises(ValueError, self.db.execute, "/* */", explain=7)
+        self.assertRaises(ValueError, self.db.executemany, "/* */", [], explain=7)
 
     def testIssue373(self):
         "issue 373: dict type checking in bindings"
@@ -5694,6 +5875,92 @@ class APSW(unittest.TestCase):
             self.db.execute("select * from t order by one").get, [(1, 3, 1, 5), (2, 4, 2, 6), (3, 5, 4, 8)]
         )
 
+    def testIssue624(self):
+        with self.subTest(which="C037"):
+            self.assertEqual(apsw.SQLITE_DBCONFIG_FP_DIGITS, apsw.mapping_db_config["SQLITE_DBCONFIG_FP_DIGITS"])
+            self.assertEqual("SQLITE_DBCONFIG_FP_DIGITS", apsw.mapping_db_config[apsw.SQLITE_DBCONFIG_FP_DIGITS])
+        with self.subTest(which="C040"):
+
+            def bad_gen():
+                yield (1,)
+                1 / 0
+
+            cur = self.db.cursor()
+            cur.executemany("select ?", bad_gen())
+            try:
+                cur.execute("select 3")
+            except apsw.IncompleteExecutionError as exc:
+                self.assertIsInstance(exc.__context__, ZeroDivisionError)
+        with self.subTest(which="C042"):
+            class errcheck:
+                def __init__(self, faultnum):
+                    self.count = 0
+                    self.faultnum = faultnum
+
+                @property
+                def __class__(self):
+                    self.count += 1
+                    if self.count < self.faultnum:
+                        return dict
+                    1/0
+
+                def __getitem__(self, key):
+                    return "three"
+
+
+            def et(*args):
+                return True
+
+            c=self.db.cursor()
+            c.exec_trace=et
+            for i in range(1, 5):
+                try:
+                    c.execute("select :foo", errcheck(i)).get
+                    break
+                except ZeroDivisionError:
+                    pass
+
+            for i in range(1, 5):
+                try:
+                    c.executemany("select :foo", [errcheck(i)]).get
+                    break
+                except ZeroDivisionError:
+                    pass
+
+            for i in range(1, 5):
+                try:
+                    c.executemany("select :foo", [{"foo": 3}, errcheck(i)]).get
+                    break
+                except ZeroDivisionError:
+                    pass
+
+        with self.subTest(which="GC"):
+            # verifies all the objects are tracked by gc
+            # (PyObject_GC_Track), and debug python will generate
+            # warnings if they do no untrack
+
+            objects = [apsw, self.db]
+
+            self.db.execute("create table blob(x); insert into blob(rowid,x) values(23, x'aabbccdd')")
+
+            db2 = apsw.Connection("")
+            objects.append(db2)
+
+            objects.append(self.db.execute("select 3"))
+            if hasattr(apsw, "Session"):
+                objects.append(apsw.Session(self.db, "main"))
+            if hasattr(apsw, "ChangesetBuilder"):
+                objects.append(apsw.ChangesetBuilder())
+                objects[-1].schema(self.db, "main")
+            objects.append(db2.backup("main", self.db, "main"))
+            objects.append(self.db.blob_open("main", "blob", "x", 23, False))
+            for obj in objects:
+                self.assertTrue(gc.is_tracked(obj))
+                # these are somewhat messy and get circular stuff
+                # added by Python itself so just check not empty
+                self.assertGreater(len(gc.get_referents(obj)), 0)
+                self.assertGreater(len(gc.get_referrers(obj)), 0)
+
     def testCursorGet(self):
         "Cursor.get"
         for query, expected in (
@@ -6041,7 +6308,7 @@ class APSW(unittest.TestCase):
                         else:
                             self.assertEqual(is_explain, explain)
 
-        self.assertRaises(apsw.SQLError, self.db.execute, "select 6", explain=7)
+        self.assertRaises(ValueError, self.db.execute, "select 6", explain=7)
 
     # the text also includes characters that can't be represented in 16 bits (BMP)
     wikipedia_text = """Wikipedia\nThe Free Encyclopedia\nEnglish\n6 383 000+ articles\n日本語\n1 292 000+ 記事\nРусский\n1 756 000+ статей\nDeutsch\n2 617 000+ Artikel\nEspañol\n1 717 000+ artículos\nFrançais\n2 362 000+ articles\nItaliano\n1 718 000+ voci\n中文\n1 231 000+ 條目\nPolski\n1 490 000+ haseł\nPortuguês\n1 074 000+ artigos\nSearch Wikipedia\nEN\nEnglish\n\n Read Wikipedia in your language\n1 000 000+ articles\nPolski\nالعربية\nDeutsch\nEnglish\nEspañol\nFrançais\nItaliano\nمصرى\nNederlands\n日本語\nPortuguês\nРусский\nSinugboanong Binisaya\nSvenska\nУкраїнська\nTiếng Việt\nWinaray\n中文\n100 000+ articles\nAfrikaans\nSlovenčina\nAsturianu\nAzərbaycanca\nБългарски\nBân-lâm-gú / Hō-ló-oē\nবাংলা\nБеларуская\nCatalà\nČeština\nCymraeg\nDansk\nEesti\nΕλληνικά\nEsperanto\nEuskara\nفارسی\nGalego\n한국어\nՀայերեն\nहिन्दी\nHrvatski\nBahasa Indonesia\nעברית\nქართული\nLatina\nLatviešu\nLietuvių\nMagyar\nМакедонски\nBahasa Melayu\nBahaso Minangkabau\nNorskbokmålnynorsk\nНохчийн\nOʻzbekcha / Ўзбекча\nҚазақша / Qazaqşa / قازاقشا\nRomână\nSimple English\nSlovenščina\nСрпски / Srpski\nSrpskohrvatski / Српскохрватски\nSuomi\nதமிழ்\nТатарча / Tatarça\nภาษาไทย\nТоҷикӣ\nتۆرکجه\nTürkçe\nاردو\nVolapük\n粵語\nမြန်မာဘာသာ\n10 000+ articles\nBahsa Acèh\nAlemannisch\nአማርኛ\nAragonés\nBasa Banyumasan\nБашҡортса\nБеларуская (Тарашкевіца)\nBikol Central\nবিষ্ণুপ্রিয়া মণিপুরী\nBoarisch\nBosanski\nBrezhoneg\nЧӑвашла\nDiné Bizaad\nEmigliàn–Rumagnòl\nFøroyskt\nFrysk\nGaeilge\nGàidhlig\nગુજરાતી\nHausa\nHornjoserbsce\nIdo\nIlokano\nInterlingua\nИрон æвзаг\nÍslenska\nJawa\nಕನ್ನಡ\nKreyòl Ayisyen\nKurdî / كوردی\nکوردیی ناوەندی\nКыргызча\nКырык Мары\nLëtzebuergesch\nLimburgs\nLombard\nLìgure\nमैथिली\nMalagasy\nമലയാളം\n文言\nमराठी\nმარგალური\nمازِرونی\nMìng-dĕ̤ng-ngṳ̄ / 閩東語\nМонгол\nनेपाल भाषा\nनेपाली\nNnapulitano\nNordfriisk\nOccitan\nМарий\nଓଡି଼ଆ\nਪੰਜਾਬੀ (ਗੁਰਮੁਖੀ)\nپنجابی (شاہ مکھی)\nپښتو\nPiemontèis\nPlattdüütsch\nQırımtatarca\nRuna Simi\nसंस्कृतम्\nСаха Тыла\nScots\nShqip\nSicilianu\nසිංහල\nسنڌي\nŚlůnski\nBasa Sunda\nKiswahili\nTagalog\nతెలుగు\nᨅᨔ ᨕᨙᨁᨗ / Basa Ugi\nVèneto\nWalon\n吳語\nייִדיש\nYorùbá\nZazaki\nŽemaitėška\nisiZulu\n1 000+ articles\nАдыгэбзэ\nÆnglisc\nAkan\nаԥсшәа\nԱրեւմտահայերէն\nArmãneashce\nArpitan\nܐܬܘܪܝܐ\nAvañe’ẽ\nАвар\nAymar\nBasa Bali\nBahasa Banjar\nभोजपुरी\nBislama\nབོད་ཡིག\nБуряад\nChavacano de Zamboanga\nCorsu\nVahcuengh / 話僮\nDavvisámegiella\nDeitsch\nދިވެހިބަސް\nDolnoserbski\nЭрзянь\nEstremeñu\nFiji Hindi\nFurlan\nGaelg\nGagauz\nGĩkũyũ\nگیلکی\n贛語\nHak-kâ-ngî / 客家語\nХальмг\nʻŌlelo Hawaiʻi\nIgbo\nInterlingue\nKabɩyɛ\nKapampangan\nKaszëbsczi\nKernewek\nភាសាខ្មែរ\nKinyarwanda\nКоми\nKongo\nकोंकणी / Konknni\nKriyòl Gwiyannen\nພາສາລາວ\nDzhudezmo / לאדינו\nЛакку\nLatgaļu\nЛезги\nLingála\nlojban\nLuganda\nMalti\nReo Mā’ohi\nMāori\nMirandés\nМокшень\nߒߞߏ\nNa Vosa Vaka-Viti\nNāhuatlahtōlli\nDorerin Naoero\nNedersaksisch\nNouormand / Normaund\nNovial\nAfaan Oromoo\nঅসমীযা়\nपालि\nPangasinán\nPapiamentu\nПерем Коми\nPfälzisch\nPicard\nКъарачай–Малкъар\nQaraqalpaqsha\nRipoarisch\nRumantsch\nРусиньскый Язык\nGagana Sāmoa\nSardu\nSeeltersk\nSesotho sa Leboa\nChiShona\nSoomaaliga\nSranantongo\nTaqbaylit\nTarandíne\nTetun\nTok Pisin\nfaka Tonga\nTürkmençe\nТыва дыл\nУдмурт\nئۇيغۇرچه\nVepsän\nVõro\nWest-Vlams\nWolof\nisiXhosa\nZeêuws\n100+ articles\nBamanankan\nChamoru\nChichewa\nEʋegbe\nFulfulde\n𐌲𐌿𐍄𐌹𐍃𐌺\nᐃᓄᒃᑎᑐᑦ / Inuktitut\nIñupiak\nKalaallisut\nكٲشُر\nLi Niha\nNēhiyawēwin / ᓀᐦᐃᔭᐍᐏᐣ\nNorfuk / Pitkern\nΠοντιακά\nརྫོང་ཁ\nRomani\nKirundi\nSängö\nSesotho\nSetswana\nСловѣ́ньскъ / ⰔⰎⰑⰂⰡⰐⰠⰔⰍⰟ\nSiSwati\nThuɔŋjäŋ\nᏣᎳᎩ\nTsėhesenėstsestotse\nTshivenḓa\nXitsonga\nchiTumbuka\nTwi\nትግርኛ\nဘာသာ မန်\n"""
@@ -6131,6 +6398,7 @@ class APSW(unittest.TestCase):
                     "aclose",
                     "interrupt",
                     "close_internal",
+                    "add_dependent",
                     "remove_dependent",
                     "readonly",
                     "getmainfilename",
@@ -6184,12 +6452,12 @@ class APSW(unittest.TestCase):
                 "order": ("closed",),
             },
             "APSWBlob": {
-                "skip": ("dealloc", "dealloc_mutex", "init", "close", "close_internal", "tp_repr", "bool", "aclose", "closed"),
+                "skip": ("dealloc", "dealloc_mutex", "init", "close", "close_internal", "tp_repr", "bool", "aclose", "closed", "tp_traverse"),
                 "req": {"closed": "CHECK_BLOB_CLOSED"},
                 "order": ("use", "closed"),
             },
             "APSWBackup": {
-                "skip": ("dealloc", "dealloc_mutex", "init", "close_internal", "get_remaining", "get_page_count", "tp_repr", "bool", "aclose"),
+                "skip": ("dealloc", "dealloc_mutex", "init", "close_internal", "get_remaining", "get_page_count", "tp_repr", "bool", "aclose", "tp_traverse"),
                 "req": {"closed": "CHECK_BACKUP_CLOSED"},
                 "order": ("use", "closed"),
             },
@@ -6321,8 +6589,8 @@ class APSW(unittest.TestCase):
                         self.fail("Should be using compat function for %s in file %s" % (n, filename))
 
             # not allowed PyObject_New because we can't faultinject it
-            if re.search(r"\bPyObject_New\b", code):
-                self.fail(f"In {filename} you must use _PyObject_New (leading underscore)")
+            if re.search(r"\bPyObject(|_GC)_New\b", code):
+                self.fail(f"In {filename} you must use _PyObject_(GC_)New (leading underscore)")
 
             # check check funcs
             funcpat1 = re.compile(r"^(\w+_\w+)\s*\(\s*\w+\s*\*\s*self")
@@ -9835,6 +10103,30 @@ SELECT group_concat(rtrim(t),x'0a') FROM a;
 
         # at time of writing it was 24 nodes
         self.assertGreater(count(qd.query_plan), 10)
+
+        qd = apsw.ext.query_info(
+            self.db, "/* empty */; -- comment", actions=True, expanded_sql=True, explain=True, explain_query_plan=True
+        )
+        for k, v in dataclasses.asdict(qd).items():
+            match k:
+                case "query" | "first_query":
+                    self.assertEqual(v, "/* empty */; -- comment")
+                case "expanded_sql":
+                    self.assertEqual(v, "")
+                case "query_plan":
+                    self.assertEqual(v, {"detail": "QUERY PLAN", "sub": None})
+                case "is_explain" | "bindings_count":
+                    self.assertEqual(v, 0)
+                case "has_vdbe":
+                    self.assertFalse(v)
+                case "is_readonly":
+                    self.assertTrue(v)
+                case "bindings_names" | "description" | "description_full":
+                    self.assertEqual(v, tuple())
+                case "actions" | "explain":
+                    self.assertEqual(v, list())
+                case _:
+                    self.assertEqual(v, None)
 
     def testVFSFcntlPragma(self):
         "Test wrapping fcntl pragmas"

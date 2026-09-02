@@ -209,13 +209,19 @@ resetcursor(APSWCursor *self, int force)
       res = SQLITE_ERROR;
       assert(PyErr_Occurred());
     }
+    else if(PyErr_Occurred())
+    {
+      CHAIN_EXC_BEGIN
+        PyErr_Format(ExcIncomplete, "Error: The values for executemany were not fully consumed and the next item raised this exception");
+      CHAIN_EXC_END;
+      res = SQLITE_ERROR;
+    }
   }
 
   Py_CLEAR(self->emiter);
   Py_CLEAR(self->emoriginalquery);
 
   self->status = C_DONE;
-  self->in_query = 0;
 
   if (PyErr_Occurred())
   {
@@ -392,7 +398,10 @@ convert_column_to_pyobject(APSWCursor *self, int col)
     size_t len;
     data = (const char *)sqlite3_column_text(stmt, col);
     if (!data)
-      return PyErr_NoMemory();
+    {
+      SET_EXC(SQLITE_NOMEM, NULL);
+      return NULL;
+    }
 
     len = sqlite3_column_bytes(stmt, col);
     return PyUnicode_FromStringAndSize(data, len);
@@ -415,7 +424,10 @@ convert_column_to_pyobject(APSWCursor *self, int col)
 
     /* if length is zero then a null pointer is returned */
     if (!data && len)
-      return PyErr_NoMemory();
+    {
+      SET_EXC(SQLITE_NOMEM, NULL);
+      return NULL;
+    }
 
     PyObject *value = PyBytes_FromStringAndSize(data, len);
 
@@ -589,7 +601,12 @@ APSWCursor_get_description_full(PyObject *self_, void *unused)
 }
 #endif
 
-/* returns 0 on success, -1 on failure with exception set */
+/* returns 0 on success and sets in_query, -1 on failure with exception set
+
+   this differs from DBMUTEX_ENSURE in that it will do some GIL released
+   sleeps + retries in order to get the mutex to cater for doing
+   connection.execute simultaneously in multiple threads
+*/
 #undef cursor_mutex_get
 static int
 cursor_mutex_get(APSWCursor *self)
@@ -630,7 +647,7 @@ cursor_mutex_get(APSWCursor *self)
     Py_BEGIN_ALLOW_THREADS
     {
       waited += sqlite3_sleep(delays[attempt]);
-      res = sqlite3_mutex_try(self->connection->dbmutex);
+      res = (self->connection) ? sqlite3_mutex_try(self->connection->dbmutex) : SQLITE_ERROR;
     }
     Py_END_ALLOW_THREADS;
 
@@ -671,12 +688,19 @@ cursor_mutex_get(APSWCursor *self)
   }
 
   assert((res == SQLITE_OK && !PyErr_Occurred()) || (res != SQLITE_OK && PyErr_Occurred()));
-  return (SQLITE_OK == res) ? 0 : -1;
+  if (res == SQLITE_OK)
+  {
+    self->in_query = 1;
+    return 0;
+  }
+  return -1;
 }
 
+#undef APSWCursor_is_dict_binding
 static int
 APSWCursor_is_dict_binding(PyObject *obj)
 {
+#include "faultinject.h"
   /* See https://github.com/rogerbinns/apsw/issues/373 for why this function exists */
   assert(obj);
 
@@ -968,6 +992,10 @@ APSWCursor_do_exec_trace(APSWCursor *self, Py_ssize_t savedbindingsoffset)
     {
       bindings = Py_NewRef(self->bindings);
     }
+    else if(PyErr_Occurred())
+    {
+      goto error_out;
+    }
     else if (Py_Is(self->bindings, apsw_cursor_null_bindings))
     {
       bindings = Py_NewRef(Py_None);
@@ -977,10 +1005,7 @@ APSWCursor_do_exec_trace(APSWCursor *self, Py_ssize_t savedbindingsoffset)
       bindings = PySequence_GetSlice(self->bindings, savedbindingsoffset, self->bindingsoffset);
 
       if (!bindings)
-      {
-        Py_DECREF(sqlcmd);
         goto error_out;
-      }
     }
   }
   else
@@ -990,7 +1015,7 @@ APSWCursor_do_exec_trace(APSWCursor *self, Py_ssize_t savedbindingsoffset)
 
   PyObject *vargs[] = { NULL, (PyObject *)self, sqlcmd, bindings };
   retval = PyObject_Vectorcall(exectrace, vargs + 1, 3 | PY_VECTORCALL_ARGUMENTS_OFFSET, NULL);
-  Py_DECREF(sqlcmd);
+  Py_CLEAR(sqlcmd);
   Py_DECREF(bindings);
 
   if (!retval)
@@ -1019,6 +1044,7 @@ error_out:
   AddTraceBackHere(__FILE__, __LINE__, "APSWCursor_do_exec_trace", "{s: O, s: O}", "exec_trace", OBJ(exectrace),
                    "returned", OBJ(retval));
   Py_XDECREF(retval);
+  Py_XDECREF(sqlcmd);
   return -1;
 }
 
@@ -1159,6 +1185,11 @@ APSWCursor_step(APSWCursor *self)
       /* verify type of next before putting in bindings */
       if (APSWCursor_is_dict_binding(next))
         self->bindings = next;
+      else if(PyErr_Occurred())
+      {
+        Py_DECREF(next);
+        return -1;
+      }
       else
       {
         self->bindings = PySequence_Fast(next, "You must supply a dict or a sequence for bindings");
@@ -1276,6 +1307,9 @@ APSWCursor_execute(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast_
     ARG_EPILOG(NULL, Cursor_execute_USAGE, );
   }
 
+  if (explain < -1 || explain > 2)
+    return PyErr_Format(PyExc_ValueError, "explain should be 0, 1, or 2 if provided");
+
   while (self->aiter_head < self->aiter_tail)
   {
     Py_DECREF(self->aiter_slots[self->aiter_head]);
@@ -1306,7 +1340,10 @@ APSWCursor_execute(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast_
   {
     int is_dict = APSWCursor_is_dict_binding(self->bindings);
     if (PyErr_Occurred())
+    {
+      Py_INCREF(self->bindings);
       goto error_out;
+    }
     if (is_dict || Py_Is(self->bindings, apsw_cursor_null_bindings))
       Py_INCREF(self->bindings);
     else
@@ -1331,7 +1368,6 @@ APSWCursor_execute(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast_
   self->bindingsoffset = 0;
   savedbindingsoffset = 0;
 
-  self->in_query = 1;
   if (APSWCursor_dobindings(self))
     goto error_out;
   if (EXECTRACE)
@@ -1347,15 +1383,15 @@ APSWCursor_execute(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast_
       goto error_out;
   } while (self->status == C_END_OF_STATEMENT);
 
-  sqlite3_mutex_leave(self->connection->dbmutex);
   self->in_query = 0;
+  sqlite3_mutex_leave(self->connection->dbmutex);
 
   return Py_NewRef(self);
 
 error_out:
   assert(PyErr_Occurred());
-  sqlite3_mutex_leave(self->connection->dbmutex);
   self->in_query = 0;
+  sqlite3_mutex_leave(self->connection->dbmutex);
 
   return NULL;
 }
@@ -1400,6 +1436,9 @@ APSWCursor_executemany(PyObject *self_, PyObject *const *fast_args, Py_ssize_t f
     ARG_EPILOG(NULL, Cursor_executemany_USAGE, );
   }
 
+  if (explain < -1 || explain > 2)
+    return PyErr_Format(PyExc_ValueError, "explain should be 0, 1, or 2 if provided");
+
   while (self->aiter_head < self->aiter_tail)
   {
     Py_DECREF(self->aiter_slots[self->aiter_head]);
@@ -1432,12 +1471,18 @@ APSWCursor_executemany(PyObject *self_, PyObject *const *fast_args, Py_ssize_t f
   if (!next)
   {
     /* empty list */
+    self->in_query = 0;
     sqlite3_mutex_leave(self->connection->dbmutex);
     return Py_NewRef((PyObject *)self);
   }
 
   if (APSWCursor_is_dict_binding(next))
     self->bindings = next;
+  else if(PyErr_Occurred())
+  {
+    Py_DECREF(next);
+    goto error_out;
+  }
   else
   {
     self->bindings = PySequence_Fast(next, "You must supply a dict or a sequence for executemany");
@@ -1478,20 +1523,20 @@ APSWCursor_executemany(PyObject *self_, PyObject *const *fast_args, Py_ssize_t f
 
   int step_ret;
   self->status = C_BEGIN;
-  self->in_query = 1;
   do
   {
     step_ret = APSWCursor_step(self);
   } while (self->status == C_END_OF_STATEMENT);
-  self->in_query = 0;
   if (step_ret != 0)
     goto error_out;
 
+  self->in_query = 0;
   sqlite3_mutex_leave(self->connection->dbmutex);
   return Py_NewRef(self);
 
 error_out:
   assert(PyErr_Occurred());
+  self->in_query = 0;
   sqlite3_mutex_leave(self->connection->dbmutex);
   return NULL;
 }
@@ -1600,8 +1645,6 @@ APSWCursor_next_internal(PyObject *self_, int eager)
     return NULL;
 
 again:
-  self->in_query = 1;
-
   if (self->status == C_BEGIN || self->status == C_END_OF_STATEMENT)
   {
     do
@@ -1615,8 +1658,8 @@ again:
   if (self->status == C_DONE || self->status == C_END_OF_STATEMENT)
   {
     /* end of iteration */
-    sqlite3_mutex_leave(self->connection->dbmutex);
     self->in_query = 0;
+    sqlite3_mutex_leave(self->connection->dbmutex);
     return NULL;
   }
 
@@ -1658,8 +1701,8 @@ error:
   Py_XDECREF(retval);
   assert(PyErr_Occurred());
 
-  sqlite3_mutex_leave(self->connection->dbmutex);
   self->in_query = 0;
+  sqlite3_mutex_leave(self->connection->dbmutex);
   return NULL;
 }
 
@@ -1749,6 +1792,7 @@ again:
         return NULL;
       PyObject *exc_one = NULL, *exc_two = NULL, *exc_three = NULL;
       PyErr_Fetch(&exc_one, &exc_two, &exc_three);
+      PyErr_NormalizeException(&exc_one, &exc_two, &exc_three);
       PyTuple_SET_ITEM(next_value, 0, exc_one);
       PyTuple_SET_ITEM(next_value, 1, exc_two);
       PyTuple_SET_ITEM(next_value, 2, exc_three);
@@ -1867,7 +1911,10 @@ APSWCursor_aiter(PyObject *self_)
   {
     PyObject **new_slots = PyMem_Resize(self->aiter_slots, PyObject *, slots_desired);
     if (!new_slots)
+    {
+      PyErr_NoMemory();
       return NULL;
+    }
     self->aiter_slots = new_slots;
     self->aiter_slots_allocated = slots_desired;
   }
@@ -2368,7 +2415,7 @@ static PyObject *
 APSWCursor_expanded_sql(PyObject *self_, void *unused)
 {
   APSWCursor *self = (APSWCursor *)self_;
-  PyObject *res;
+  PyObject *res = NULL;
   const char *es;
 
   CHECK_CURSOR_CLOSED(NULL);
@@ -2385,8 +2432,10 @@ APSWCursor_expanded_sql(PyObject *self_, void *unused)
     res = convertutf8string(es);
     sqlite3_free((void *)es);
   }
+  else if (self->statement->vdbestatement)
+    SET_EXC(SQLITE_NOMEM, NULL);
   else
-    res = PyErr_NoMemory();
+    res = PyUnicode_FromString("");
   sqlite3_mutex_leave(self->connection->dbmutex);
 
   return res;
@@ -2464,10 +2513,15 @@ APSWCursor_get(PyObject *self_, void *unused)
 
   ASYNC_ATTR_GET(self->connection, APSWCursor_get, self_, unused);
 
-  if (self->status == C_DONE)
-    Py_RETURN_NONE;
-
   DBMUTEX_ENSURE(self->connection);
+  IN_QUERY_CHECK;
+
+  if (self->status == C_DONE)
+  {
+    sqlite3_mutex_leave(self->connection->dbmutex);
+    Py_RETURN_NONE;
+  }
+
   self->in_query = 1;
 
   do
@@ -2517,8 +2571,8 @@ APSWCursor_get(PyObject *self_, void *unused)
     } while (self->status == C_END_OF_STATEMENT);
   } while (self->status != C_DONE);
 
-  sqlite3_mutex_leave(self->connection->dbmutex);
   self->in_query = 0;
+  sqlite3_mutex_leave(self->connection->dbmutex);
 
   if (the_list)
     return the_list;
@@ -2526,8 +2580,8 @@ APSWCursor_get(PyObject *self_, void *unused)
   return the_row;
 
 error:
-  sqlite3_mutex_leave(self->connection->dbmutex);
   self->in_query = 0;
+  sqlite3_mutex_leave(self->connection->dbmutex);
   assert(PyErr_Occurred());
   Py_CLEAR(the_list);
   Py_CLEAR(the_row);

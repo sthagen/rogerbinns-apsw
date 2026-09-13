@@ -11,12 +11,13 @@ import collections
 import collections.abc
 import contextlib
 import dataclasses
+import enum
+import functools
 import gc
 import glob
 import inspect
 import io
 import itertools
-import functools
 import math
 import mmap
 import os
@@ -5352,76 +5353,211 @@ class APSW(unittest.TestCase):
 
     def testIssue31(self):
         "Issue 31: GIL & SQLite mutexes with heavy threading, threadsafe errors from SQLite"
-        randomnumbers = [random.randint(0, 10000) for _ in range(1000)]
+        randomnumbers = [random.randint(0, 100000) for _ in range(1000)]
+
+        base_name = self.db.db_filename("main")
+
+        def make_db(num):
+            adb = apsw.Connection(base_name + (str(num) if num > 1 else ""))
+            adb.create_scalar_function("timesten", lambda x: x * 10)
+            adb.create_scalar_function("sleep", lambda x: apsw.sleep(x))
+            adb.set_busy_timeout(7)
+            return adb, adb.cursor()
 
         cursor = self.db.cursor()
         cursor.execute("create table foo(x)")
-        cursor.execute("begin")
-        for num in randomnumbers:
-            cursor.execute("insert into foo values(?)", (num,))
-        cursor.execute("end")
+        with self.db:
+            cursor.executemany("insert into foo values(?)", ((num,) for num in randomnumbers))
 
-        self.db.create_scalar_function("timesten", lambda x: x * 10)
+        db2 = apsw.Connection(self.db.filename + "2")
+        cursor2 = db2.cursor()
+        with db2.backup("main", self.db, "main") as b:
+            b.step()
 
-        did_work = {}
-        locked = {}
+        self.db, cursor = make_db(1)
+        db2, cursor2 = make_db(2)
+
+        a = enum.auto
+
+        class Item(enum.Enum):
+            # used to get warnings on missed cases below
+            DBExecuteMiss = a()
+            DBExecuteHit = a()
+            DBExecutemany = a()
+            DBComplex = a()
+            DBSleep = a()
+            SyntaxError = a()
+            DBSort = a()
+            DBInsert = a()
+            Backup = a()
+            Blob = a()
+            Close = a()
+            Session = a()
+            GC = a()
+
+        items = tuple(Item.__members__.values())
+
+        thread_did_work = {}
+        thread_locked = {}
+        item_did_work = {k: 0 for k in items}
+        item_locked = {k: 0 for k in items}
 
         def dostuff(end):
+            nonlocal db2, cursor, cursor2
             # spend n seconds doing stuff to the database
+            s = None
             myid = threading.get_ident()
-            did_work[myid] = 0
-            locked[myid] = 0
+            thread_did_work[myid] = 0
+            thread_locked[myid] = 0
             while time.time() < end:
-                i = random.choice(randomnumbers)
+                item = random.choice(items)
+                db = random.choice([self.db, db2])
+                cur = random.choice([cursor, cursor2])
                 try:
-                    if i % 5 == 0:
-                        sql = "select timesten(x) from foo where x=%d order by x" % (i,)
-                        self.db.execute(sql)
-                    elif i % 5 == 1:
-                        sql = "select timesten(x) from foo where x=? order by x"
-                        called = 0
-                        for row in self.db.cursor().execute(sql, (i,)):
-                            called += 1
-                            self.assertEqual(row[0], 10 * i)
-                        # same value could be present multiple times
-                        self.assertTrue(called >= 1)
-                    elif i % 5 == 2:
-                        try:
-                            self.db.cursor().execute("deliberate syntax error")
-                        except apsw.SQLError:
-                            assert "deliberate" in str(sys.exc_info()[1])
-                    elif i % 5 == 3:
-                        try:
-                            self.db.cursor().execute("bogus syntax error")
-                        except apsw.SQLError:
-                            assert "bogus" in str(sys.exc_info()[1])
-                    else:
-                        sql = "select timesten(x) from foo where x=? order by x"
-                        self.db.cursor().execute(sql, (i,))
-                except apsw.ThreadingViolationError as exc:
-                    locked[myid] += 1
+                    match item:
+                        case Item.DBExecuteMiss:
+                            # reuses cursor without bindings (no statementcache hits)
+                            sql = "select timesten(x) from foo where x=%d order by x" % (random.choice(randomnumbers),)
+                            cur.execute(sql).get
+                        case Item.DBExecuteHit:
+                            # reuses cursor without bindings (no statementcache hits)
+                            sql = "select timesten(x) from foo where x=? order by x"
+                            cur.execute(sql, (random.choice(randomnumbers),)).get
+                        case Item.DBExecutemany:
+                            vals = random.choices(randomnumbers, k=5)
+                            oldest = db.execute("select rowid from foo order by rowid limit 5").get
+                            with db:
+                                c = db.cursor()
+                                c.executemany("insert into foo values(?)", ((i,) for i in vals)).get
+                                c.executemany("delete from foo where rowid =?", ((i,) for i in oldest)).get
+                        case Item.DBComplex:
+                            # new cursor each time with bindings
+                            sql = "select timesten(x) from foo where x=? order by x"
+                            for row in db.execute(sql, (random.choice(randomnumbers),)):
+                                pass
+                        case Item.DBSleep:
+                            # sleep in milliseconds with mutex held
+                            c = db.cursor()
+                            c.execute(f"select sleep({random.randint(0, 10)})").get
+                        case Item.SyntaxError:
+                            # GIL is released during prepare
+                            try:
+                                db.execute("deliberate syntax error")
+                            except apsw.SQLError:
+                                assert "deliberate" in str(sys.exc_info()[1])
+                        case Item.DBSort:
+                            # function, sorting
+                            sql = "select timesten(x) from foo where x=? order by rowid desc limit 10"
+                            for row in db.execute(sql, (random.choice(randomnumbers),)):
+                                pass
+                        case Item.DBInsert:
+                            # adds one row, deletes the oldest
+                            with db:
+                                db.execute(
+                                    "insert into foo values(?); delete from foo where rowid=%d"
+                                    % (db.execute("select rowid from foo order by rowid limit 1").get),
+                                    (random.choice(randomnumbers),),
+                                )
+                        case Item.Backup:
+                            try:
+                                with db.backup("main", self.db if db is db2 else db2, "main") as backup:
+                                    while not backup.done:
+                                        backup.step(5)
+                            except ValueError as exc:
+                                if "source connection is closed" in str(exc):
+                                    raise apsw.BusyError
+                                raise
+                            except apsw.SQLError as exc:
+                                if "destination database is in use" in str(exc):
+                                    raise apsw.BusyError
+                                raise
+                        case Item.Blob:
+                            db.execute(
+                                "create table if not exists blobby(b); insert or replace into blobby(rowid, b) values(73, randomblob(8199))"
+                            )
+                            blob = db.blob_open("main", "blobby", "b", 73, True)
+                            blob.seek(1234)
+                            blob.write(b"aa" + blob.read(100))
+                        case Item.Close:
+                            # make other threads run for a bit first
+                            apsw.sleep(10)
+                            if random.random() > 0.7:
+                                # only explicitly close some of the time
+                                db.close()
+                            if db is self.db:
+                                self.db, cursor = make_db(0)
+                            else:
+                                db2, cursor2 = make_db(2)
+                        case Item.Session:
+                            if not hasattr(apsw, "Session"):
+                                continue
+                            if s:
+                                s.changeset()
+                            s = apsw.Session(db, "main")
+                            s.config(apsw.SQLITE_SESSION_OBJCONFIG_ROWID, 1)
+                            s.attach()
+                            cb = apsw.ChangesetBuilder()
+                            cb.schema(db, "main")
+                            cb.add_insert("foo", True, (1234, 5678))
+                        case Item.GC:
+                            gc.collect(2)
+                        case _:
+                            self.fail(f"Unhandled Item {item}")
+
+                except (
+                    apsw.BusyError,
+                    apsw.CantOpenError,
+                    apsw.CursorClosedError,
+                    apsw.ConnectionClosedError,
+                    apsw.ThreadingViolationError,
+                ):
+                    thread_locked[myid] += 1
+                    item_locked[item] += 1
                     continue
-                did_work[myid] += 1
+                thread_did_work[myid] += 1
+                item_did_work[item] += 1
 
                 # Release the GIL giving other threads a chace to do work
-                time.sleep(0.01)
+                time.sleep(0.001)
 
         runtime = float(os.getenv("APSW_HEAVY_DURATION")) if os.getenv("APSW_HEAVY_DURATION") else 15
         end = time.time() + runtime
-        threads = [threading.Thread(target=dostuff, args=(end,)) for _ in range(20)]
+        threads = [threading.Thread(target=dostuff, args=(end,)) for _ in range(len(items) * 2)]
         for t in threads:
             try:
                 t.start()
             except RuntimeError:
-                return
+                self.skipTest("threads not supported")
 
         for t in threads:
             t.join()
 
-        if runtime > 15:
-            # I can't confidently say that all threads would have got execution time
-            # on all the platforms out there, so check if env var was set
-            self.assertTrue(all(v > 0 for v in did_work.values()), f"{did_work=}")
+        # tearDown tries to close open connections in order but that
+        # can fail with BusyError especially with backups spanning two
+        # connections.  So we keep closing until success or timeout
+        # where normal tearDown will raise exception
+
+        end = time.monotonic() + 5
+        while time.monotonic() < end:
+            c = apsw.connections()
+            if not c:
+                break
+            try:
+                random.choice(c).close(True)
+            except apsw.BusyError:
+                pass
+
+        if False:
+            # I've not come up with a good way of verifying things automatically.
+            # Currently a human has to make this block run and eyeball the numbers
+            # shown to see if they are reasonable.
+
+            import pprint
+
+            print()
+            for n in "thread_did_work", "thread_locked", "item_did_work", "item_locked":
+                print(n)
+                pprint.pprint(locals()[n])
 
     def testIssue50(self):
         "Issue 50: Check Blob.read return value on eof"
@@ -6169,7 +6305,7 @@ class APSW(unittest.TestCase):
                 pass
         del l
         gc.collect()
-        db2 = apsw.Connection(TESTFILEPREFIX + "testdb", statementcachesize=scsize)
+        db2 = apsw.Connection(self.db.db_filename("main") + "2", statementcachesize=scsize)
         self.assertEqual(db2.cache_stats()["size"], actual)
         cur2 = db2.cursor()
         cur2.execute("create table bar(x,y)")
@@ -6365,7 +6501,6 @@ class APSW(unittest.TestCase):
             "APSWCursor": {
                 "skip": (
                     "dealloc",
-                    "dealloc_mutex",
                     "init",
                     "dobinding",
                     "dobindings",
@@ -6392,13 +6527,13 @@ class APSW(unittest.TestCase):
                 "skip": (
                     "internal_cleanup",
                     "dealloc",
-                    "dealloc_mutex",
                     "init",
                     "close",
                     "aclose",
                     "interrupt",
                     "close_internal",
                     "add_dependent",
+                    "add_dependent_hard",
                     "remove_dependent",
                     "readonly",
                     "getmainfilename",
@@ -6425,7 +6560,6 @@ class APSW(unittest.TestCase):
                     "get_change_patch_set",
                     "get_change_patch_set_stream",
                     "dealloc",
-                    "dealloc_mutex",
                     "tp_repr",
                     "tp_traverse",
                     "bool",
@@ -6442,7 +6576,7 @@ class APSW(unittest.TestCase):
                 "order": ("scope",),
             },
             "APSWChangesetBuilder": {
-                "skip": {"dealloc", "dealloc_mutex", "close_internal", "close", "init", "tp_traverse", "bool", "row"},
+                "skip": {"dealloc", "close_internal", "close", "init", "tp_traverse", "bool", "row"},
                 "req": {"closed": "CHECK_BUILDER_CLOSED"},
                 "order": ("closed",),
             },
@@ -6452,12 +6586,12 @@ class APSW(unittest.TestCase):
                 "order": ("closed",),
             },
             "APSWBlob": {
-                "skip": ("dealloc", "dealloc_mutex", "init", "close", "close_internal", "tp_repr", "bool", "aclose", "closed", "tp_traverse"),
+                "skip": ("dealloc", "init", "close", "close_internal", "tp_repr", "bool", "aclose", "closed", "tp_traverse"),
                 "req": {"closed": "CHECK_BLOB_CLOSED"},
                 "order": ("use", "closed"),
             },
             "APSWBackup": {
-                "skip": ("dealloc", "dealloc_mutex", "init", "close_internal", "get_remaining", "get_page_count", "tp_repr", "bool", "aclose", "tp_traverse"),
+                "skip": ("dealloc", "init", "close_internal", "get_remaining", "get_page_count", "tp_repr", "bool", "aclose", "tp_traverse"),
                 "req": {"closed": "CHECK_BACKUP_CLOSED"},
                 "order": ("use", "closed"),
             },
@@ -6892,7 +7026,7 @@ class APSW(unittest.TestCase):
                 self.assertEqual(update.rowid, 1)
                 self.assertEqual(update.rowid_new, 1)
             else:
-                raise Exception("unexpected")
+                self.fail("unexpected")
 
         self.db.preupdate_hook(lambda: 1/0)
 
@@ -8850,9 +8984,10 @@ class APSW(unittest.TestCase):
         # t.xUnlock(-1)
         if not apsw.connection_hooks:
             TestFile.xUnlock = TestFile.xUnlock1
-            self.assertRaises(TypeError, testdb)
+            # connection tp_dealloc calls unlock hence unraisables
+            self.assertRaisesUnraisable(TypeError, self.assertRaises, TypeError, testdb)
             TestFile.xUnlock = TestFile.xUnlock2
-            self.assertRaises(ZeroDivisionError, testdb)
+            self.assertRaisesUnraisable(ZeroDivisionError, self.assertRaises, ZeroDivisionError, testdb)
         TestFile.xUnlock = TestFile.xUnlock99
         testdb()
 
@@ -8875,9 +9010,9 @@ class APSW(unittest.TestCase):
             # windows is happy to truncate to -77 bytes
             self.assertRaises(apsw.IOError, t.xTruncate, -77)
         TestFile.xTruncate = TestFile.xTruncate1
-        self.assertRaises(TypeError, testdb)
+        self.assertMayRaiseUnraisable(TypeError, self.assertRaises, TypeError, testdb)
         TestFile.xTruncate = TestFile.xTruncate2
-        self.assertRaises(ZeroDivisionError, testdb)
+        self.assertMayRaiseUnraisable(ZeroDivisionError, self.assertRaises, ZeroDivisionError, testdb)
         TestFile.xTruncate = TestFile.xTruncate99
         testdb()
 
@@ -10121,8 +10256,12 @@ SELECT group_concat(rtrim(t),x'0a') FROM a;
                     self.assertFalse(v)
                 case "is_readonly":
                     self.assertTrue(v)
-                case "bindings_names" | "description" | "description_full":
+                case "bindings_names" | "description":
                     self.assertEqual(v, tuple())
+                case "description_full":
+                    # it will be empty tuple in builds with enable
+                    # column metadata else None if not filled in
+                    self.assertTrue(v == () or v is None)
                 case "actions" | "explain":
                     self.assertEqual(v, list())
                 case _:
@@ -10695,9 +10834,6 @@ from .jsonb import *
 from .carray import *
 from .aiotest import *
 from .extratest import *
-
-if "APSW_TEST_ITERATIONS" not in os.environ:
-    from .fork_checker import *
 
 if __name__ == "__main__":
     setup()

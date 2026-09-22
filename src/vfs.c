@@ -62,6 +62,25 @@ they will be :doc:`chained <exceptions>` together.
 which significantly increase detail about the exceptions and help with
 debugging.
 
+Lifetime, GC, process shutdown
+==============================
+
+A VFS you create is registered by the constructor,  It can be
+:meth:`explicitly unregistered <VFS.unregister>`, or will be
+implicitly unregistered by the destructor of the VFS.  SQLite doesn't
+have a mechanism for managing the lifecycles of VFS - they are usually
+implemented in static C for the lifetime of the process.
+
+Ensure your VFS classes live as long as all connections that could use
+them.  APSW does Python level reference counting where possible.
+
+When the Python interpreter is being shutdown, objects can become
+``None`` causing exceptions.  It is worth explicitly closing
+connections proactively on shutdown::
+
+    for con in apsw.connections():
+        con.close()
+
 */
 
 /* make working with file control pragma easier */
@@ -97,7 +116,7 @@ apswfcntl_pragma_init(PyObject *self_, PyObject *args, PyObject *kwargs)
   {
     VFSFcntlPragma_init_CHECK;
     PREVENT_INIT_MULTIPLE_CALLS;
-    ARG_CONVERT_VARARGS_TO_FASTCALL(1, VFSFcntlPragma_init_USAGE);
+    ARG_CONVERT_VARARGS_TO_FASTCALL(2, VFSFcntlPragma_init_USAGE);
     ARG_PROLOG(1, VFSFcntlPragma_init_KWNAMES);
     ARG_MANDATORY ARG_pointer(pointer);
     ARG_EPILOG(-1, VFSFcntlPragma_init_USAGE, Py_XDECREF(fast_kwnames));
@@ -267,6 +286,7 @@ typedef struct
   PyObject_HEAD
   sqlite3_vfs *basevfs;       /* who we inherit from (might be null) */
   sqlite3_vfs *containingvfs; /* pointer given to sqlite for this instance */
+  int base_is_apsw;           /* basevfs is APSW implemented - we keep a reference */
   int registered;             /* are we currently registered? */
   int init_was_called;
 } APSWVFS;
@@ -611,6 +631,9 @@ apswvfs_xOpen(sqlite3_vfs *vfs, const char *zName, sqlite3_file *file, int infla
   PyObject *flags = NULL;
   PyObject *pyresult = NULL;
   APSWSQLite3File *apswfile = (APSWSQLite3File *)(void *)file;
+
+  memset(apswfile, 0, sizeof(*apswfile));
+
   /* how we pass the name */
   PyObject *nameobject = NULL;
 
@@ -1001,7 +1024,7 @@ apswvfs_xDlError(sqlite3_vfs *vfs, int nByte, char *zErrMsg)
   VFSPREAMBLE;
 
   PyObject *vargs[] = { NULL, (PyObject *)(vfs->pAppData) };
-  if (PyObject_HasAttr(vargs[1], apst.xDlError))
+  if (1 == PyObject_HasAttrWithError(vargs[1], apst.xDlError))
     pyresult = PyObject_VectorcallMethod(apst.xDlError, vargs + 1, 1 | PY_VECTORCALL_ARGUMENTS_OFFSET, NULL);
 
   if (pyresult && !Py_IsNone(pyresult))
@@ -1355,7 +1378,7 @@ apswvfs_xGetLastError(sqlite3_vfs *vfs, int nByte, char *zErrMsg)
     *zErrMsg = 0;
 
   PyObject *vargs[] = { NULL, (PyObject *)(vfs->pAppData) };
-  if (PyObject_HasAttr(vargs[1], apst.xGetLastError))
+  if (1 == PyObject_HasAttrWithError(vargs[1], apst.xGetLastError))
     pyresult = PyObject_VectorcallMethod(apst.xGetLastError, vargs + 1, 1 | PY_VECTORCALL_ARGUMENTS_OFFSET, NULL);
 
   if (!pyresult || !PySequence_Check(pyresult) || 2 != PySequence_Length(pyresult))
@@ -1401,12 +1424,12 @@ apswvfs_xGetLastError(sqlite3_vfs *vfs, int nByte, char *zErrMsg)
     {
       /* Get size */
       size_t len = utf8len;
-      if (zErrMsg && len > 0 && nByte > 0)
+      if (zErrMsg && nByte > 0)
       {
-        if (len > (size_t)nByte)
-          len = (size_t)nByte;
+        if (len >= (size_t)nByte)
+          len = (size_t)nByte - 1;
         memcpy(zErrMsg, utf8, len);
-        zErrMsg[len - 1] = 0;
+        zErrMsg[len] = 0;
       }
     }
   }
@@ -1422,11 +1445,13 @@ end:
   return res;
 }
 
-/** .. method:: xGetLastError() -> tuple[int, str]
+/** .. method:: xGetLastError() -> tuple[int, str | None]
 
   Return an integer error code and (optional) text describing
   the last error code and message that happened in this thread.
 
+  The code can be later retreived by :meth:`Connection.system_errno`.
+  In practise SQLite ignores the error message.
 */
 static PyObject *
 apswvfspy_xGetLastError(PyObject *self_, PyObject *Py_UNUSED(unused))
@@ -1494,19 +1519,29 @@ apswvfs_xSetSystemCall(sqlite3_vfs *vfs, const char *zName, sqlite3_syscall_ptr 
 
   VFSPREAMBLE;
 
-  PyObject *vargs[] = { NULL, (PyObject *)(vfs->pAppData), PyUnicode_FromString(zName), PyLong_FromVoidPtr(call) };
+  PyObject *vargs[] = { NULL, (PyObject *)(vfs->pAppData), convertutf8string(zName), PyLong_FromVoidPtr(call) };
   if (vargs[2] && vargs[3])
     pyresult = PyObject_VectorcallMethod(apst.xSetSystemCall, vargs + 1, 3 | PY_VECTORCALL_ARGUMENTS_OFFSET, NULL);
   Py_XDECREF(vargs[2]);
   Py_XDECREF(vargs[3]);
-  if (!pyresult)
+  if (pyresult)
+  {
+    if (Py_IsTrue(pyresult))
+      res = SQLITE_OK;
+    else if (Py_IsFalse(pyresult))
+      res = SQLITE_NOTFOUND;
+    else
+      PyErr_Format(PyExc_TypeError, "Expected True/False return not %s", Py_TypeName(pyresult));
+  }
+  if (PyErr_Occurred())
     res = MakeSqliteMsgFromPyException(NULL);
 
   if (res == SQLITE_NOTFOUND)
     PyErr_Clear();
 
   if (PyErr_Occurred())
-    AddTraceBackHere(__FILE__, __LINE__, "vfs.xSetSystemCall", "{s: O}", "pyresult", OBJ(pyresult));
+    AddTraceBackHere(__FILE__, __LINE__, "vfs.xSetSystemCall", "{s: s, s: K, s: O}", "name", zName, "pointer",
+                     (unsigned long long)call, "pyresult", OBJ(pyresult));
 
   Py_XDECREF(pyresult);
   VFSPOSTAMBLE;
@@ -1734,7 +1769,7 @@ static void
 APSWVFS_dealloc(PyObject *self_)
 {
   APSWVFS *self = (APSWVFS *)self_;
-  if (self->basevfs && self->basevfs->xAccess == apswvfs_xAccess)
+  if (self->base_is_apsw)
   {
     Py_DECREF((PyObject *)self->basevfs->pAppData);
   }
@@ -1785,6 +1820,11 @@ APSWVFS_dealloc(PyObject *self_)
         this value then SQLite will not`be able to open it.  If you are
         using a base, then a value of zero will use the value from base.
 
+        Memory allocations are made of this size plus extra for ``-journal``
+        suffix and a null temrinator.  SQLite uses 512 for Unix,
+        1024 for in memory names, 1040 for Windows, and 65534 for Windows
+        long paths.
+
     :param iVersion: Version number for the `sqlite3_vfs <https://sqlite.org/c3ref/vfs.html>`__
         structure.
 
@@ -1805,7 +1845,7 @@ APSWVFS_init(PyObject *self_, PyObject *args, PyObject *kwargs)
   {
     VFS_init_CHECK;
     PREVENT_INIT_MULTIPLE_CALLS;
-    ARG_CONVERT_VARARGS_TO_FASTCALL(4, VFS_init_USAGE);
+    ARG_CONVERT_VARARGS_TO_FASTCALL(8, VFS_init_USAGE);
     ARG_PROLOG(4, VFS_init_KWNAMES);
     ARG_MANDATORY ARG_str(name);
     ARG_OPTIONAL ARG_optional_str(base);
@@ -1820,6 +1860,17 @@ APSWVFS_init(PyObject *self_, PyObject *args, PyObject *kwargs)
   {
     PyErr_Format(PyExc_ValueError, "apsw only supports VFS iVersion of 1, 2 and 3, not %d", iVersion);
     goto error;
+  }
+
+  if (maxpathname < 16 || maxpathname > 1024 * 1024)
+  {
+    if (maxpathname == 0 && base)
+      ; /* this case is ok */
+    else
+    {
+      PyErr_Format(PyExc_ValueError, "maxpathname of %d is too small or too large", maxpathname);
+      goto error;
+    }
   }
 
   if (base)
@@ -1900,8 +1951,17 @@ APSWVFS_init(PyObject *self_, PyObject *args, PyObject *kwargs)
   if (res == SQLITE_OK)
   {
     self->registered = 1;
-    if (self->basevfs && self->basevfs->xAccess == apswvfs_xAccess)
+    /* try to detect if the base is implemented by APSW.  this
+       isn't easy so we use a simple heuristic */
+    if (self->basevfs
+        /* the file size must match */
+        && self->basevfs->szOsFile == sizeof(APSWSQLite3File)
+        /* at least one of various methods must be ours.  note
+         that a derived vfs could just copy the function
+         pointers so we pick the most meaningful methods */
+        && (self->basevfs->xAccess == apswvfs_xAccess || self->basevfs->xOpen == apswvfs_xOpen))
     {
+      self->base_is_apsw = 1;
       Py_INCREF((PyObject *)self->basevfs->pAppData);
     }
     return 0;
@@ -2057,7 +2117,7 @@ APSWVFSFile_init(PyObject *self_, PyObject *args, PyObject *kwargs)
   {
     VFSFile_init_CHECK;
     PREVENT_INIT_MULTIPLE_CALLS;
-    ARG_CONVERT_VARARGS_TO_FASTCALL(3, VFSFile_init_USAGE);
+    ARG_CONVERT_VARARGS_TO_FASTCALL(4, VFSFile_init_USAGE);
     ARG_PROLOG(3, VFSFile_init_KWNAMES);
     ARG_MANDATORY ARG_str(vfs);
     ARG_MANDATORY ARG_pyobject(filename);
@@ -2268,7 +2328,7 @@ apswvfsfilepy_xRead(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast
   {
     /* We don't know how short the read was, so look for first
          non-trailing null byte.  */
-    while (amount && PyBytes_AS_STRING(buffy)[amount - 1] == 0)
+    while (amount > 0 && PyBytes_AS_STRING(buffy)[amount - 1] == 0)
       amount--;
     if (_PyBytes_Resize(&buffy, amount))
     {
@@ -2541,7 +2601,10 @@ apswvfsfile_xSync(sqlite3_file *file, int flags)
 
   PyObject *vargs[] = { NULL, apswfile->file, PyLong_FromLong(flags) };
   if (vargs[2])
+  {
     pyresult = PyObject_VectorcallMethod(apst.xSync, vargs + 1, 2 | PY_VECTORCALL_ARGUMENTS_OFFSET, NULL);
+    Py_DECREF(vargs[2]);
+  }
   if (!pyresult)
   {
     result = MakeSqliteMsgFromPyException(NULL);
@@ -2646,7 +2709,7 @@ apswvfsfile_xDeviceCharacteristics(sqlite3_file *file)
   PyObject *pyresult = NULL;
   FILEPREAMBLE;
 
-  if (PyObject_HasAttr(apswfile->file, apst.xDeviceCharacteristics))
+  if (1 == PyObject_HasAttrWithError(apswfile->file, apst.xDeviceCharacteristics))
   {
     PyObject *vargs[] = { NULL, apswfile->file };
     pyresult

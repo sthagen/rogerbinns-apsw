@@ -526,7 +526,7 @@ Connection_close_internal(Connection *self, int force)
 
   sqlite3_mutex_leave(dbmutex);
 
-  for (;;)
+  for (int count = 0; count < 100; count++)
   {
     res = sqlite3_close(db);
     if (res == SQLITE_BUSY)
@@ -541,13 +541,20 @@ Connection_close_internal(Connection *self, int force)
 
   if (res != SQLITE_OK)
   {
+    /* we consider the connection closed but are unable to close it.  the likely
+       explanation is problems with a dependent, or an extension.  the former
+       won't happen unless we run out of memory */
+    sqlite3_close_v2(db);
+
     SET_EXC(res, NULL);
     if (force == 2)
     {
-      PyErr_Format(ExcConnectionNotClosed,
-                   "apsw.Connection at address %p. The destructor "
-                   "has encountered an error %d closing the connection, but cannot raise an exception.",
-                   self, res);
+      CHAIN_EXC_BEGIN
+        PyErr_Format(ExcConnectionNotClosed,
+                     "apsw.Connection at address %p. The destructor "
+                     "has encountered an error %d closing the connection, but cannot raise an exception.",
+                     self, res);
+      CHAIN_EXC_END;
       apsw_write_unraisable(NULL);
     }
   }
@@ -710,7 +717,7 @@ Connection_init(PyObject *self_, PyObject *args, PyObject *kwargs)
   {
     Connection_init_CHECK;
     PREVENT_INIT_MULTIPLE_CALLS;
-    ARG_CONVERT_VARARGS_TO_FASTCALL(4, Connection_init_USAGE);
+    ARG_CONVERT_VARARGS_TO_FASTCALL(5, Connection_init_USAGE);
     ARG_PROLOG(4, Connection_init_KWNAMES);
     ARG_MANDATORY ARG_str(filename);
     ARG_OPTIONAL ARG_int(flags);
@@ -2161,8 +2168,7 @@ walhookcb(void *context, sqlite3 *db, const char *dbname, int npages)
   gilstate = PyGILState_Ensure();
 
   MakeExistingException();
-  if (PyErr_Occurred())
-    apsw_write_unraisable(NULL);
+  CHAIN_EXC_BEGIN
 
   PyObject *vargs[] = { NULL, (PyObject *)self, PyUnicode_FromString(dbname), PyLong_FromLong(npages) };
   if (vargs[2] && vargs[3])
@@ -2187,6 +2193,7 @@ walhookcb(void *context, sqlite3 *db, const char *dbname, int npages)
 
 finally:
   Py_XDECREF(retval);
+  CHAIN_EXC_END;
   PyGILState_Release(gilstate);
   return code;
 }
@@ -2664,8 +2671,8 @@ collationneeded_cb(void *pAux, sqlite3 *Py_UNUSED(db), int eTextRep, const char 
 
   MakeExistingException();
 
-  if (PyErr_Occurred())
-    apsw_write_unraisable(NULL);
+  CHAIN_EXC_BEGIN
+
   PyObject *vargs[] = { NULL, (PyObject *)self, PyUnicode_FromString(name) };
   if (vargs[2])
     res = PyObject_Vectorcall(self->collationneeded, vargs + 1, 2 | PY_VECTORCALL_ARGUMENTS_OFFSET, NULL);
@@ -2674,6 +2681,8 @@ collationneeded_cb(void *pAux, sqlite3 *Py_UNUSED(db), int eTextRep, const char 
     AddTraceBackHere(__FILE__, __LINE__, "collationneeded callback", "{s: O, s: i, s: s}", "Connection", self,
                      "eTextRep", eTextRep, "name", name);
   Py_XDECREF(res);
+
+  CHAIN_EXC_END;
 
   PyGILState_Release(gilstate);
 }
@@ -6974,7 +6983,6 @@ Connection_tp_traverse(PyObject *self_, visitproc visit, void *arg)
   Py_VISIT(self->convert_binding);
   Py_VISIT(self->convert_jsonb);
   Py_VISIT(self->vfs);
-  Py_VISIT(self->dependents);
   Py_VISIT(self->cursor_factory);
   for (unsigned i = 0; i < self->tracehooks_count; i++)
   {

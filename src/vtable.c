@@ -1069,7 +1069,7 @@ apswvtabDestroyOrDisconnect(sqlite3_vtab *pVtab, PyObject *methodname, const cha
 
   CHAIN_EXC_BEGIN
   /* mandatory for Destroy, optional for Disconnect */
-  if (methodname == apst.Destroy || PyObject_HasAttr(vtable, methodname))
+  if (methodname == apst.Destroy || 1 == PyObject_HasAttrWithError(vtable, methodname))
   {
     PyObject *vargs[] = { NULL, vtable };
     res = PyObject_VectorcallMethod(methodname, vargs + 1, 1 | PY_VECTORCALL_ARGUMENTS_OFFSET, NULL);
@@ -1535,6 +1535,8 @@ apswvtabBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *indexinfo)
       if (omitv == -1)
         goto constraintfail;
       indexinfo->aConstraintUsage[i].argvIndex = PyLong_AsInt(argvindex) + 1;
+      if (PyErr_Occurred())
+        goto constraintfail;
       indexinfo->aConstraintUsage[i].omit = omitv;
       Py_DECREF(constraint);
       Py_DECREF(argvindex);
@@ -1568,7 +1570,10 @@ apswvtabBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *indexinfo)
       }
       indexinfo->idxNum = PyLong_AsInt(idxnum);
       if (PyErr_Occurred())
+      {
+        Py_DECREF(idxnum);
         goto pyexception;
+      }
     }
     Py_DECREF(idxnum);
   }
@@ -1590,9 +1595,16 @@ apswvtabBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *indexinfo)
         goto pyexception;
       }
       assert(indexinfo->idxStr == NULL);
-      const char *svalue = PyUnicode_AsUTF8(idxstr);
+      Py_ssize_t idxstr_len;
+      const char *svalue = PyUnicode_AsUTF8AndSize(idxstr, &idxstr_len);
       if (!svalue)
       {
+        Py_DECREF(idxstr);
+        goto pyexception;
+      }
+      if (strlen(svalue) != (size_t)idxstr_len)
+      {
+        PyErr_Format(PyExc_ValueError, "idxStr %R contains embedded null", idxstr);
         Py_DECREF(idxstr);
         goto pyexception;
       }
@@ -1606,6 +1618,7 @@ apswvtabBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *indexinfo)
       indexinfo->idxStr = (char *)isvalue;
       indexinfo->needToFreeIdxStr = 1;
     }
+    Py_DECREF(idxstr);
   }
 
   /* item 3 is orderByConsumed */
@@ -1707,7 +1720,7 @@ apswvtabTransactionMethod(sqlite3_vtab *pVtab, PyObject *name, const char *excep
 
   vtable = ((apsw_vtable *)pVtab)->vtable;
   CHAIN_EXC_BEGIN
-  if (PyObject_HasAttr(vtable, name))
+  if (1 == PyObject_HasAttrWithError(vtable, name))
   {
     PyObject *vargs[] = { NULL, vtable };
     res = PyObject_VectorcallMethod(name, vargs + 1, 1 | PY_VECTORCALL_ARGUMENTS_OFFSET, NULL);
@@ -1986,7 +1999,7 @@ apswvtabFindFunction(sqlite3_vtab *pVtab, int nArg, const char *zName,
   vtable = av->vtable;
 
   MakeExistingException();
-  if (PyErr_Occurred() || !PyObject_HasAttr(vtable, apst.FindFunction))
+  if (PyErr_Occurred() || 1 != PyObject_HasAttrWithError(vtable, apst.FindFunction))
     goto finally;
 
   PyObject *vargs[] = { NULL, vtable, PyUnicode_FromString(zName), PyLong_FromLong(nArg) };
@@ -2039,10 +2052,11 @@ apswvtabFindFunction(sqlite3_vtab *pVtab, int nArg, const char *zName,
       sqliteres = PyLong_AsInt(item_0);
       if (PyErr_Occurred() || sqliteres < SQLITE_INDEX_CONSTRAINT_FUNCTION || sqliteres > 255)
       {
-        PyErr_Format(PyExc_ValueError,
-                     "Expected FindFunction sequence [int, Callable] to have int between "
-                     "SQLITE_INDEX_CONSTRAINT_FUNCTION and 255, not %i",
-                     sqliteres);
+        if (!PyErr_Occurred())
+          PyErr_Format(PyExc_ValueError,
+                       "Expected FindFunction sequence [int, Callable] to have int between "
+                       "SQLITE_INDEX_CONSTRAINT_FUNCTION and 255, not %i",
+                       sqliteres);
         sqliteres = 0;
         goto finally;
       }
@@ -2091,7 +2105,7 @@ apswvtabRename(sqlite3_vtab *pVtab, const char *zNew)
   vtable = ((apsw_vtable *)pVtab)->vtable;
 
   MakeExistingException();
-  if (!PyErr_Occurred() && PyObject_HasAttr(vtable, apst.Rename))
+  if (!PyErr_Occurred() && 1 == PyObject_HasAttrWithError(vtable, apst.Rename))
   {
     PyObject *vargs[] = { NULL, vtable, convertutf8string(zNew) };
     if (vargs[2])
@@ -2129,7 +2143,7 @@ apswvtabSavepoint(sqlite3_vtab *pVtab, int level)
 
   MakeExistingException();
 
-  if (!PyErr_Occurred() && PyObject_HasAttr(vtable, apst.Savepoint))
+  if (!PyErr_Occurred() && 1 == PyObject_HasAttrWithError(vtable, apst.Savepoint))
   {
     PyObject *vargs[] = { NULL, vtable, PyLong_FromLong(level) };
     if (vargs[2])
@@ -2167,7 +2181,7 @@ apswvtabRelease(sqlite3_vtab *pVtab, int level)
 
   MakeExistingException();
 
-  if (!PyErr_Occurred() && PyObject_HasAttr(vtable, apst.Release))
+  if (!PyErr_Occurred() && 1 == PyObject_HasAttrWithError(vtable, apst.Release))
   {
     PyObject *vargs[] = { NULL, vtable, PyLong_FromLong(level) };
     if (vargs[2])
@@ -2206,7 +2220,7 @@ apswvtabRollbackTo(sqlite3_vtab *pVtab, int level)
 
   MakeExistingException();
 
-  if (!PyErr_Occurred() && PyObject_HasAttr(vtable, apst.RollbackTo))
+  if (!PyErr_Occurred() && 1 == PyObject_HasAttrWithError(vtable, apst.RollbackTo))
   {
     PyObject *vargs[] = { NULL, vtable, PyLong_FromLong(level) };
     if (vargs[2])
@@ -2251,7 +2265,7 @@ apswvtabIntegrity(sqlite3_vtab *pVtab, const char *zSchema, const char *zName, i
 
   MakeExistingException();
 
-  if (!PyErr_Occurred() && PyObject_HasAttr(vtable, apst.Integrity))
+  if (!PyErr_Occurred() && 1 == PyObject_HasAttrWithError(vtable, apst.Integrity))
   {
     PyObject *vargs[]
         = { NULL, vtable, PyUnicode_FromString(zSchema), PyUnicode_FromString(zName), PyLong_FromLong(isQuick) };
@@ -2747,7 +2761,9 @@ apswvtabShadowName(int which, const char *table_suffix)
 
   MakeExistingException();
 
-  if (PyObject_HasAttr(shadowname_allocation[which].source, apst.ShadowName))
+  CHAIN_EXC_BEGIN
+
+  if (1 == PyObject_HasAttrWithError(shadowname_allocation[which].source, apst.ShadowName))
   {
     PyObject *vargs[] = { NULL, shadowname_allocation[which].source, PyUnicode_FromString(table_suffix) };
     if (vargs[2])
@@ -2765,12 +2781,12 @@ apswvtabShadowName(int which, const char *table_suffix)
       PyErr_Format(PyExc_TypeError, "Expected a bool from ShadowName not %s", Py_TypeName(res));
 
     if (PyErr_Occurred())
-    {
       AddTraceBackHere(__FILE__, __LINE__, "VTModule.ShadowName", "{s: s, s: O}", "table_suffix", table_suffix, "res",
                        OBJ(res));
-      apsw_write_unraisable(NULL);
-    }
   }
+
+  CHAIN_EXC_END;
+
   Py_XDECREF(res);
   PyGILState_Release(gilstate);
   return sqliteres;

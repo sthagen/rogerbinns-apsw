@@ -139,6 +139,50 @@ PyWeakref_GetRef(PyObject *ref, PyObject **pobj)
 }
 #endif
 
+#if PY_VERSION_HEX < 0x030d0000
+#undef PyList_GetItemRef
+static PyObject *
+PyList_GetItemRef(PyObject *list, Py_ssize_t index)
+{
+#include "faultinject.h"
+  return Py_XNewRef(PyList_GetItem(list, index));
+}
+#endif
+
+#if PY_VERSION_HEX < 0x030d0000
+#undef PyObject_HasAttrWithError
+static int
+PyObject_HasAttrWithError(PyObject *o, PyObject *attr_name)
+{
+#include "faultinject.h"
+
+  /* Normal PyObject_HasAttr sends errors to unraisable - this added
+     in py 3.13 preserves them.  */
+
+  assert(!PyErr_Occurred());
+
+  PyObject *res = PyObject_GetAttr(o, attr_name);
+  Py_XDECREF(res);
+
+  if (res)
+    return 1;
+
+  if (!PyErr_Occurred())
+    return 0;
+
+  if (PyErr_ExceptionMatches(PyExc_AttributeError))
+  {
+    PyErr_Clear();
+    return 0;
+  }
+  return -1;
+}
+#endif
+
+/* Ensure compile error if we used non-with error version */
+#define PyObject_HasAttr "You must use PyObject_HasAttrWithError"
+#define PyDict_GetItem "You must use PyDict_getItemWithError"
+
 /* some we made up in the same spirit*/
 static void
 Py_TpFree(PyObject *o)

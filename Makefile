@@ -206,6 +206,8 @@ showsymbols:  ## Finds any C symbols that aren't static(private)
 	set +e; nm --extern-only --defined-only apsw/__init__`$(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))"` | egrep -v ' (__bss_start|_edata|_end|_fini|_init|initapsw|PyInit_apsw)$$' ; test $$? -eq 1 || false
 	test -f apsw/_unicode`$(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))"`
 	set +e; nm --extern-only --defined-only apsw/_unicode`$(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))"` | egrep -v ' (__bss_start|_edata|_end|_fini|_init|PyInit__unicode)$$' ; test $$? -eq 1 || false
+	@echo ; echo; echo
+	tools/genfaultinject.py apsw/__init__`$(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))"` apsw/_unicode`$(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))"`
 
 compile-win:  ## Builds and tests against all the Python versions on Windows
 	-del /q apsw\\*.pyd
@@ -320,6 +322,15 @@ pyfreethread: ## Build a debug FREE THREADED python
 	--with-pydebug --prefix="$(PYFREETHREAD_DIR)" --with-assertions && \
 	env ASAN_OPTIONS=detect_leaks=false $(MAKE) -j install
 	$(MAKE) dev-depends PYTHON=$(PYFREETHREAD_DIR)/bin/python3
+
+pybuild: ## Builds a Python.  Set $PY_VER
+	[ ! -z "$(PY_VER)" ]  # must set $$PY_VER
+	set -ex && INSTDIR="/space/py`echo \"$(PY_VER)\" | cut -d. -f1,2`" \
+	&& cd "$$INSTDIR" && find . -delete \
+	&& curl "https://www.python.org/ftp/python/$(PY_VER)/Python-$(PY_VER).tar.xz" | tar xfJ - \
+	&& cd Python-$(PY_VER) && ./configure --prefix="$$INSTDIR" --with-assertions --with-pydebug \
+	&& $(MAKE) -j install
+	INSTDIR="/space/py`echo \"$(PY_VER)\" | cut -d. -f1,2`" && $(MAKE) dev-depends PYTHON="$$INSTDIR/bin/python3"
 
 langserver:  ## Language server integration json
 	$(PYTHON) tools/gencompilecommands.py > compile_commands.json

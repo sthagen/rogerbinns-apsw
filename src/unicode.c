@@ -1871,9 +1871,10 @@ grapheme_substr(PyObject *Py_UNUSED(self), PyObject *const *fast_args, Py_ssize_
   if (nchars)
   {
     start_offset = PyLong_AsSsize_t(PyList_GET_ITEM(offsets, start));
-    stop_offset = PyLong_AsSsize_t(PyList_GET_ITEM(offsets, stop));
+    if (!PyErr_Occurred())
+      stop_offset = PyLong_AsSsize_t(PyList_GET_ITEM(offsets, stop));
     Py_CLEAR(offsets);
-    return PyUnicode_Substring(text, start_offset, stop_offset);
+    return PyErr_Occurred() ? NULL : PyUnicode_Substring(text, start_offset, stop_offset);
   }
 
   Py_CLEAR(offsets);
@@ -2423,7 +2424,7 @@ OffsetMapper_text(PyObject *self_, void *Py_UNUSED(closure))
     return NULL;
 
   Py_ssize_t offset = 0;
-  for (Py_ssize_t i = 0; i < PyList_GET_SIZE(self->accumulate); i++)
+  for (Py_ssize_t i = 0; self->accumulate && i < PyList_GET_SIZE(self->accumulate); i++)
   {
     PyObject *segment = PyList_GET_ITEM(self->accumulate, i);
     PyUnicode_CopyCharacters(self->text, offset, segment, 0, PyUnicode_GET_LENGTH(segment));

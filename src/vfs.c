@@ -103,9 +103,19 @@ typedef struct apswfcntl_pragma
   int init_was_called;
 } apswfcntl_pragma;
 
+#define CHECK_PRAGMA(retval)                                                                                           \
+  do                                                                                                                   \
+  {                                                                                                                    \
+    if (!self->init_was_called || !self->strings)                                                                      \
+    {                                                                                                                  \
+      PyErr_SetString(PyExc_TypeError, "VFSFcntlPragma had __new__ called, but was not __init__ with a pointer");      \
+      return (retval);                                                                                                 \
+    }                                                                                                                  \
+  } while (0)
+
 /** .. method:: __init__(pointer: int)
 
-The pointer must be what your xFileControl method received.
+The pointer **must** be what your xFileControl method received.
 
 */
 static int
@@ -134,13 +144,20 @@ static PyObject *
 apswfcntl_pragma_get_result(PyObject *self_, void *Py_UNUSED(unused))
 {
   apswfcntl_pragma *self = (apswfcntl_pragma *)self_;
+  CHECK_PRAGMA(NULL);
+
   return convertutf8string(self->strings[0]);
 }
 
 static int
 apswfcntl_pragma_set_result(PyObject *self_, PyObject *value, void *Py_UNUSED(unused))
 {
+  if (!value)
+    return reject_attribute_deletion("VFSFcntlPragma.result");
+
   apswfcntl_pragma *self = (apswfcntl_pragma *)self_;
+  CHECK_PRAGMA(-1);
+
   if (!Py_IsNone(value) && !PyUnicode_Check(value))
   {
     PyErr_Format(PyExc_TypeError, "Expected None or str, not %s", Py_TypeName(value));
@@ -172,9 +189,12 @@ apswfcntl_pragma_set_result(PyObject *self_, PyObject *value, void *Py_UNUSED(un
     The name of the pragma
 */
 static PyObject *
-apswfcntl_pragma_get_name(PyObject *self, void *Py_UNUSED(unused))
+apswfcntl_pragma_get_name(PyObject *self_, void *Py_UNUSED(unused))
 {
-  return convertutf8string(((apswfcntl_pragma *)self)->strings[1]);
+  apswfcntl_pragma *self = (apswfcntl_pragma *)self_;
+  CHECK_PRAGMA(NULL);
+
+  return convertutf8string(self->strings[1]);
 }
 
 /** .. attribute:: value
@@ -183,9 +203,11 @@ apswfcntl_pragma_get_name(PyObject *self, void *Py_UNUSED(unused))
     The value for the pragma, if provided else None,
 */
 static PyObject *
-apswfcntl_pragma_get_value(PyObject *self, void *Py_UNUSED(unused))
+apswfcntl_pragma_get_value(PyObject *self_, void *Py_UNUSED(unused))
 {
-  return convertutf8string(((apswfcntl_pragma *)self)->strings[2]);
+  apswfcntl_pragma *self = (apswfcntl_pragma *)self_;
+  CHECK_PRAGMA(NULL);
+  return convertutf8string(self->strings[2]);
 }
 
 static PyGetSetDef apswfcntl_pragma_getsetters[]
@@ -643,10 +665,16 @@ apswvfs_xOpen(sqlite3_vfs *vfs, const char *zName, sqlite3_file *file, int infla
   if (!flags)
     goto finally;
 
-  PyList_SET_ITEM(flags, 0, PyLong_FromLong(inflags));
-  PyList_SET_ITEM(flags, 1, PyLong_FromLong(pOutFlags ? *pOutFlags : 0));
-  if (PyErr_Occurred())
+  PyObject *tmp_long;
+  tmp_long = PyLong_FromLong(inflags);
+  if (!tmp_long)
     goto finally;
+  PyList_SET_ITEM(flags, 0, tmp_long);
+  tmp_long = PyLong_FromLong(pOutFlags ? *pOutFlags : 0);
+  if (!tmp_long)
+    goto finally;
+  PyList_SET_ITEM(flags, 1, tmp_long);
+  assert(!PyErr_Occurred());
 
   if (inflags & (SQLITE_OPEN_URI | SQLITE_OPEN_MAIN_DB))
   {
@@ -801,7 +829,10 @@ apswvfspy_xOpen(PyObject *self_, PyObject *const *fast_args, Py_ssize_t fast_nar
   if (PyErr_Occurred())
     goto finally;
 
-  PyList_SetItem(flags, 1, PyLong_FromLong(flagsout));
+  PyObject *tmp_long = PyLong_FromLong(flagsout);
+  if(!tmp_long)
+    goto finally;
+  PyList_SetItem(flags, 1, tmp_long);
   if (PyErr_Occurred())
     goto finally;
 
@@ -2885,33 +2916,39 @@ apswvfsfile_xFileControl(sqlite3_file *file, int op, void *pArg)
     /* see if there is a base to call first */
     if (PyObject_TypeCheck(apswfile->file, &APSWVFSFileType))
     {
-      sqlite3_file *base = ((APSWVFSFile *)apswfile->file)->base;
-      result = base->pMethods->xFileControl(base, op, pArg);
+      CHAIN_EXC_BEGIN
+        sqlite3_file *base = ((APSWVFSFile *)apswfile->file)->base;
+        result = base->pMethods->xFileControl(base, op, pArg);
+      CHAIN_EXC_END;
     }
     /* Use the classname */
     const char *name = Py_TYPE(apswfile->file)->tp_name;
     const char *modname = NULL;
-    PyObject *qualname = NULL;
+    PyObject *qualname = NULL, *module = NULL;
 
 #if PY_VERSION_HEX >= 0x030b0000
-    qualname = PyType_GetQualName(Py_TYPE(apswfile->file));
-    if (qualname && PyUnicode_Check(qualname))
-    {
-      const char *tmp_name = PyUnicode_AsUTF8(qualname);
-      if (tmp_name)
-        name = tmp_name;
-    }
+    CHAIN_EXC_BEGIN
+      qualname = PyType_GetQualName(Py_TYPE(apswfile->file));
+      if (qualname && PyUnicode_Check(qualname))
+      {
+        CHAIN_EXC_BEGIN
+          const char *tmp_name = PyUnicode_AsUTF8(qualname);
+          if (tmp_name)
+            name = tmp_name;
+        CHAIN_EXC_END;
+      }
+    CHAIN_EXC_END;
 #endif
 
-    PyErr_Clear();
-
-    PyObject *module = PyObject_GetAttr((PyObject *)Py_TYPE(apswfile->file), apst.s_module);
-    if (module && PyUnicode_Check(module))
-      modname = PyUnicode_AsUTF8(module);
-
-    /* the above calls could have exceptions but they aren't useful,
-       so ignore */
-    PyErr_Clear();
+    CHAIN_EXC_BEGIN
+      module = PyObject_GetAttr((PyObject *)Py_TYPE(apswfile->file), apst.s_module);
+      if (module && PyUnicode_Check(module))
+      {
+        CHAIN_EXC_BEGIN
+          modname = PyUnicode_AsUTF8(module);
+        CHAIN_EXC_END;
+      }
+    CHAIN_EXC_END;
 
     char *new_val = sqlite3_mprintf("%s%s%s%s%s", modname ? modname : "", modname ? "." : "", name,
                                     (*(char **)pArg) ? "/" : "", (*(char **)pArg) ? *(char **)pArg : "");
@@ -2926,8 +2963,9 @@ apswvfsfile_xFileControl(sqlite3_file *file, int op, void *pArg)
         sqlite3_free(*(char **)pArg);
 
       *(char **)pArg = new_val;
-    }
-    result = SQLITE_OK;
+      result = SQLITE_OK;
+    } else
+      result = SQLITE_NOMEM;
     goto end;
   }
 

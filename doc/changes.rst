@@ -10,11 +10,60 @@ history <https://devguide.python.org/versions/>`__.
 APSW changes by version
 -----------------------
 
-next
-====
+3.54.0.0
+========
+
+Binaries for Python 3.15 including pyodide are in pypi.
+
+This is the last release supporting Python 3.10 which is now end of
+life.
+
+Provide :func:`incomplete` to get more details on why some SQL
+may not be complete, or is empty whitespace and comments.  This
+finally allowed fixing the 10½ year old shell issue of a line
+comment prompting for continuation.  (:issue:`212`)
+
+Added the ``diskused`` extension to :doc:`extra`, and
+:func:`apsw.ext.diskused` to extract data from it.
+
+:func:`apsw.sqlite_extra.load` and shell :ref:`load <shell-cmd-load>`
+use :meth:`Connection.config` to enable extension loading with
+``SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION`` only for the duration
+of the call to load an extension, and return extension loading
+state to previous setting.  See :meth:`Connection.enable_load_extension`
+documentation for how to do this safer approach.
+
+Added :func:`apsw.ext.compose_uri` to correctly compose a URI filename
+and parameters, and updated documentation to point to it.
+
+:attr:`Connection.cursor_factory` returned objects must have a
+``close`` method.  This is now documented, and enforced.
 
 The `apsw.fork_checker` function has been removed, as supporting it has
 become impractical.  It was originally added in 2009.  (:issue:`632`)
+
+:func:`apsw.ext.log_sqlite` fixed to always have the correct level per
+message, and better document  the ``level`` parameter (:issue:`624`
+PY009).
+
+:meth:`Connection.db_filename` adds a parameter to get the
+corresponding journal/wal filename.  You need to use this method to
+get those for non-main database, as :attr:`~Connection.filename_wal`
+and :attr:`~Connection.filename_journal` only work with ``main``.
+
+Fixed :func:`apsw.ext.dbinfo` to correctly report the journal/wal
+filename - before the names were for ``main``.  The header contents
+were correct.  (:issue:`624` PY010)
+
+Added __lazy_modules__ to Python files so Python 3.15+ will do their
+imports on demand, instead of all at import time.  This improves
+startup times.
+
+Many code fixes responding to AI reports in :issue:`624` and
+:issue:`627`.  All fixes done by human.  The vast majority is C code
+in error handling paths.  Regular code was unlikely to encounter the
+errors.  If it did the majority would be the wrong exception types,
+with a few resulting in leaks, or crashes.
 
 3.53.4.0
 ========

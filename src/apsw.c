@@ -128,8 +128,8 @@ API Reference
 #include "sqlite3.h"
 #endif
 
-#if SQLITE_VERSION_NUMBER < 3053000
-#error Your SQLite version is too old.  It must be at least 3.53
+#if SQLITE_VERSION_NUMBER < 3054000
+#error Your SQLite version is too old.  It must be at least 3.54
 #endif
 
 #include "sqlite_debug.h"
@@ -150,7 +150,13 @@ API Reference
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <pythread.h>
+
+#if PY_VERSION_HEX < 0x030c0000
 #include "structmember.h"
+#define Py_T_OBJECT_EX T_OBJECT_EX
+#define Py_READONLY READONLY
+
+#endif
 
 /* This function does nothing in regular builds, but in faultinjection
 builds allows for an existing exception to be injected in callbacks */
@@ -215,7 +221,7 @@ static PyObject *apsw_no_change_object;
 static PyObject *
 apsw_no_change_repr(PyObject *self)
 {
-  return Py_NewRef(apst.no_change);
+  return PyUnicode_FromString("<apsw.no_change>");
 }
 
 static PyTypeObject apsw_no_change_type = {
@@ -455,6 +461,8 @@ apsw_connections(PyObject *Py_UNUSED(self), PyObject *Py_UNUSED(unused))
     goto fail;
   for (i = 0; the_connections && i < PyList_GET_SIZE(the_connections); i++)
   {
+    assert(PyWeakref_Check(PyList_GET_ITEM(the_connections, i)));
+
     if (PyWeakref_GetRef(PyList_GET_ITEM(the_connections, i), &item) < 0)
       goto fail;
     if (item)
@@ -478,6 +486,8 @@ apsw_connection_remove(PyObject *con)
   for (i = 0; the_connections && i < PyList_GET_SIZE(the_connections);)
   {
     PyObject *wr = PyList_GET_ITEM(the_connections, i);
+    assert(PyWeakref_Check(wr));
+
     PyObject *wo = NULL;
     if (PyWeakref_GetRef(wr, &wo) < 0)
     {
@@ -517,7 +527,10 @@ apsw_connection_add(PyObject *con)
 
 /** .. method:: initialize() -> None
 
-  It is unlikely you will want to call this method as SQLite automatically initializes.
+  It is unlikely you will want to call this method as SQLite is
+  initialized when APSW is loaded.
+
+  See :func:`config` and :ref:`urinames` for an example usage.
 
   -* sqlite3_initialize
 */
@@ -542,6 +555,8 @@ initialize(PyObject *Py_UNUSED(self), PyObject *Py_UNUSED(unused))
   :func:`connections active <connections>` and need to close them first.
 
   VFS remain registered across a shutdown and initialise.
+
+  See :func:`config` and :ref:`urinames` for an example usage.
 
   -* sqlite3_shutdown
 */
@@ -576,6 +591,10 @@ sqliteshutdown(PyObject *Py_UNUSED(unused1), PyObject *Py_UNUSED(unused2))
   Some operations don't make sense from a Python program.  All the
   remaining are supported.
 
+  SQLite doesn't allow most options to be changed once it is
+  initialized.  See :ref:`urinames` for an example of shutting down
+  SQLite, changing an option, and initializing again.
+
   -* sqlite3_config
 */
 
@@ -584,6 +603,9 @@ static PyObject *logger_cb = NULL;
 static void
 apsw_logger(void *arg, int errcode, const char *message)
 {
+  /* this shouldn't be possible in theory - defend anyway */
+  if (!Py_IsInitialized())
+    return;
   PyGILState_STATE gilstate;
   PyObject *res = NULL;
 
@@ -868,9 +890,9 @@ randomness(PyObject *Py_UNUSED(self), PyObject *const *fast_args, Py_ssize_t fas
   bytes = PyBytes_FromStringAndSize(NULL, amount);
   if (!bytes)
     return bytes;
-  /* GIL is not released because this method is only here for completeness
-     and testing, and a small number of bytes is expected. */
-  sqlite3_randomness(amount, PyBytes_AS_STRING(bytes));
+  Py_BEGIN_ALLOW_THREADS
+    sqlite3_randomness(amount, PyBytes_AS_STRING(bytes));
+  Py_END_ALLOW_THREADS;
   return bytes;
 }
 
@@ -1136,12 +1158,162 @@ apswcomplete(PyObject *Py_UNUSED(self), PyObject *const *fast_args, Py_ssize_t f
     ARG_EPILOG(NULL, Apsw_complete_USAGE, );
   }
 
-  /* GIL is not released because the method runs quickly */
-  res = sqlite3_complete(statement);
+  Py_BEGIN_ALLOW_THREADS
+    res = sqlite3_complete(statement);
+  Py_END_ALLOW_THREADS;
 
   if (res)
     Py_RETURN_TRUE;
   Py_RETURN_FALSE;
+}
+
+/* used for calling sqlite3_incomplete */
+static PyStructSequence_Field apsw_incomplete_result_fields[]
+    = { { "status", "Is it complete" },
+        { "requires", "What is needed to complete" },
+        { "incomplete", "What token or element is unfinished" },
+        { "balance", "Level of unmatched parentheses" },
+        { 0 } };
+
+static PyStructSequence_Desc apsw_incomplete_result = { .name = "apsw.IncompleteResult",
+                                                        .doc = "Return for apsw.incomplete - see its documentation",
+                                                        .n_in_sequence = 4,
+                                                        .fields = apsw_incomplete_result_fields };
+
+static PyTypeObject apsw_incomplete_result_type;
+
+/** .. method:: incomplete(statement: str) -> IncompleteResult
+
+  Provides more details about why a statement is considered incomplete,
+  or if it is whitespace and comments only,
+
+  The result object has the following attributes.  Note that new values
+  for each may be added in future SQLite releases.
+
+  status: int
+
+    Check this attribute first.
+
+    .. list-table::
+      :header-rows: 1
+      :widths: auto
+
+      * - Value
+        - Meaning
+      * - ``SQLITE_OK``
+        - at least one statement is present, and all statements are
+          complete
+      * - ``SQLITE_EMPTY``
+        -  consists only of whitespace and comments
+      * - ``SQLITE_ERROR``
+        - incomplete.
+
+  requires: int
+
+    What is required semantically to complete the statement.  Triggers
+    have nested statements inside.
+
+    .. list-table::
+      :header-rows: 1
+      :widths: auto
+
+      * - Value
+        - Meaning
+      * - 0
+        - Statement is complete or empty
+      * - 1
+        - Needs a semicolon
+      * - 2
+        - Needs ``END`` and a semicolon
+      * - 3
+        - Needs semicolon, ``END``, and a semicolon
+
+  incomplete: str | None
+
+    Identifies what element of the SQL is incomplete such
+    as needing a closing quote to match an open quote.
+
+    .. list-table::
+      :header-rows: 1
+      :widths: auto
+
+      * - Value
+        - Meaning
+      * - ``None``
+        - Statement is complete or empty
+      * - ````` (apostrophe)
+        - Incomplete string or blob literal
+      * - ``"`` (double quote)
+        - Incomplete quoted identifier
+      * - ` (backtick)
+        - Incomplete quoted identifier (MySQL style)
+      * - ``]`` (close square bracket)
+        - Incomplete quoted identifier (SQLServer style)
+      * - ``-`` (dash)
+        - Incomplete line comment - there needs to be a newline
+          to complete the comment.
+      * - ``/`` (slash)
+        - Incomplete C style comment`
+
+  balance: int
+
+    Level of unbalanced parentheses (round brackets).  A positive number
+    indicating how many closes are needed to balance the open ones.  It
+    can also be negative if there are more closes than opens.
+
+  -* sqlite3_incomplete
+
+  .. seealso::
+
+    * :func:`complete`
+*/
+static PyObject *
+apswincomplete(PyObject *Py_UNUSED(self), PyObject *const *fast_args, Py_ssize_t fast_nargs, PyObject *fast_kwnames)
+{
+  const char *statement = NULL;
+  sqlite3_int64 res;
+
+  {
+    Apsw_incomplete_CHECK;
+    ARG_PROLOG(1, Apsw_incomplete_KWNAMES);
+    ARG_MANDATORY ARG_str(statement);
+    ARG_EPILOG(NULL, Apsw_incomplete_USAGE, );
+  }
+
+  Py_BEGIN_ALLOW_THREADS
+    res = sqlite3_incomplete(statement);
+  Py_END_ALLOW_THREADS;
+
+  PyObject *incomplete = PyStructSequence_New(&apsw_incomplete_result_type);
+  if (!incomplete)
+    goto error;
+
+  PyObject *v = PyLong_FromLong(res & 0xff);
+  if (!v)
+    goto error;
+  PyStructSequence_SetItem(incomplete, 0, v);
+
+  v = PyLong_FromLong((res >> 8) & 0xff);
+  if (!v)
+    goto error;
+  PyStructSequence_SetItem(incomplete, 1, v);
+
+  unsigned int c = (res >> 16) & 0xff;
+  v = c ? PyUnicode_FromOrdinal(c) : Py_NewRef(Py_None);
+  if (!v)
+    goto error;
+  PyStructSequence_SetItem(incomplete, 2, v);
+
+  v = PyLong_FromLong(res >> 32);
+  if (!v)
+    goto error;
+  PyStructSequence_SetItem(incomplete, 3, v);
+
+  return incomplete;
+error:
+  assert(PyErr_Occurred());
+  Py_XDECREF(incomplete);
+  return NULL;
 }
 
 #ifdef __SANITIZE_ADDRESS__
@@ -1649,8 +1821,6 @@ apsw_allow_missing_dict_bindings(PyObject *Py_UNUSED(module), PyObject *const *f
   Py_RETURN_FALSE;
 }
 
-
-
 static PyMethodDef module_methods[] = {
   { "sqlite3_sourceid", (PyCFunction)get_sqlite3_sourceid, METH_NOARGS, Apsw_sqlite3_sourceid_DOC },
   { "sqlite_lib_version", get_sqlite_version, METH_NOARGS, Apsw_sqlite_lib_version_DOC },
@@ -1673,6 +1843,7 @@ static PyMethodDef module_methods[] = {
   { "randomness", (PyCFunction)randomness, METH_FASTCALL | METH_KEYWORDS, Apsw_randomness_DOC },
   { "exception_for", (PyCFunction)get_apsw_exception_for, METH_FASTCALL | METH_KEYWORDS, Apsw_exception_for_DOC },
   { "complete", (PyCFunction)apswcomplete, METH_FASTCALL | METH_KEYWORDS, Apsw_complete_DOC },
+  { "incomplete", (PyCFunction)apswincomplete, METH_FASTCALL | METH_KEYWORDS, Apsw_incomplete_DOC },
   { "strlike", (PyCFunction)apsw_strlike, METH_FASTCALL | METH_KEYWORDS, Apsw_strlike_DOC },
   { "strglob", (PyCFunction)apsw_strglob, METH_FASTCALL | METH_KEYWORDS, Apsw_strglob_DOC },
   { "stricmp", (PyCFunction)apsw_stricmp, METH_FASTCALL | METH_KEYWORDS, Apsw_stricmp_DOC },
@@ -1719,29 +1890,91 @@ static int module_is_initialized;
 static int
 apsw_module_setattr(PyObject *module, PyObject *name, PyObject *value)
 {
-  if (module_is_initialized
-      && (PyObject_RichCompareBool(apst.async_controller, name, Py_EQ) == 1
-          || (!PyErr_Occurred() && PyObject_RichCompareBool(apst.async_cursor_prefetch, name, Py_EQ) == 1)))
+  if (module_is_initialized)
   {
-    PyErr_Format(PyExc_AttributeError,
-                 "Do not overwrite apsw.%S.  It is a context var - use its set method in your context", name);
-    return -1;
-  }
+    /* which string matched? Because PyObject_RichCompareBool can exception this
+       looks ridiculous */
 
-  if (PyErr_Occurred())
-    return -1;
+    int s_async_controller = PyObject_RichCompareBool(apst.async_controller, name, Py_EQ) == 1,
+        s_async_cursor_prefetch = !PyErr_Occurred() && !s_async_controller
+                                  && PyObject_RichCompareBool(apst.async_cursor_prefetch, name, Py_EQ) == 1,
+        s_async_run_coro = !PyErr_Occurred() && !s_async_controller && !s_async_cursor_prefetch
+                           && PyObject_RichCompareBool(apst.async_run_coro, name, Py_EQ) == 1,
+        s_connection_hooks = !PyErr_Occurred() && !s_async_controller && !s_async_cursor_prefetch && !s_async_run_coro
+                             && PyObject_RichCompareBool(apst.connection_hooks, name, Py_EQ) == 1,
+        s_keywords = !PyErr_Occurred() && !s_async_controller && !s_async_cursor_prefetch && !s_async_run_coro
+                     && !s_connection_hooks && PyObject_RichCompareBool(apst.keywords, name, Py_EQ) == 1,
+        s_no_change = !PyErr_Occurred() && !s_async_controller && !s_async_cursor_prefetch && !s_async_run_coro
+                      && !s_connection_hooks && !s_keywords
+                      && PyObject_RichCompareBool(apst.no_change, name, Py_EQ) == 1,
+        s_using_amalgamation = !PyErr_Occurred() && !s_async_controller && !s_async_cursor_prefetch && !s_async_run_coro
+                               && !s_connection_hooks && !s_keywords && !s_no_change
+                               && PyObject_RichCompareBool(apst.using_amalgamation, name, Py_EQ) == 1;
 
-  if (module_is_initialized && (PyObject_RichCompareBool(apst.async_run_coro, name, Py_EQ) == 1))
-  {
-    if (!Py_IsNone(value) && !PyCallable_Check(value))
-    {
-      PyErr_Format(PyExc_TypeError, "Expected None or a callable for async_run_coro, not %s", Py_TypeName(value));
+    if (PyErr_Occurred())
       return -1;
+
+    if (s_async_controller || s_async_cursor_prefetch || s_async_run_coro || s_connection_hooks || s_keywords
+        || s_no_change || s_using_amalgamation)
+    {
+
+      if (!value)
+      {
+        /* deletion prevention */
+        if (s_async_controller)
+          reject_attribute_deletion("apsw.async_controller");
+        else if (s_async_cursor_prefetch)
+          reject_attribute_deletion("apsw.async_cursor_prefetch");
+        else if (s_async_run_coro)
+          reject_attribute_deletion("apsw.async_run_coro");
+        else if (s_connection_hooks)
+          reject_attribute_deletion("apsw.connection_hooks");
+        else if (s_keywords)
+          reject_attribute_deletion("apsw.keywords");
+        else if (s_no_change)
+          reject_attribute_deletion("apsw.no_change");
+        else if (s_using_amalgamation)
+          reject_attribute_deletion("apsw.using_amalgamation");
+
+        assert(PyErr_Occurred());
+        return -1;
+      }
+
+      if (s_async_controller || s_async_cursor_prefetch)
+      {
+        PyErr_Format(PyExc_AttributeError,
+                     "Do not overwrite apsw.%S.  It is a context var - use its set method in your context", name);
+        return -1;
+      }
+      else if (s_async_run_coro)
+      {
+        if (!Py_IsNone(value) && !PyCallable_Check(value))
+        {
+          PyErr_Format(PyExc_TypeError, "Expected None or a callable for apsw.async_run_coro, not %s",
+                       Py_TypeName(value));
+          return -1;
+        }
+        return PyDict_SetItem(PyThreadState_GetDict(), async_run_coro_sentinel, value);
+      }
+      else if (s_connection_hooks)
+      {
+        if (!PySequence_Check(value))
+        {
+          PyErr_Format(PyExc_TypeError, "Expected a sequence for apsw.connection_hooks, not %s", Py_TypeName(value));
+          return -1;
+        }
+      }
+      else
+      {
+        PyErr_Format(PyExc_AttributeError, "apsw.%S is readonly", name);
+        return -1;
+      }
     }
-    return PyDict_SetItem(PyThreadState_GetDict(), async_run_coro_sentinel, value);
   }
 
-  return PyErr_Occurred() ? -1 : PyObject_GenericSetAttr(module, name, value);
+  assert(!PyErr_Occurred());
+
+  return PyObject_GenericSetAttr(module, name, value);
 }
 
 static PyObject *
@@ -1749,12 +1982,15 @@ apsw_module_getattr(PyObject *module, PyObject *name)
 {
   if (module_is_initialized && (PyObject_RichCompareBool(apst.async_run_coro, name, Py_EQ) == 1))
   {
-    PyObject *runner = PyDict_GetItemWithError(PyThreadState_GetDict(), async_run_coro_sentinel);
+    PyObject *runner = Py_XNewRef(PyDict_GetItemWithError(PyThreadState_GetDict(), async_run_coro_sentinel));
     if (PyErr_Occurred())
+    {
+      Py_XDECREF(runner);
       return NULL;
+    }
     if (!runner)
       Py_RETURN_NONE;
-    return Py_NewRef(runner);
+    return runner;
   }
   if (PyErr_Occurred())
     return NULL;
@@ -1807,6 +2043,8 @@ apsw_module_clear_internal(PyObject *self, int deep)
     for (Py_ssize_t i = 0; i < PyList_GET_SIZE(conns); i++)
     {
       PyObject *item;
+      assert(PyWeakref_Check(PyList_GET_ITEM(conns, i)));
+
       if (PyWeakref_GetRef(PyList_GET_ITEM(conns, i), &item) < 0)
         apsw_write_unraisable(NULL);
       else if (item)
@@ -1896,7 +2134,6 @@ PyMODINIT_FUNC
 PyInit_apsw(void)
 {
   PyObject *m = NULL;
-  PyObject *hooks;
 
   assert(sizeof(int) == 4);       /* we expect 32 bit ints */
   assert(sizeof(long long) == 8); /* we expect 64 bit long long */
@@ -1940,6 +2177,10 @@ PyInit_apsw(void)
   */
   if (Py_REFCNT(&apsw_unraisable_info_type) == 0)
     if (PyStructSequence_InitType2(&apsw_unraisable_info_type, &apsw_unraisable_info))
+      goto fail;
+
+  if (Py_REFCNT(&apsw_incomplete_result_type) == 0)
+    if (PyStructSequence_InitType2(&apsw_incomplete_result_type, &apsw_incomplete_result))
       goto fail;
 
   m = apswmodule = PyModule_Create2(&apswmoduledef, PYTHON_API_VERSION);
@@ -1999,11 +2240,14 @@ PyInit_apsw(void)
        the new Connection object. If the hook raises an exception then
        the creation of the Connection fails.
   */
-  hooks = PyList_New(0);
+  PyObject *hooks = PyList_New(0);
   if (!hooks)
     goto fail;
   if (PyModule_AddObject(m, "connection_hooks", hooks))
+  {
+    Py_DECREF(hooks);
     goto fail;
+  }
 
   /** .. attribute:: SQLITE_VERSION_NUMBER
     :type: int

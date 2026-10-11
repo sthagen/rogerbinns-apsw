@@ -2212,7 +2212,7 @@ Enter ".help" for instructions
     def command_load(self, cmd):
         """load FILE ?ENTRY?: Loads a SQLite extension library
 
-        Note: Extension loading may not be enabled in the SQLite
+        Note: Extension loading may not be present in the SQLite
         library version you are using.
 
         By default sqlite3_extension_init and a name derived from the filename
@@ -2230,11 +2230,9 @@ Enter ".help" for instructions
         """
         if len(cmd) < 1 or len(cmd) > 2:
             raise self.Error("load takes one or two parameters")
-        try:
-            self.db.enable_load_extension(True)
-        except Exception:
-            raise self.Error("Extension loading is not supported")
 
+        existing: int = self.db.config(apsw.SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION, -1)
+        self.db.config(apsw.SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION, 1)
         try:
             self.db.load_extension(*cmd)
         except Exception:
@@ -2252,6 +2250,8 @@ Enter ".help" for instructions
                 except (apsw.ExtensionLoadingError, LookupError, apsw.sqlite_extra.NotAvailable):
                     pass
             raise
+        finally:
+            self.db.config(apsw.SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION, existing)
 
     def log_handler(self, code, message):
         "Called with SQLite log messages when logging is ON"
@@ -3148,7 +3148,9 @@ Enter ".help" for instructions
 
         For dot commands it will be one line.  For SQL statements it
         will be as many as is necessary to have a
-        :meth:`~apsw.complete` statement (ie semicolon terminated).
+        :meth:`complete <apsw.incomplete>` statement (ie semicolon terminated),
+        or empty/comments only.
+
         Returns None on end of file."""
         try:
             self._completion_first = True
@@ -3159,8 +3161,10 @@ Enter ".help" for instructions
                 return ""
             if command[0] == "?":
                 command = ".help " + command[1:]
-            # incomplete SQL?
-            while command[0] != "." and not apsw.complete(command):
+            # incomplete SQL? We don't have a newline on the end but it must be
+            # present for incomplete to report empty for line comments.  See
+            # #212
+            while command[0] != "." and apsw.incomplete(command + "\n").status not in {apsw.SQLITE_OK, apsw.SQLITE_EMPTY}:
                 self._completion_first = False
                 line = self.get_line(self.moreprompt)
                 if line is None:  # unexpected eof
@@ -3168,8 +3172,6 @@ Enter ".help" for instructions
                         "Incomplete SQL (line %d of %s): %s\n"
                         % (self.input_line_number, getattr(self.stdin, "name", "<stdin>"), command)
                     )
-                if line in ("go", "/"):
-                    break
                 command = command + "\n" + line
             return command
         except KeyboardInterrupt:

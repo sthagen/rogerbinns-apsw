@@ -18,6 +18,7 @@ import glob
 import inspect
 import io
 import itertools
+import logging
 import math
 import mmap
 import os
@@ -36,6 +37,8 @@ import time
 import traceback
 import typing
 import warnings
+
+import apsw.sqlite_extra
 
 
 def ShouldFault(name, pending_exception):
@@ -412,6 +415,7 @@ class APSW(unittest.TestCase):
         for c in apsw.connections():
             # tracers firing cause false mutex checks
             c.trace_v2(0)
+            c.cursor_factory = apsw.Cursor
             self.check_db_mutex(c)
             c.close(True)
         del self.db
@@ -424,6 +428,7 @@ class APSW(unittest.TestCase):
         warnings.filters = self.warnings_filters
         getattr(warnings, "_filters_mutated", lambda: True)()
         sys.unraisablehook = sys.__unraisablehook__
+        apsw.config(apsw.SQLITE_CONFIG_LOG, None)
 
     def assertRaisesRoot(self, exctype, *args, **kwargs):
         # With chained exceptions verifies the first exception raised matches type
@@ -803,7 +808,14 @@ class APSW(unittest.TestCase):
     def testCursorFactory(self):
         "Test Connection.cursor_factory"
         seqbindings = ((3,),) * 3
+
         self.assertEqual(self.db.cursor_factory, apsw.Cursor)
+        with self.assertRaises(AttributeError):
+            del self.db.cursor_factory
+        self.assertEqual(self.db.cursor_factory, apsw.Cursor)
+        self.db.cursor_factory = apsw.Cursor
+        self.assertEqual(self.db.cursor_factory, apsw.Cursor)
+
         for not_callable in (None, apsw, 3):
             try:
                 self.db.cursor_factory = not_callable
@@ -822,16 +834,18 @@ class APSW(unittest.TestCase):
             return 3
 
         self.db.cursor_factory = error
-        self.assertRaises(TypeError, self.db.execute, "select 3")
-        self.assertRaises(TypeError, self.db.executemany, "select 3")
+        self.assertRaises(AttributeError, self.db.execute, "select 3")
+        self.assertRaises(AttributeError, self.db.executemany, "select 3")
 
         class error:
             def __init__(self, _):
                 pass
 
+            close = 3+4j
+
         self.db.cursor_factory = error
-        self.assertRaises(AttributeError, self.db.execute, "select 3")
-        self.assertRaises(AttributeError, self.db.executemany, "select ?", seqbindings)
+        self.assertRaises(TypeError, self.db.execute, "select 3")
+        self.assertRaises(TypeError, self.db.executemany, "select ?", seqbindings)
 
         class inherits(apsw.Cursor):
             pass
@@ -1248,6 +1262,120 @@ class APSW(unittest.TestCase):
         result = [(1, 2, 3), (4, 5, 6)]
         for i, v in enumerate(c.execute("select * from xxset order by x")):
             self.assertEqual(v, result[i])
+
+    def testDelAttr(self):
+        "Deleting attributes"
+
+        cur = self.db.cursor()
+
+        # so there is somethig to backup
+        self.db.execute(
+            "create table foo(x); insert into foo values (randomblob(12345)),(randomblob(12345)),(randomblob(12345))"
+        )
+
+        db2 = apsw.Connection("")
+        backup = db2.backup("main", self.db, "main")
+        backup.step(1)
+
+        if hasattr(apsw, "Session"):
+            session = apsw.Session(self.db, "main")
+        else:
+            session = None
+
+        fcntl = apsw.VFSFcntlPragma(1)
+
+        for obj, name in (
+            (apsw, "async_controller"),
+            (apsw, "async_cursor_prefetch"),
+            (apsw, "async_run_coro"),
+            (apsw, "connection_hooks"),
+            (apsw, "keywords"),
+            (apsw, "no_change"),
+            (apsw, "using_amalgamation"),
+            (self.db, "cursor_factory"),
+            (self.db, "convert_binding"),
+            (self.db, "convert_jsonb"),
+            (self.db, "exec_trace"),
+            (self.db, "row_trace"),
+            (self.db, "authorizer"),
+            (self.db, "transaction_mode"),
+            (cur, "convert_binding"),
+            (cur, "convert_jsonb"),
+            (cur, "exec_trace"),
+            (cur, "row_trace"),
+            (session, "enabled"),
+            (session, "indirect"),
+            (fcntl, "result"),
+        ):
+            if obj is not None:
+                if obj is apsw:
+                    t = "apsw"
+                elif obj is self.db:
+                    t = "Connection"
+                elif obj is cur:
+                    t = "Cursor"
+                elif obj is session:
+                    t = "Session"
+                elif obj is fcntl:
+                    t = "VFSFcntlPragma"
+                else:
+                    self.fail(f"Unhandled object name {obj=}")
+
+                with self.assertRaisesRegex(AttributeError, f"You can not delete the '{t}.{name}' attribute"):
+                    delattr(obj, name)
+
+        # we need indexinfo in xbestindex ...
+        checked = False
+
+        class vtmod:
+            def Create(self, *args):
+                return "create table ignored(a,b,c)", vttable()
+
+        class vttable:
+            def BestIndexObject(_, index_info):
+                nonlocal checked
+                for name in ("idxNum", "idxStr", "orderByConsumed", "estimatedCost", "estimatedRows", "idxFlags"):
+                    with self.assertRaisesRegex(AttributeError, f"You can not delete the 'IndexInfo.{name}' attribute"):
+                        delattr(index_info, name)
+                checked = True
+                # causes the no query solution exception
+                return False
+
+        self.db.create_module("foo", vtmod(), use_bestindex_object=True)
+        with self.assertRaisesRegex(apsw.SQLError, "no query solution"):
+            self.db.execute("create virtual table work using foo(a,b,c); select * from work where a>3 order by c")
+        self.assertTrue(checked)
+
+        if "ENABLE_FTS5" in apsw.compile_options and hasattr(self.db, "register_fts5_function"):
+            checked = False
+
+            def cb(api, *args):
+                nonlocal checked
+                with self.assertRaisesRegex(
+                    AttributeError, f"You can not delete the 'FTS5ExtensionApi.aux_data' attribute"
+                ):
+                    del api.aux_data
+                checked = True
+                return 3
+
+            self.db.register_fts5_function("foo", cb)
+
+            self.db.execute(
+                "CREATE VIRTUAL TABLE email USING fts5(a,b); insert into email values('one', 'two'); select foo(email,a) from email"
+            )
+            self.assertTrue(checked)
+
+        # these can NOT be deleted - a check to make sure code handles correctly
+        db2.close()
+        for obj, name in (
+            (self.db, "open_flags"),
+            (db2, "open_flags"),
+            (self.db, "open_vfs"),
+            (db2, "open_vfs"),
+            (backup, "done"),
+        ):
+            with self.assertRaisesRegex(AttributeError, ".*readonly.*"):
+                delattr(obj, name)
 
     def testCursor(self):
         "Check functionality of the cursor"
@@ -3475,6 +3603,29 @@ class APSW(unittest.TestCase):
         self.assertRaises(TypeError, apsw.complete)  # not enough args
         self.assertRaises(TypeError, apsw.complete, "foo", "bar")  # too many args
 
+    def testIncomplete(self):
+        "sqlite3_incomplete"
+        self.assertRaises(TypeError, apsw.incomplete)
+        self.assertRaises(TypeError, apsw.incomplete, None)
+        self.assertRaises(TypeError, apsw.incomplete, "hello", None)
+        self.assertRaises(ValueError, apsw.incomplete, "/**/\0;")
+
+        for text, expected in (
+            (";", {"status": apsw.SQLITE_OK}),
+            ("select", {"status": apsw.SQLITE_ERROR, "requires": 1}),
+            ("-- line comment", {"status": apsw.SQLITE_ERROR, "incomplete": "-"}),
+            ("create trigger begin select 3", {"status": apsw.SQLITE_ERROR, "requires": 3}),
+            ("create trigger begin select 3;", {"status": apsw.SQLITE_ERROR, "requires": 2}),
+            ("create trigger begin select 3 /*", {"status": apsw.SQLITE_ERROR, "requires": 3, "incomplete": "/"}),
+        ):
+            res = apsw.incomplete(text)
+            if "--" in text:  # the only one where newline matters
+                self.assertNotEqual(res, apsw.incomplete(text + "\n"))
+            else:
+                self.assertEqual(res, apsw.incomplete(text + "\n"))
+            for k, v in expected.items():
+                self.assertEqual(getattr(res, k), v, f"{res=}")
+
     def testBusyHandling(self):
         "Verify busy handling"
         c = self.db.cursor()
@@ -4968,7 +5119,7 @@ class APSW(unittest.TestCase):
         for _ in cur2.execute("select * from foo"):
             pass
         VTable.Disconnect = VTable.Disconnect1
-        self.assertRaisesUnraisable(TypeError, db.close)  # nb close succeeds!
+        self.assertRaises(TypeError, db.close)  # nb close succeeds!
         self.assertRaises(apsw.CursorClosedError, cur2.execute, "select * from foo")
         del db
         db = apsw.Connection(TESTFILEPREFIX + "testdb")
@@ -4977,7 +5128,7 @@ class APSW(unittest.TestCase):
         for _ in cur2.execute("select * from foo"):
             pass
         VTable.Disconnect = VTable.Disconnect2
-        self.assertRaisesUnraisable(ZeroDivisionError, db.close)  # nb close succeeds!
+        self.assertRaises(ZeroDivisionError, db.close)  # nb close succeeds!
         self.assertRaises(apsw.CursorClosedError, cur2.execute, "select * from foo")
         del db
         db = apsw.Connection(TESTFILEPREFIX + "testdb")
@@ -4991,9 +5142,9 @@ class APSW(unittest.TestCase):
 
         # destroy
         VTable.Destroy = VTable.Destroy1
-        self.assertRaises(apsw.SQLError, self.assertRaisesUnraisable, TypeError, cur.execute, "drop table foo")
+        self.assertRaises(TypeError, cur.execute, "drop table foo")
         VTable.Destroy = VTable.Destroy2
-        self.assertRaises(apsw.SQLError, self.assertRaisesUnraisable, ZeroDivisionError, cur.execute, "drop table foo")
+        self.assertRaises(ZeroDivisionError, cur.execute, "drop table foo")
         VTable.Destroy = VTable.Destroy3
         cur.execute("drop table foo")
         self.db.close()
@@ -5240,16 +5391,9 @@ class APSW(unittest.TestCase):
 
     def testConnectionHooks(self):
         "Verify connection hooks"
-        del apsw.connection_hooks
-        try:
-            db = apsw.Connection(":memory:")
-        except AttributeError:
-            pass
-        apsw.connection_hooks = sys  # bad type
-        try:
-            db = apsw.Connection(":memory:")
-        except TypeError:
-            pass
+        with self.assertRaises(TypeError):
+            apsw.connection_hooks = sys
+
         apsw.connection_hooks = ("a", "tuple", "of", "non-callables")
         try:
             db = apsw.Connection(":memory:")
@@ -7589,7 +7733,7 @@ class APSW(unittest.TestCase):
         # Do a SQL write which cause blobs to become invalid
         self.db.execute("update ioerror set blob='fsdfdsfasd' where x=3")
         self.assertRaises(apsw.AbortError, blobro.read)
-        self.assertRaises(apsw.AbortError, blobro.readinto, bytearray(10))
+        self.assertRaises(apsw.AbortError, blobro.read_into, bytearray(10))
         self.assertRaises(apsw.AbortError, blobrw.write, b"Y")
         self.assertRaises(apsw.AbortError, blobrw.write, b"Z")
         self.assertRaises(apsw.AbortError, blobro.readall)
@@ -9595,6 +9739,38 @@ class APSW(unittest.TestCase):
             gc.collect()
             apsw.config(apsw.SQLITE_CONFIG_LOG, None)
 
+    def testExtLog(self):
+        "apsw.ext.config_log"
+        last_args=None
+        last_kwargs =None
+        class namespace:
+            def log(*args, **kwargs):
+                nonlocal last_args, last_kwargs
+                last_args, last_kwargs = args, kwargs
+
+        apsw.ext.log_sqlite(logger=namespace)
+
+        apsw.log(apsw.SQLITE_WARNING, "xzyyz")
+
+        self.assertEqual(last_args[0], logging.WARNING)
+        self.assertEqual(last_args[1], "SQLITE_LOG: %s (%d) %s")
+        self.assertEqual(last_args[2], "xzyyz")
+        self.assertEqual(last_args[3], apsw.SQLITE_WARNING)
+        self.assertEqual(last_args[4], "SQLITE_WARNING")
+        self.assertEqual(last_kwargs, {'extra': {'sqlite_code': 28, 'sqlite_code_name': 'SQLITE_WARNING', 'sqlite_message': 'xzyyz'}})
+
+        apsw.log(apsw.SQLITE_IOERR_DIR_CLOSE, "hello")
+        self.assertEqual(last_args[0], logging.ERROR)
+        self.assertEqual(last_args[2], "hello")
+        self.assertEqual(last_args[3], apsw.SQLITE_IOERR_DIR_CLOSE)
+        self.assertEqual(last_args[4], "SQLITE_IOERR_DIR_CLOSE")
+
+        apsw.log(apsw.SQLITE_SCHEMA, "world")
+        self.assertEqual(last_args[0], logging.INFO)
+        self.assertEqual(last_args[2], "world")
+        self.assertEqual(last_args[3], apsw.SQLITE_SCHEMA)
+        self.assertEqual(last_args[4], "SQLITE_SCHEMA")
+
     def testReadonly(self):
         "Check Connection.readonly()"
         self.assertEqual(self.db.readonly("main"), False)
@@ -9836,6 +10012,11 @@ class APSW(unittest.TestCase):
         for row in self.db.execute("select 3 as three, 'four' as [4]"):
             self.assertEqual(row.three, 3)
             self.assertEqual(row._1, "four")
+        # pathological rename
+        for row in self.db.execute('select 3 as "3", 4 as "break", 5 as __0_, 6 as _1, 7 as __0, 8 as "", 9 as _1_'):
+            self.assertEqual(
+                dataclasses.asdict(row), {"_0": 3, "_1__": 4, "_2": 5, "_1": 6, "_4": 7, "_5": 8, "_1_": 9}
+            )
         # no rename, kwargs
         dcrf2 = apsw.ext.DataClassRowFactory(rename=False, dataclass_kwargs={"frozen": True})
         self.db.set_row_trace(dcrf2)
@@ -10138,6 +10319,30 @@ class APSW(unittest.TestCase):
         ):
             self.assertRaises(apsw.SQLError, self.db.execute, query)
 
+        # ensure names are correctly quoted
+        col_name = "\"']"
+        tbl_name = '-= "['
+
+        def q(n: str):
+            return '"' + n.replace('"', '""') + '"'
+
+        def dummy(select="[", begin="'"):
+            yield 4, 5
+
+        dummy.columns = (" ", col_name)
+        dummy.column_access = apsw.ext.VTColumnAccess.By_Index
+        dummy.primary_key = 1
+
+        apsw.ext.make_virtual_module(self.db, tbl_name, dummy)
+        row = None
+        cur = self.db.execute("select * from " + q(tbl_name))
+        for row in cur:
+            self.assertEqual(" ", cur.get_description()[0][0])
+            self.assertEqual(col_name, cur.get_description()[1][0])
+        self.assertEqual(row, (4, 5))
+
+        self.assertEqual(apsw.ext.compose_uri("a b", {"vfs": "memdb", "level": 42}), "file:a%20b?vfs=memdb&level=42")
+
     def testExtAnalyzePages(self) -> None:
         "analyze pages"
         if "dbstat" not in (self.db.pragma("module_list") or tuple()):
@@ -10185,6 +10390,40 @@ class APSW(unittest.TestCase):
         self.assertIn("xxx", s)
         self.assertIn("one", s)
         self.assertIn("</svg>", s)
+
+    def testExtDiskused(self):
+        "diskused extension output"
+        if not apsw.sqlite_extra.has("diskused") or not "ENABLE_DBSTAT_VTAB" in apsw.compile_options:
+            self.skipTest("diskused extension not available")
+
+        name = "*/\\\nBEGIN"
+
+        self.assertRaisesRegex(ValueError, ".*empty database.*", apsw.ext.diskused, self.db, "main")
+        self.db.execute("create temp table x(y)")
+        self.assertRaisesRegex(ValueError, ".*cannot analyze.*", apsw.ext.diskused, self.db, "temp")
+        self.assertRaisesRegex(ValueError, ".*no such database.*", apsw.ext.diskused, self.db, "zebra3")
+
+        self.db.execute(
+            f'create table "{name}"(x); insert into "{name}" values(randomblob(123456)); create index "{name + name}" on "{name}"(x)'
+        )
+        one, two = apsw.ext.diskused(self.db)
+
+        # quick check on entries and some fields
+        self.assertIn(name, one)
+        self.assertIn(name + name, one)
+        self.assertEqual(one[name]["is_index"], False)
+        self.assertEqual(one[name + name]["is_index"], True)
+        self.assertEqual(one[name + name]["tblname"], name)
+
+        for row in one.values():
+            self.assertEqual(len(row), len(two))
+            self.assertEqual(set(row.keys()), set(two.keys()))
+
+        for v in two.values():
+            # at least a few chars of desciption
+            self.assertGreater(len(v), 4)
+            # and no surplus whitepsace
+            self.assertEqual(v.strip(), v)
 
     def testExtQueryInfo(self) -> None:
         "apsw.ext.query_info"
@@ -10295,6 +10534,20 @@ SELECT group_concat(rtrim(t),x'0a') FROM a;
 
     def testVFSFcntlPragma(self):
         "Test wrapping fcntl pragmas"
+
+        no_init = apsw.VFSFcntlPragma.__new__(apsw.VFSFcntlPragma)
+        with self.assertRaisesRegex(
+            TypeError, "VFSFcntlPragma had __new__ called, but was not __init__ with a pointer"
+        ):
+            no_init.name
+        with self.assertRaisesRegex(
+            TypeError, "VFSFcntlPragma had __new__ called, but was not __init__ with a pointer"
+        ):
+            no_init.result = "hello"
+        with self.assertRaisesRegex(
+            TypeError, "VFSFcntlPragma had __new__ called, but was not __init__ with a pointer"
+        ):
+            no_init.value
 
         class testvfs(apsw.VFS):
             name = "testingpragma"

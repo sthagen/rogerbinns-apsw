@@ -1,8 +1,8 @@
 
-SQLITEVERSION=3.53.4
+SQLITEVERSION=3.54.0
 APSWSUFFIX=.0
 
-RELEASEDATE="26 July 2026"
+RELEASEDATE="20 October 2026"
 
 VERSION=$(SQLITEVERSION)$(APSWSUFFIX)
 VERDIR=apsw-$(VERSION)
@@ -194,7 +194,6 @@ fossil: ## Grabs latest trunk from SQLite source control, extracts and builds in
 	mkdir sqlite3
 	set -e ; cd sqlite3 ; curl --output - $(FOSSIL_URL) | tar xfz - --strip-components=1
 	set -e ; cd sqlite3 ; ./configure --quiet --all --column-metadata --disable-tcl $(CONFIGURE_OPTS) ; $(MAKE) sqlite3.c sqlite3 libsqlite3.so ; ln -s libsqlite3.so libsqlite3.so.0
-	set -e ; cd sqlite3 ; curl --output - https://sqlite.org/vec1/tarball/vec1.tar.gz | tar xfz -
 	set -e ; cd sqlite3 ; curl --output - https://sqlite.org/sqlar/tarball/sqlar.tar.gz | tar xfz -
 	set -e ; rm -rf sqlite3/zlib || true ; mkdir -p sqlite3/zlib ; cd sqlite3/zlib; curl --output -  https://www.zlib.net/current/zlib.tar.gz | tar xfz - --strip-components=1
 
@@ -287,7 +286,7 @@ src/_unicodedb.c: tools/ucdprops2code.py ## Update generated Unicode database lo
 	$(PYTHON) tools/ucdprops2code.py $@
 
 # building a python debug interpreter
-PYDEBUG_VER=3.15.0rc2
+PYDEBUG_VER=3.15.0rc3
 PYDEBUG_DIR=/space/pydebug
 PYTHREAD_VER=$(PYDEBUG_VER)
 PYTHREAD_DIR=/space/pythread

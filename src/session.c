@@ -848,6 +848,9 @@ APSWSession_get_enabled(PyObject *self_, void *unused)
 static int
 APSWSession_set_enabled(PyObject *self_, PyObject *value, void *Py_UNUSED(unused))
 {
+  if (!value)
+    return reject_attribute_deletion("Session.enabled");
+
   APSWSession *self = (APSWSession *)self_;
   CHECK_SESSION_CLOSED(-1);
 
@@ -892,6 +895,9 @@ APSWSession_get_indirect(PyObject *self_, void *unused)
 static int
 APSWSession_set_indirect(PyObject *self_, PyObject *value, void *Py_UNUSED(unused))
 {
+  if (!value)
+    return reject_attribute_deletion("Session.indirect");
+
   APSWSession *self = (APSWSession *)self_;
   CHECK_SESSION_CLOSED(-1);
 
@@ -1635,7 +1641,7 @@ APSWChangeset_iter(PyObject *Py_UNUSED(static_method), PyObject *const *fast_arg
     ARG_EPILOG(NULL, Changeset_iter_USAGE, );
   }
 
-  APSWChangesetIterator *iterator = (APSWChangesetIterator *)_PyObject_New(&APSWChangesetIteratorType);
+  APSWChangesetIterator *iterator = (APSWChangesetIterator *)_PyObject_GC_New(&APSWChangesetIteratorType);
   if (!iterator)
     return NULL;
 
@@ -1643,6 +1649,8 @@ APSWChangeset_iter(PyObject *Py_UNUSED(static_method), PyObject *const *fast_arg
   iterator->xInput = NULL;
   iterator->buffer_source = NULL;
   iterator->last_table_change = NULL;
+
+  PyObject_GC_Track((PyObject*)iterator);
 
   /* streaming? */
   if (PyCallable_Check(changeset))
@@ -2007,6 +2015,7 @@ APSWChangesetIterator_iter(PyObject *self)
 static void
 APSWChangesetIterator_dealloc(PyObject *self_)
 {
+  PyObject_GC_UnTrack(self_);
   APSWChangesetIterator *self = (APSWChangesetIterator *)self_;
   if (self->iter)
   {
@@ -2025,6 +2034,15 @@ APSWChangesetIterator_dealloc(PyObject *self_)
     Py_CLEAR(self->buffer_source);
   }
   Py_TpFree(self_);
+}
+
+static int
+APSWChangesetIterator_tp_traverse(PyObject *self_, visitproc visit, void *arg)
+{
+  APSWChangesetIterator *self = (APSWChangesetIterator *)self_;
+  Py_VISIT(self->xInput);
+  Py_VISIT(self->buffer_source);
+  return 0;
 }
 
 /** .. class:: ChangesetBuilder
@@ -2261,7 +2279,7 @@ APSWChangesetBuilder_row(APSWChangesetBuilder *self, int new, PyObject *row)
 
   for (Py_ssize_t i = 0; i < PySequence_Fast_GET_SIZE(row_fast); i++)
   {
-    PyObject *value = PySequence_Fast_GET_ITEM(row_fast, i);
+    PyObject *value = PySequence_ITEM(row_fast, i);
 
     /* this is similar to APSWCursor_dobinding but we don't allow all
        the automagic conversions */
@@ -2334,12 +2352,14 @@ APSWChangesetBuilder_row(APSWChangesetBuilder *self, int new, PyObject *row)
       PyErr_Format(PyExc_TypeError, "Expected a SQLite value, not %s", Py_TypeName(value));
       goto change_failed;
     }
+    Py_DECREF(value);
     continue;
 
   change_failed:
     SET_EXC(res, NULL);
     AddTraceBackHere(__FILE__, __LINE__, "builder_row", "{s: O, s: n, s: O}", "row", row, "column", i, "value",
                      value);
+    Py_DECREF(value);
     break;
   }
 
@@ -2899,9 +2919,14 @@ static PyTypeObject APSWChangesetType = {
 };
 
 static PyTypeObject APSWChangesetIteratorType = {
-  PyVarObject_HEAD_INIT(NULL, 0).tp_name = "apsw.ChangesetIterator", .tp_basicsize = sizeof(APSWChangesetIterator),
-  .tp_iternext = APSWChangesetIterator_next,           .tp_iter = APSWChangesetIterator_iter,
+  PyVarObject_HEAD_INIT(NULL, 0)
+  .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
+  .tp_name = "apsw.ChangesetIterator",
+  .tp_basicsize = sizeof(APSWChangesetIterator),
+  .tp_iternext = APSWChangesetIterator_next,
+  .tp_iter = APSWChangesetIterator_iter,
   .tp_dealloc = APSWChangesetIterator_dealloc,
+  .tp_traverse = APSWChangesetIterator_tp_traverse,
 };
 
 static PyMethodDef APSWChangesetBuilder_methods[] = {
